@@ -6,8 +6,34 @@
 // ============================================================================
 import { createClient } from '@supabase/supabase-js';
 
+import crypto from 'crypto';
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// ── Auth: รหัสผ่านร่วมของออฟฟิศ (ตั้งใน Environment Variable: APP_PASSWORD) ──
+const APP_PASSWORD = process.env.APP_PASSWORD || '';
+// ใช้ service key เป็น "ความลับ" ในการเซ็น token (มีอยู่แล้ว ไม่ต้องตั้งเพิ่ม)
+const TOKEN_SECRET = SERVICE_KEY || 'fallback-secret';
+
+// สร้าง token แบบ HMAC: payload = วันหมดอายุ, sig = ลายเซ็นที่ปลอมไม่ได้
+function makeToken() {
+  const exp = Date.now() + 1000 * 60 * 60 * 24 * 7; // อายุ 7 วัน
+  const payload = String(exp);
+  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
+  return payload + '.' + sig;
+}
+function verifyToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+  const [payload, sig] = token.split('.');
+  const expect = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
+  // เทียบแบบ timing-safe กันการเดา
+  let ok = false;
+  try { ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect)); } catch { ok = false; }
+  if (!ok) return false;
+  if (Date.now() > Number(payload)) return false; // หมดอายุ
+  return true;
+}
 
 let db = (SUPABASE_URL && SERVICE_KEY)
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -179,10 +205,18 @@ async function setTaskAttachments(taskId, list) {
 async function saveAttachment(taskId, fileName, mimeType, base64Data) {
   try {
     const bytes = Buffer.from(base64Data, 'base64');
-    const path = `${taskId}/${Date.now()}_${fileName}`;
+    // ── สร้าง storage key ที่ปลอดภัย (Supabase รับเฉพาะ a-z 0-9 - _ . /) ──
+    // ดึงเฉพาะนามสกุลไฟล์จากชื่อเดิม
+    const dot = fileName.lastIndexOf('.');
+    let ext = dot > -1 ? fileName.slice(dot + 1) : '';
+    ext = ext.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8); // กันนามสกุลแปลกๆ
+    const rand = Math.random().toString(36).slice(2, 10);
+    const safeName = `${Date.now()}_${rand}${ext ? '.' + ext : ''}`;
+    const path = `${taskId}/${safeName}`;
     const up = await db.storage.from(BUCKET).upload(path, bytes, { contentType: mimeType, upsert: true });
     if (up.error) return { success: false, error: up.error.message };
     const { data: pub } = db.storage.from(BUCKET).getPublicUrl(path);
+    // เก็บ fileName เดิม (ภาษาไทยได้) ไว้ในฟิลด์ name สำหรับแสดงผล/ดาวน์โหลด
     const info = { fileId: path, name: fileName, mimeType, webViewLink: pub.publicUrl, size: bytes.length };
     const list = await getTaskAttachments(taskId);
     list.push(info);
@@ -794,6 +828,34 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const { fn, args } = body;
+
+    // ── ด่าน Login ──────────────────────────────────────────────────────────
+    // 1) ฟังก์ชัน login: เช็ครหัส แล้วออก token ให้
+    if (fn === 'login') {
+      const pw = Array.isArray(args) ? args[0] : '';
+      if (!APP_PASSWORD) {
+        // ยังไม่ได้ตั้งรหัส → อนุญาตผ่าน (กันล็อกตัวเองตอนยังไม่ตั้งค่า) แต่เตือน
+        res.status(200).json({ ok: true, result: { token: makeToken(), warn: 'ยังไม่ได้ตั้ง APP_PASSWORD' } });
+        return;
+      }
+      if (pw === APP_PASSWORD) {
+        res.status(200).json({ ok: true, result: { token: makeToken() } });
+      } else {
+        res.status(200).json({ ok: false, error: 'รหัสผ่านไม่ถูกต้อง' });
+      }
+      return;
+    }
+
+    // 2) ทุกฟังก์ชันอื่น ต้องมี token ที่ถูกต้อง (ถ้าตั้ง APP_PASSWORD ไว้)
+    if (APP_PASSWORD) {
+      const token = req.headers['x-app-token'] || (body && body.token) || '';
+      if (!verifyToken(token)) {
+        res.status(401).json({ ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const h = HANDLERS[fn];
     if (!h) { res.status(400).json({ ok: false, error: 'ไม่รู้จักฟังก์ชัน: ' + fn }); return; }
     const result = await h.apply(null, Array.isArray(args) ? args : []);
