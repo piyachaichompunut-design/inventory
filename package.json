@@ -1,0 +1,13 @@
+{
+  "name": "task-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Task Management System — ported from Google Apps Script to Supabase + Vercel",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2"
+  }
+}
