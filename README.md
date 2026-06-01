@@ -141,4 +141,4 @@ vercel dev          # ระบบจะถามให้ใส่ Environment 
 
 หากนำไปใช้งานจริงและต้องการเพิ่มความปลอดภัย แนะนำให้:
 1. เพิ่มระบบล็อกอิน/ตรวจสิทธิ์ก่อนเข้าถึง `/api/rpc`
-2. เปิด Row Level Security ในแต่ละตาราง (`alter table <name> enable row level security;`) — `service_role` จะยังข้าม RLS ได้ตามปกติ
+2. เปิด Row Level Security ในแต่ละตาราง (`alter table <name> enable row level security;`) — `service_role` จะยังข้าม RLS ได้ตามปกติ 
