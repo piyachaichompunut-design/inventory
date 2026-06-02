@@ -66,6 +66,36 @@ function calcDays(actionDate) {
   return 'วันนี้';
 }
 
+// ── Telegram แจ้งเตือน ──────────────────────────────────────────────────────
+// ตั้งค่าใน Environment Variables: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TG_CHAT  = process.env.TELEGRAM_CHAT_ID || '';
+
+async function notifyTelegram(text) {
+  // ถ้ายังไม่ตั้งค่า → ข้ามเงียบๆ ไม่ให้กระทบการทำงานหลัก
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TG_CHAT,
+        text,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      })
+    });
+  } catch (e) {
+    // ส่งไม่สำเร็จก็ไม่ทำให้ระบบหลักพัง
+    console.error('Telegram notify failed:', e.message);
+  }
+}
+// escape อักขระพิเศษของ HTML กันข้อความเพี้ยน
+function tgEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ============================================================================
 //  TASKS
 // ============================================================================
@@ -125,6 +155,14 @@ async function addTask(td) {
     attachments: []
   });
   if (error) return { success: false, error: error.message };
+  // 🔔 แจ้งเตือน: มีงานใหม่
+  await notifyTelegram(
+    '🆕 <b>มีงานใหม่</b>\n' +
+    '📋 งาน: ' + tgEsc(td['Task'] || '-') + '\n' +
+    '🏷️ หมวด: ' + tgEsc(td['Categories'] || '-') + '\n' +
+    '📅 วันดำเนินการ: ' + tgEsc(td['Action Date'] || todayStr()) + '\n' +
+    '👤 ผู้รับผิดชอบ: ' + tgEsc(td['Sales Name'] || '-')
+  );
   return { success: true, id };
 }
 
@@ -140,9 +178,23 @@ async function updateTask(td) {
   if (td['Duration'] !== undefined)     patch.duration = td['Duration'];
   if (td['Note'] !== undefined)         patch.note = td['Note'];
   if (td['Sales Name'] !== undefined)   patch.sales_name = td['Sales Name'];
-  const { data, error } = await db.from('tasks').update(patch).eq('id', td['ID']).select('id');
+  // ดึงสถานะเดิมก่อนอัปเดต เพื่อเช็คว่าเพิ่งเปลี่ยนเป็น Done หรือไม่
+  let wasDone = false;
+  try {
+    const { data: prev } = await db.from('tasks').select('done, task').eq('id', td['ID']).single();
+    if (prev) { wasDone = !!prev.done; if (!td['Task']) td['Task'] = prev.task; }
+  } catch (e) {}
+  const { data, error } = await db.from('tasks').update(patch).eq('id', td['ID']).select('id, task');
   if (error) return { success: false, error: error.message };
   if (!data || !data.length) return { success: false, error: 'Task not found' };
+  // 🔔 แจ้งเตือน: งานเพิ่งเสร็จ (เปลี่ยนจากยังไม่เสร็จ → เสร็จ)
+  if (done && !wasDone) {
+    await notifyTelegram(
+      '✅ <b>งานเสร็จแล้ว</b>\n' +
+      '📋 งาน: ' + tgEsc(td['Task'] || (data[0] && data[0].task) || '-') + '\n' +
+      '👤 ผู้รับผิดชอบ: ' + tgEsc(td['Sales Name'] || '-')
+    );
+  }
   return { success: true };
 }
 
@@ -798,10 +850,145 @@ async function saveKPIForm(data) {
 }
 
 // ============================================================================
+//  TELEGRAM: ประมวลผลคำสั่งที่พิมพ์ในกลุ่ม แล้วตอบกลับ
+// ============================================================================
+async function handleTelegramCommand(text) {
+  const raw = String(text || '').trim();
+  // ตัด @botname ออก (กรณีพิมพ์ /help@mybot)
+  const cleaned = raw.replace(/@\w+/g, '').trim();
+  const lower = cleaned.toLowerCase();
+  const today = todayStr();
+
+  // /help
+  if (lower === '/help' || cleaned === '/ช่วยเหลือ' || lower === '/start') {
+    return (
+      '🤖 <b>คำสั่งที่ใช้ได้</b>\n\n' +
+      '/สรุป — สรุปจำนวนงานทั้งหมด\n' +
+      '/งานวันนี้ — งานที่ครบกำหนดวันนี้\n' +
+      '/งานค้าง — งานที่ยังไม่เสร็จ\n' +
+      '/เลยกำหนด — งานที่เลยกำหนดแล้ว\n' +
+      '/ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
+    );
+  }
+
+  // /สรุป
+  if (cleaned === '/สรุป' || lower === '/summary') {
+    const { data } = await db.from('tasks').select('task_status, done');
+    const list = data || [];
+    const todo = list.filter(t => !t.done && t.task_status === 'To Do').length;
+    const doing = list.filter(t => !t.done && t.task_status === 'Doing').length;
+    const done = list.filter(t => t.done).length;
+    return (
+      '📊 <b>สรุปงานทั้งหมด</b>\n\n' +
+      '📋 ทั้งหมด: ' + list.length + ' งาน\n' +
+      '🔵 To Do: ' + todo + '\n' +
+      '🟣 Doing: ' + doing + '\n' +
+      '✅ Done: ' + done
+    );
+  }
+
+  // /งานวันนี้
+  if (cleaned === '/งานวันนี้' || lower === '/today') {
+    const { data } = await db.from('tasks').select('task, sales_name')
+      .eq('done', false).eq('action_date', today).order('seq', { ascending: true });
+    const list = data || [];
+    if (!list.length) return '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
+    let m = '🟡 <b>งานครบกำหนดวันนี้ (' + list.length + ')</b>\n\n';
+    list.forEach((t, i) => { m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n'; });
+    return m;
+  }
+
+  // /งานค้าง
+  if (cleaned === '/งานค้าง' || lower === '/pending') {
+    const { data } = await db.from('tasks').select('task, action_date, sales_name')
+      .eq('done', false).order('action_date', { ascending: true });
+    const list = data || [];
+    if (!list.length) return '🎉 ไม่มีงานค้างครับ ทุกงานเสร็จหมดแล้ว';
+    const show = list.slice(0, 20);
+    let m = '📋 <b>งานค้าง (' + list.length + ')</b>\n\n';
+    show.forEach((t, i) => { m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' (' + tgEsc(dstr(t.action_date)) + ')\n'; });
+    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
+    return m;
+  }
+
+  // /เลยกำหนด
+  if (cleaned === '/เลยกำหนด' || lower === '/overdue') {
+    const { data } = await db.from('tasks').select('task, action_date, sales_name')
+      .eq('done', false).lt('action_date', today).order('action_date', { ascending: true });
+    const list = data || [];
+    if (!list.length) return '🟢 ไม่มีงานเลยกำหนดครับ';
+    let m = '🔴 <b>งานเลยกำหนด (' + list.length + ')</b>\n\n';
+    list.slice(0, 20).forEach((t, i) => {
+      m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' (' + tgEsc(calcDays(dstr(t.action_date))) + ') — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n';
+    });
+    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
+    return m;
+  }
+
+  // /ค้นหา [คำ]
+  if (cleaned.startsWith('/ค้นหา') || lower.startsWith('/search')) {
+    const kw = cleaned.replace(/^\/ค้นหา/, '').replace(/^\/search/i, '').trim();
+    if (!kw) return 'พิมพ์คำที่ต้องการค้นหาด้วยครับ เช่น /ค้นหา ชุบ';
+    const { data } = await db.from('tasks').select('task, task_status, action_date, sales_name').order('seq', { ascending: true });
+    const k = kw.toLowerCase();
+    const list = (data || []).filter(t =>
+      ((t.task || '') + (t.sales_name || '')).toLowerCase().includes(k));
+    if (!list.length) return '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"';
+    let m = '🔍 <b>ผลค้นหา "' + tgEsc(kw) + '" (' + list.length + ')</b>\n\n';
+    list.slice(0, 20).forEach((t, i) => {
+      m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' [' + tgEsc(t.task_status || '-') + ']\n';
+    });
+    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
+    return m;
+  }
+
+  // ไม่ใช่คำสั่งที่รู้จัก — เงียบไว้ (return null = ไม่ตอบ)
+  return null;
+}
+
+// ============================================================================
+//  CRON: เช็คงานครบกำหนด/เลยกำหนด แล้วแจ้ง Telegram (เรียกวันละครั้ง)
+// ============================================================================
+async function checkDueTasks() {
+  const today = todayStr();
+  // งานที่ยังไม่เสร็จ และวันดำเนินการ <= วันนี้
+  const { data, error } = await db.from('tasks')
+    .select('task, categories, action_date, sales_name, done')
+    .eq('done', false)
+    .lte('action_date', today)
+    .order('action_date', { ascending: true });
+  if (error) return { success: false, error: error.message };
+  const list = data || [];
+  if (!list.length) {
+    return { success: true, count: 0 };
+  }
+  // จัดกลุ่ม: เลยกำหนด กับ ครบกำหนดวันนี้
+  const overdue = list.filter(t => dstr(t.action_date) < today);
+  const dueToday = list.filter(t => dstr(t.action_date) === today);
+  let msg = '⏰ <b>สรุปงานที่ต้องดำเนินการ</b>\n';
+  msg += '📅 ' + today + '\n';
+  if (dueToday.length) {
+    msg += '\n🟡 <b>ครบกำหนดวันนี้ (' + dueToday.length + ')</b>\n';
+    dueToday.forEach(t => {
+      msg += '• ' + tgEsc(t.task || '-') + ' — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n';
+    });
+  }
+  if (overdue.length) {
+    msg += '\n🔴 <b>เลยกำหนดแล้ว (' + overdue.length + ')</b>\n';
+    overdue.forEach(t => {
+      const days = calcDays(dstr(t.action_date));
+      msg += '• ' + tgEsc(t.task || '-') + ' (' + tgEsc(days) + ') — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n';
+    });
+  }
+  await notifyTelegram(msg);
+  return { success: true, count: list.length };
+}
+
+// ============================================================================
 //  DISPATCH TABLE
 // ============================================================================
 const HANDLERS = {
-  getTasks, addTask, updateTask, deleteTask,
+  getTasks, addTask, updateTask, deleteTask, checkDueTasks,
   getCategories, addCategory, deleteCategory, getDashboardData,
   saveAttachment, getAttachments, deleteAttachment, getFileAsBase64,
   getWeightJobs, saveWeightJob, deleteWeightJob,
@@ -818,6 +1005,24 @@ const HANDLERS = {
 };
 
 export const __handlers = HANDLERS;
+export { checkDueTasks, handleTelegramCommand };
+
+// ส่งข้อความตอบกลับไปยัง chat ที่ระบุ (ใช้โดย webhook)
+export async function sendTelegramReply(chatId, text) {
+  if (!TG_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
+    });
+  } catch (e) { console.error('TG reply failed:', e.message); }
+}
+// ให้ webhook เช็คว่า chat ที่ส่งมา ตรงกับกลุ่มที่ตั้งไว้ไหม
+export function isAllowedChat(chatId) {
+  if (!TG_CHAT) return true; // ยังไม่ตั้ง → ไม่จำกัด
+  return String(chatId) === String(TG_CHAT);
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(405).json({ ok: false, error: 'Method not allowed' }); return; }
