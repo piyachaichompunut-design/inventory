@@ -874,7 +874,7 @@ async function handleTelegramCommand(text) {
       '🚚 /งานส่ง — งานประเภทส่ง (เพิ่มวันที่ได้)\n' +
       '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
       '🗓️ /งานวันที่ [วันที่] — เช่น /งานวันที่ 4/6/2026\n' +
-      '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย\n' +
+      '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
     );
   }
@@ -1052,11 +1052,21 @@ async function handleTelegramCommand(text) {
       || '🟢 วันที่ ' + dArg + ' ไม่มีงานครับ';
   }
 
-  // /kpi [ชื่อ]
+  // /kpi [ชื่อ] หรือ /kpi [ชื่อ] เดือน5/2026
   if (lower.startsWith('/kpi') || cleaned.startsWith('/เคพีไอ')) {
-    const name = cleaned.replace(/^\/kpi/i, '').replace(/^\/เคพีไอ/, '').trim();
-    if (!name) return 'พิมพ์ชื่อพนักงานด้วยครับ เช่น /kpi สมชาย';
-    // หาพนักงานจากชื่อ
+    let rest = cleaned.replace(/^\/kpi/i, '').replace(/^\/เคพีไอ/, '').trim();
+    // ดึงเดือน/ปี ออกจากข้อความ รองรับ "เดือน5/2026", "5/2026", "เดือน 5/2569"
+    let wantMonth = null, wantYear = null;
+    const mMatch = rest.match(/(?:เดือน)?\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})/);
+    if (mMatch) {
+      wantMonth = parseInt(mMatch[1]);
+      wantYear = parseInt(mMatch[2]);
+      if (wantYear < 100) wantYear += 2000;
+      if (wantYear >= 2500) wantYear -= 543; // พ.ศ. → ค.ศ.
+      rest = rest.replace(mMatch[0], '').replace(/เดือน/g, '').trim();
+    }
+    const name = rest.trim();
+    if (!name) return 'พิมพ์ชื่อพนักงานด้วยครับ เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026';
     const { data: staff } = await db.from('kpi_staff').select('*').neq('active', false);
     const k = name.toLowerCase();
     const found = (staff || []).filter(s =>
@@ -1070,13 +1080,21 @@ async function handleTelegramCommand(text) {
       out += '📈 <b>' + tgEsc(emp.name + ' ' + (emp.surname || '')) + '</b>\n';
       out += '   ตำแหน่ง: ' + tgEsc(emp.position || '-') + '\n';
       if (!rows.length) { out += '   (ยังไม่มีข้อมูล KPI)\n\n'; continue; }
-      const latest = rows[0];
-      const items = Array.isArray(latest.kpi_data) ? latest.kpi_data : [];
+      // เลือกเดือนที่ต้องการ ถ้าระบุ
+      let target;
+      if (wantMonth && wantYear) {
+        target = rows.find(r => parseInt(r.month) === wantMonth && parseInt(r.year) === wantYear);
+        if (!target) { out += '   ❌ ไม่มีข้อมูล KPI เดือน ' + wantMonth + '/' + wantYear + '\n\n'; continue; }
+      } else {
+        target = rows[0]; // ล่าสุด
+      }
+      const items = Array.isArray(target.kpi_data) ? target.kpi_data : [];
       const tMax = items.reduce((s, x) => s + (parseFloat(x.maxScore) || 0), 0);
       const tScore = items.reduce((s, x) => s + (parseFloat(x.score) || 0), 0);
       const pct = tMax > 0 ? Math.round(tScore / tMax * 100) : 0;
-      const thr = parseFloat(latest.pass_threshold) || 70;
-      out += '   เดือนล่าสุด: ' + latest.month + '/' + latest.year + '\n';
+      const thr = parseFloat(target.pass_threshold) || 70;
+      const label = (wantMonth && wantYear) ? 'เดือน' : 'เดือนล่าสุด';
+      out += '   ' + label + ': ' + target.month + '/' + target.year + '\n';
       out += '   คะแนน: ' + tScore + '/' + tMax + ' (' + pct + '%) ' + (pct >= thr ? '✅ ผ่าน' : '❌ ไม่ผ่าน') + '\n\n';
     }
     return out.trim();
