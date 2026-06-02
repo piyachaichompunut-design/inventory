@@ -863,13 +863,53 @@ async function handleTelegramCommand(text) {
   if (lower === '/help' || cleaned === '/ช่วยเหลือ' || lower === '/start') {
     return (
       '🤖 <b>คำสั่งที่ใช้ได้</b>\n\n' +
-      '/สรุป — สรุปจำนวนงานทั้งหมด\n' +
-      '/งานวันนี้ — งานที่ครบกำหนดวันนี้\n' +
-      '/งานค้าง — งานที่ยังไม่เสร็จ\n' +
-      '/เลยกำหนด — งานที่เลยกำหนดแล้ว\n' +
-      '/ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
+      '📊 /สรุป — สรุปจำนวนงานทั้งหมด\n' +
+      '📅 /งานวันนี้ — งานครบกำหนดวันนี้\n' +
+      '📅 /งานพรุ่งนี้ — งานครบกำหนดพรุ่งนี้\n' +
+      '📅 /งานสัปดาห์นี้ — งานใน 7 วันข้างหน้า\n' +
+      '📋 /งานค้าง — งานที่ยังไม่เสร็จ\n' +
+      '🔴 /เลยกำหนด — งานที่เลยกำหนดแล้ว\n' +
+      '✅ /งานเสร็จวันนี้ — งานที่เสร็จวันนี้\n' +
+      '📦 /งานรับ — งานประเภทรับ\n' +
+      '🚚 /งานส่ง — งานประเภทส่ง\n' +
+      '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
+      '🗓️ /งานวันที่ [YYYY-MM-DD] — เช่น /งานวันที่ 2026-06-10\n' +
+      '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย\n' +
+      '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
     );
   }
+
+  // helper: format รายการงาน (บรรทัดเดียว — สำหรับกรณีพิเศษ)
+  const fmtList = (title, list, lineFn, limit = 20) => {
+    if (!list.length) return null;
+    let m = title.replace('{n}', list.length) + '\n\n';
+    list.slice(0, limit).forEach((t, i) => { m += (i + 1) + '. ' + lineFn(t) + '\n'; });
+    if (list.length > limit) m += '\n…และอีก ' + (list.length - limit) + ' งาน';
+    return m;
+  };
+
+  // helper: แสดงงานแบบละเอียด (หลายบรรทัดต่อ 1 งาน)
+  const statusEmoji = (t) => t.done ? '✅' : (t.task_status === 'Doing' ? '🟣' : '🔵');
+  const taskDetail = (t) => {
+    let s = '📋 <b>' + tgEsc(t.task || '-') + '</b>\n';
+    s += '   ' + statusEmoji(t) + ' ' + tgEsc(t.done ? 'Done' : (t.task_status || 'To Do'));
+    if (t.duration) s += ' · ' + (t.duration === 'รับ' ? '📦' : t.duration === 'ส่ง' ? '🚚' : '🔹') + ' ' + tgEsc(t.duration);
+    s += '\n';
+    if (t.categories) s += '   🏷️ ' + tgEsc(t.categories) + '\n';
+    if (t.action_date) s += '   📅 ' + tgEsc(dstr(t.action_date)) + '\n';
+    if (t.sales_name) s += '   👤 ' + tgEsc(t.sales_name) + '\n';
+    if (t.note) s += '   📝 ' + tgEsc(t.note) + '\n';
+    return s;
+  };
+  // รายการงานแบบละเอียด
+  const fmtDetail = (title, list, limit = 15) => {
+    if (!list.length) return null;
+    let m = title.replace('{n}', list.length) + '\n\n';
+    list.slice(0, limit).forEach((t, i) => { m += (i + 1) + '. ' + taskDetail(t) + '\n'; });
+    if (list.length > limit) m += '…และอีก ' + (list.length - limit) + ' งาน';
+    return m;
+  };
+  const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
   // /สรุป
   if (cleaned === '/สรุป' || lower === '/summary') {
@@ -889,57 +929,126 @@ async function handleTelegramCommand(text) {
 
   // /งานวันนี้
   if (cleaned === '/งานวันนี้' || lower === '/today') {
-    const { data } = await db.from('tasks').select('task, sales_name')
+    const { data } = await db.from('tasks').select('*')
       .eq('done', false).eq('action_date', today).order('seq', { ascending: true });
-    const list = data || [];
-    if (!list.length) return '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
-    let m = '🟡 <b>งานครบกำหนดวันนี้ (' + list.length + ')</b>\n\n';
-    list.forEach((t, i) => { m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n'; });
-    return m;
+    return fmtDetail('🟡 <b>งานครบกำหนดวันนี้ ({n})</b>', data || [])
+      || '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
+  }
+
+  // /งานพรุ่งนี้
+  if (cleaned === '/งานพรุ่งนี้' || lower === '/tomorrow') {
+    const tmr = addDays(1);
+    const { data } = await db.from('tasks').select('*')
+      .eq('done', false).eq('action_date', tmr).order('seq', { ascending: true });
+    return fmtDetail('🟠 <b>งานครบกำหนดพรุ่งนี้ (' + tmr + ') ({n})</b>', data || [])
+      || '🟢 พรุ่งนี้ไม่มีงานครบกำหนดครับ';
+  }
+
+  // /งานสัปดาห์นี้ (7 วันข้างหน้า)
+  if (cleaned === '/งานสัปดาห์นี้' || lower === '/week') {
+    const end = addDays(7);
+    const { data } = await db.from('tasks').select('*')
+      .eq('done', false).gte('action_date', today).lte('action_date', end)
+      .order('action_date', { ascending: true });
+    return fmtDetail('📅 <b>งานใน 7 วันข้างหน้า ({n})</b>', data || [])
+      || '🟢 สัปดาห์นี้ไม่มีงานครบกำหนดครับ';
+  }
+
+  // /งานเสร็จวันนี้
+  if (cleaned === '/งานเสร็จวันนี้' || lower === '/donetoday') {
+    const { data } = await db.from('tasks').select('*')
+      .eq('done', true).eq('action_date', today).order('seq', { ascending: true });
+    return fmtDetail('✅ <b>งานเสร็จวันนี้ ({n})</b>', data || [])
+      || 'ยังไม่มีงานที่เสร็จในวันนี้ครับ';
   }
 
   // /งานค้าง
   if (cleaned === '/งานค้าง' || lower === '/pending') {
-    const { data } = await db.from('tasks').select('task, action_date, sales_name')
+    const { data } = await db.from('tasks').select('*')
       .eq('done', false).order('action_date', { ascending: true });
-    const list = data || [];
-    if (!list.length) return '🎉 ไม่มีงานค้างครับ ทุกงานเสร็จหมดแล้ว';
-    const show = list.slice(0, 20);
-    let m = '📋 <b>งานค้าง (' + list.length + ')</b>\n\n';
-    show.forEach((t, i) => { m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' (' + tgEsc(dstr(t.action_date)) + ')\n'; });
-    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
-    return m;
+    return fmtDetail('📋 <b>งานค้าง ({n})</b>', data || [])
+      || '🎉 ไม่มีงานค้างครับ ทุกงานเสร็จหมดแล้ว';
   }
 
   // /เลยกำหนด
   if (cleaned === '/เลยกำหนด' || lower === '/overdue') {
-    const { data } = await db.from('tasks').select('task, action_date, sales_name')
+    const { data } = await db.from('tasks').select('*')
       .eq('done', false).lt('action_date', today).order('action_date', { ascending: true });
-    const list = data || [];
-    if (!list.length) return '🟢 ไม่มีงานเลยกำหนดครับ';
-    let m = '🔴 <b>งานเลยกำหนด (' + list.length + ')</b>\n\n';
-    list.slice(0, 20).forEach((t, i) => {
-      m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' (' + tgEsc(calcDays(dstr(t.action_date))) + ') — ' + tgEsc(t.sales_name || 'ไม่ระบุ') + '\n';
-    });
-    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
-    return m;
+    return fmtDetail('🔴 <b>งานเลยกำหนด ({n})</b>', data || [])
+      || '🟢 ไม่มีงานเลยกำหนดครับ';
+  }
+
+  // /งานรับ , /งานส่ง
+  if (cleaned === '/งานรับ' || cleaned === '/งานส่ง') {
+    const dur = cleaned === '/งานรับ' ? 'รับ' : 'ส่ง';
+    const { data } = await db.from('tasks').select('*')
+      .eq('done', false).eq('duration', dur).order('action_date', { ascending: true });
+    return fmtDetail('📦 <b>งาน' + dur + ' (ที่ยังไม่เสร็จ) ({n})</b>', data || [])
+      || '🟢 ไม่มีงาน' + dur + 'ที่ค้างครับ';
+  }
+
+  // /งานของ [ชื่อ]
+  if (cleaned.startsWith('/งานของ')) {
+    const name = cleaned.replace(/^\/งานของ/, '').trim();
+    if (!name) return 'พิมพ์ชื่อผู้รับผิดชอบด้วยครับ เช่น /งานของ สมชาย';
+    const { data } = await db.from('tasks').select('*')
+      .order('action_date', { ascending: true });
+    const k = name.toLowerCase();
+    const list = (data || []).filter(t => (t.sales_name || '').toLowerCase().includes(k));
+    return fmtDetail('👤 <b>งานของ "' + tgEsc(name) + '" ({n})</b>', list)
+      || '🔍 ไม่พบงานของ "' + tgEsc(name) + '"';
+  }
+
+  // /งานวันที่ [YYYY-MM-DD]
+  if (cleaned.startsWith('/งานวันที่') || lower.startsWith('/date')) {
+    const dArg = cleaned.replace(/^\/งานวันที่/, '').replace(/^\/date/i, '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dArg)) return 'พิมพ์วันที่รูปแบบ YYYY-MM-DD ด้วยครับ เช่น /งานวันที่ 2026-06-10';
+    const { data } = await db.from('tasks').select('*')
+      .eq('action_date', dArg).order('seq', { ascending: true });
+    return fmtDetail('🗓️ <b>งานวันที่ ' + dArg + ' ({n})</b>', data || [])
+      || '🟢 วันที่ ' + dArg + ' ไม่มีงานครับ';
+  }
+
+  // /kpi [ชื่อ]
+  if (lower.startsWith('/kpi') || cleaned.startsWith('/เคพีไอ')) {
+    const name = cleaned.replace(/^\/kpi/i, '').replace(/^\/เคพีไอ/, '').trim();
+    if (!name) return 'พิมพ์ชื่อพนักงานด้วยครับ เช่น /kpi สมชาย';
+    // หาพนักงานจากชื่อ
+    const { data: staff } = await db.from('kpi_staff').select('*').neq('active', false);
+    const k = name.toLowerCase();
+    const found = (staff || []).filter(s =>
+      ((s.name || '') + ' ' + (s.surname || '')).toLowerCase().includes(k));
+    if (!found.length) return '🔍 ไม่พบพนักงานชื่อ "' + tgEsc(name) + '"';
+    let out = '';
+    for (const emp of found.slice(0, 3)) {
+      const { data: km } = await db.from('kpi_monthly').select('*').eq('emp_id', emp.id);
+      const rows = (km || []).filter(r => r.id)
+        .sort((a, b) => (parseInt(b.year) * 100 + parseInt(b.month)) - (parseInt(a.year) * 100 + parseInt(a.month)));
+      out += '📈 <b>' + tgEsc(emp.name + ' ' + (emp.surname || '')) + '</b>\n';
+      out += '   ตำแหน่ง: ' + tgEsc(emp.position || '-') + '\n';
+      if (!rows.length) { out += '   (ยังไม่มีข้อมูล KPI)\n\n'; continue; }
+      const latest = rows[0];
+      const items = Array.isArray(latest.kpi_data) ? latest.kpi_data : [];
+      const tMax = items.reduce((s, x) => s + (parseFloat(x.maxScore) || 0), 0);
+      const tScore = items.reduce((s, x) => s + (parseFloat(x.score) || 0), 0);
+      const pct = tMax > 0 ? Math.round(tScore / tMax * 100) : 0;
+      const thr = parseFloat(latest.pass_threshold) || 70;
+      out += '   เดือนล่าสุด: ' + latest.month + '/' + latest.year + '\n';
+      out += '   คะแนน: ' + tScore + '/' + tMax + ' (' + pct + '%) ' + (pct >= thr ? '✅ ผ่าน' : '❌ ไม่ผ่าน') + '\n\n';
+    }
+    return out.trim();
   }
 
   // /ค้นหา [คำ]
   if (cleaned.startsWith('/ค้นหา') || lower.startsWith('/search')) {
     const kw = cleaned.replace(/^\/ค้นหา/, '').replace(/^\/search/i, '').trim();
     if (!kw) return 'พิมพ์คำที่ต้องการค้นหาด้วยครับ เช่น /ค้นหา ชุบ';
-    const { data } = await db.from('tasks').select('task, task_status, action_date, sales_name').order('seq', { ascending: true });
+    const { data } = await db.from('tasks').select('*').order('seq', { ascending: true });
     const k = kw.toLowerCase();
     const list = (data || []).filter(t =>
-      ((t.task || '') + (t.sales_name || '')).toLowerCase().includes(k));
-    if (!list.length) return '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"';
-    let m = '🔍 <b>ผลค้นหา "' + tgEsc(kw) + '" (' + list.length + ')</b>\n\n';
-    list.slice(0, 20).forEach((t, i) => {
-      m += (i + 1) + '. ' + tgEsc(t.task || '-') + ' [' + tgEsc(t.task_status || '-') + ']\n';
-    });
-    if (list.length > 20) m += '\n…และอีก ' + (list.length - 20) + ' งาน';
-    return m;
+      ((t.task || '') + (t.sales_name || '') + (t.categories || '') + (t.note || '')).toLowerCase().includes(k));
+    return fmtDetail('🔍 <b>ผลค้นหา "' + tgEsc(kw) + '" ({n})</b>', list)
+      || '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"';
   }
 
   // ไม่ใช่คำสั่งที่รู้จัก — เงียบไว้ (return null = ไม่ตอบ)
