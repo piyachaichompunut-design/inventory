@@ -66,7 +66,15 @@ function calcDays(actionDate) {
   return 'วันนี้';
 }
 
-// ── Telegram แจ้งเตือน ──────────────────────────────────────────────────────
+// แปลงวันที่สำหรับแสดงใน Telegram เป็น D/M/YYYY เช่น 4/6/2026
+const tgDate = (v) => {
+  const s = dstr(v);
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return parseInt(d) + '/' + parseInt(m) + '/' + y;
+};
+
+// ── Telegram แจ้งเตือน ───────────────────────────────────────────────────────
 // ตั้งค่าใน Environment Variables: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT  = process.env.TELEGRAM_CHAT_ID || '';
@@ -896,9 +904,27 @@ async function handleTelegramCommand(text) {
     if (t.duration) s += ' · ' + (t.duration === 'รับ' ? '📦' : t.duration === 'ส่ง' ? '🚚' : '🔹') + ' ' + tgEsc(t.duration);
     s += '\n';
     if (t.categories) s += '   🏷️ ' + tgEsc(t.categories) + '\n';
-    if (t.action_date) s += '   📅 ' + tgEsc(dstr(t.action_date)) + '\n';
+    if (t.action_date) s += '   📅 ' + tgEsc(tgDate(t.action_date)) + '\n';
     if (t.sales_name) s += '   👤 ' + tgEsc(t.sales_name) + '\n';
     if (t.note) s += '   📝 ' + tgEsc(t.note) + '\n';
+    // ไฟล์แนบ — แสดงลิงก์กดเปิดได้เลย
+    try {
+      const files = typeof t.attachments === 'string'
+        ? JSON.parse(t.attachments || '[]')
+        : (Array.isArray(t.attachments) ? t.attachments : []);
+      if (files.length) {
+        s += '   📎 ไฟล์แนบ:\n';
+        files.forEach(f => {
+          const fname = tgEsc(f.name || 'ไฟล์');
+          const url = f.webViewLink || f.wl || '';
+          if (url) {
+            s += '      • <a href="' + url + '">' + fname + '</a>\n';
+          } else {
+            s += '      • ' + fname + '\n';
+          }
+        });
+      }
+    } catch (e) { /* ถ้า parse ไม่ได้ก็ข้าม */ }
     return s;
   };
   // รายการงานแบบละเอียด
@@ -971,7 +997,7 @@ async function handleTelegramCommand(text) {
     const tmr = addDays(1);
     const { data } = await db.from('tasks').select('*')
       .eq('done', false).eq('action_date', tmr).order('seq', { ascending: true });
-    return fmtDetail('🟠 <b>งานครบกำหนดพรุ่งนี้ (' + tmr + ') ({n})</b>', data || [])
+    return fmtDetail('🟠 <b>งานครบกำหนดพรุ่งนี้ (' + tgDate(tmr) + ') ({n})</b>', data || [])
       || '🟢 พรุ่งนี้ไม่มีงานครบกำหนดครับ';
   }
 
@@ -1024,9 +1050,9 @@ async function handleTelegramCommand(text) {
       q = q.eq('done', false);                        // ไม่ระบุวันที่ → เฉพาะที่ยังไม่เสร็จ
     }
     const { data } = await q.order('action_date', { ascending: true });
-    const titleDate = dArg ? ' วันที่ ' + dArg : ' (ที่ยังไม่เสร็จ)';
+    const titleDate = dArg ? ' วันที่ ' + tgDate(dArg) : ' (ที่ยังไม่เสร็จ)';
     return fmtDetail('📦 <b>งาน' + dur + titleDate + ' ({n})</b>', data || [])
-      || '🟢 ไม่มีงาน' + dur + (dArg ? ' วันที่ ' + dArg : 'ที่ค้าง') + 'ครับ';
+      || '🟢 ไม่มีงาน' + dur + (dArg ? ' วันที่ ' + tgDate(dArg) : 'ที่ค้าง') + 'ครับ';
   }
 
   // /งานของ [ชื่อ]
@@ -1048,8 +1074,8 @@ async function handleTelegramCommand(text) {
     if (!dArg) return 'พิมพ์วันที่ให้ถูกต้องครับ เช่น /งานวันที่ 4/6/2026 หรือ /งานวันที่ 2026-06-04';
     const { data } = await db.from('tasks').select('*')
       .eq('action_date', dArg).order('seq', { ascending: true });
-    return fmtDetail('🗓️ <b>งานวันที่ ' + dArg + ' ({n})</b>', data || [])
-      || '🟢 วันที่ ' + dArg + ' ไม่มีงานครับ';
+    return fmtDetail('🗓️ <b>งานวันที่ ' + tgDate(dArg) + ' ({n})</b>', data || [])
+      || '🟢 วันที่ ' + tgDate(dArg) + ' ไม่มีงานครับ';
   }
 
   // /kpi [ชื่อ] หรือ /kpi [ชื่อ] เดือน5/2026
@@ -1136,7 +1162,7 @@ async function checkDueTasks() {
   const overdue = list.filter(t => dstr(t.action_date) < today);
   const dueToday = list.filter(t => dstr(t.action_date) === today);
   let msg = '⏰ <b>สรุปงานที่ต้องดำเนินการ</b>\n';
-  msg += '📅 ' + today + '\n';
+  msg += '📅 ' + tgDate(today) + '\n';
   if (dueToday.length) {
     msg += '\n🟡 <b>ครบกำหนดวันนี้ (' + dueToday.length + ')</b>\n';
     dueToday.forEach(t => {
