@@ -3848,7 +3848,7 @@ function loadTasks() {
       allTasks = tasks;
       filteredTasks = tasks.slice();
       fillSaleSel(tasks);
-      renderTable();
+      applyF(); // ใช้ filter ปัจจุบัน (To Do by default) แทน renderTable โดยตรง
       loadDash();
       renderCal();
       renderCatGrid();
@@ -4094,7 +4094,9 @@ function applyF() {
 function resetF(){
   curDP = 'all';
   document.getElementById('f-q').value='';
-  ['f-st','f-cat','f-nf','f-dr','f-sl'].forEach(function(id){document.getElementById(id).value='All';});
+  // reset สถานะกลับเป็น "To Do" (ซ่อน Done/Cancel โดย default)
+  document.getElementById('f-st').value='To Do';
+  ['f-cat','f-nf','f-dr','f-sl'].forEach(function(id){document.getElementById(id).value='All';});
   document.getElementById('f-mn').value='';
   document.getElementById('f-df').value='';
   document.getElementById('f-dt2').value='';
@@ -4103,7 +4105,8 @@ function resetF(){
   // Reset pill to "All"
   document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
   document.querySelector('.dpill[data-dp="all"]').classList.add('active');
-  filteredTasks=allTasks.slice(); curPage=1; renderTable();
+  // โหลดข้อมูลใหม่จาก server จริงๆ (ไม่ใช้แค่ข้อมูลเก่า)
+  loadTasks();
 }
 function renderTable(){
   document.getElementById('tcnt').textContent='('+filteredTasks.length+' รายการ)';
