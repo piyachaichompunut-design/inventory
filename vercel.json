@@ -2,14 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "functions": {
-    "api/rpc.js": {
-      "maxDuration": 30
-    }
+    "api/rpc.js": { "maxDuration": 30 }
   },
   "crons": [
-    {
-      "path": "/api/cron",
-      "schedule": "0 1 * * *"
-    }
+    { "path": "/api/cron-morning",  "schedule": "0 0 * * *"  },
+    { "path": "/api/cron",          "schedule": "0 1 * * *"  },
+    { "path": "/api/cron-evening",  "schedule": "45 9 * * *" },
+    { "path": "/api/cron-monthly",  "schedule": "0 1 1 * *"  }
   ]
 }
