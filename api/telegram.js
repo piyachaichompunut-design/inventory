@@ -1,42 +1,43 @@
 // Telegram Webhook
 // - / → คำสั่งสำเร็จรูป
-// - @botname → ถาม Gemini AI
+// - @botname → ถาม Groq AI (Llama 3.3)
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat } from './rpc.js';
 
-const GEMINI_KEY   = process.env.GEMINI_API_KEY || '';
+const GROQ_KEY     = process.env.GROQ_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
-const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GROQ_URL     = 'https://api.groq.com/openai/v1/chat/completions';
 
-const SYSTEM_INSTRUCTION = `คุณคือ "Odoo Bot" ผู้ช่วย AI ของทีมโรงงาน/คลังสินค้า
+const SYSTEM = `คุณคือ "Odoo Bot" ผู้ช่วย AI ของทีมโรงงาน/คลังสินค้า
 บุคลิก: กันเอง อบอุ่น เหมือนเพื่อนร่วมงานที่ฉลาด พูดภาษาไทยเป็นธรรมชาติ ใช้ "ครับ" ลงท้าย
 สไตล์: ถามง่าย → ตอบสั้นกระชับ | ถามซับซ้อน → ตอบละเอียดเป็นขั้นตอน
-บริบท: ทีมทำงานเกี่ยวกับโรงงานและคลังสินค้า มีระบบจัดการงาน (TMS) ที่ติดตามงานรับ/ส่งสินค้า บริการชุบโลหะ งาน OT พนักงาน และ KPI
-ถ้าถูกถามเรื่องข้อมูลงานจริงๆ เช่น "มีงานอะไรวันนี้" ให้แนะนำว่าใช้คำสั่ง /งานวันนี้ หรือ /สรุป จะได้ข้อมูลสดจากระบบ
-ห้ามแต่งข้อมูลงานขึ้นมาเอง คุยได้ทุกเรื่อง: ให้กำลังใจ ตลกเบาๆ แนะนำวิธีทำงาน คำถามทั่วไป`;
+บริบท: ทีมทำงานเกี่ยวกับโรงงานและคลังสินค้า มีระบบ TMS ติดตามงานรับ/ส่งสินค้า บริการชุบโลหะ งาน OT พนักงาน และ KPI
+ถ้าถูกถามเรื่องข้อมูลงานจริงๆ ให้แนะนำว่าใช้คำสั่ง /งานวันนี้ หรือ /สรุป จะได้ข้อมูลสดจากระบบ
+ห้ามแต่งข้อมูลงานขึ้นมาเอง คุยได้ทุกเรื่อง: ให้กำลังใจ ตลกเบาๆ แนะนำวิธีทำงาน`;
 
-async function askGemini(userMessage, history = []) {
-  if (!GEMINI_KEY) return '❌ ยังไม่ได้ตั้งค่า GEMINI_API_KEY ครับ';
+async function askGroq(userMessage, history = []) {
+  if (!GROQ_KEY) return '❌ ยังไม่ได้ตั้งค่า GROQ_API_KEY ครับ';
   try {
-    const contents = [
-      ...history.map(h => ({
-        role: h.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: h.content }]
-      })),
-      { role: 'user', parts: [{ text: userMessage }] }
+    const messages = [
+      { role: 'system', content: SYSTEM },
+      ...history,
+      { role: 'user', content: userMessage }
     ];
-    const res = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
+    const res = await fetch(GROQ_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_KEY}`
+      },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents,
-        generationConfig: { maxOutputTokens: 800, temperature: 0.9 }
+        model: 'llama-3.3-70b-versatile',
+        messages,
+        max_tokens: 800,
+        temperature: 0.9
       })
     });
     const data = await res.json();
     if (!res.ok) return '⚠️ ขอโทษครับ มีปัญหาเกิดขึ้น ลองใหม่อีกทีนะครับ';
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return text || '🤔 ไม่มีคำตอบครับ';
+    return data?.choices?.[0]?.message?.content || '🤔 ไม่มีคำตอบครับ';
   } catch (e) {
     return '⚠️ เชื่อมต่อไม่ได้ครับ ลองใหม่นะครับ';
   }
@@ -80,7 +81,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // เส้นทางที่ 2: tag @บอท → ถาม Gemini
+    // เส้นทางที่ 2: tag @บอท → ถาม Groq
     let userMsg = null;
     if (BOT_USERNAME) {
       userMsg = extractMention(trimmed, BOT_USERNAME);
@@ -92,7 +93,7 @@ export default async function handler(req, res) {
 
     if (userMsg !== null && userMsg !== '') {
       const history = getHistory(chatId);
-      const reply = await askGemini(userMsg, history);
+      const reply = await askGroq(userMsg, history);
       addHistory(chatId, 'user', userMsg);
       addHistory(chatId, 'assistant', reply);
       await sendTelegramReply(chatId, reply);
