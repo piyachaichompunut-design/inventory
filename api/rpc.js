@@ -883,7 +883,7 @@ async function handleTelegramCommand(text) {
       '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
       '🗓️ /งานวันที่ [วันที่] — เช่น /งานวันที่ 4/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
-      '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
+      '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do'
     );
   }
 
@@ -1126,16 +1126,46 @@ async function handleTelegramCommand(text) {
     return out.trim();
   }
 
-  // /ค้นหา [คำ]
+  // /ค้นหา [คำ] หรือ /ค้นหา [คำ] [สถานะ]
+  // รองรับ: to do, todo, doing, done, cancel (ไทย/อังกฤษ)
   if (cleaned.startsWith('/ค้นหา') || lower.startsWith('/search')) {
-    const kw = cleaned.replace(/^\/ค้นหา/, '').replace(/^\/search/i, '').trim();
-    if (!kw) return 'พิมพ์คำที่ต้องการค้นหาด้วยครับ เช่น /ค้นหา ชุบ';
+    let kw = cleaned.replace(/^\/ค้นหา/, '').replace(/^\/search/i, '').trim();
+    if (!kw) return 'พิมพ์คำที่ต้องการค้นหาด้วยครับ เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do';
+
+    // ดึง keyword สถานะออกจากท้าย (ถ้ามี)
+    const statusMap = {
+      'to do': 'To Do', 'todo': 'To Do', 'ยังไม่ทำ': 'To Do', 'รอดำเนินการ': 'To Do',
+      'doing': 'Doing', 'กำลังทำ': 'Doing',
+      'done': 'Done', 'เสร็จ': 'Done', 'เสร็จแล้ว': 'Done',
+      'cancel': 'Cancel', 'ยกเลิก': 'Cancel',
+    };
+    let wantStatus = null;
+    // ลองหา keyword สถานะจาก token ท้ายสุด (1-2 คำ)
+    const tokens = kw.split(/\s+/);
+    // ลอง 2 คำท้าย ("to do")
+    if (tokens.length >= 2) {
+      const last2 = tokens.slice(-2).join(' ').toLowerCase();
+      if (statusMap[last2]) { wantStatus = statusMap[last2]; kw = tokens.slice(0, -2).join(' ').trim(); }
+    }
+    // ลอง 1 คำท้าย ("done", "doing", "cancel", "เสร็จ" ฯลฯ)
+    if (!wantStatus && tokens.length >= 1) {
+      const last1 = tokens[tokens.length - 1].toLowerCase();
+      if (statusMap[last1]) { wantStatus = statusMap[last1]; kw = tokens.slice(0, -1).join(' ').trim(); }
+    }
+    if (!kw) return 'พิมพ์คำค้นหาด้วยครับ เช่น /ค้นหา บริการ to do';
+
     const { data } = await db.from('tasks').select('*').order('seq', { ascending: true });
     const k = kw.toLowerCase();
-    const list = (data || []).filter(t =>
+    let list = (data || []).filter(t =>
       ((t.task || '') + (t.sales_name || '') + (t.categories || '') + (t.note || '')).toLowerCase().includes(k));
-    return fmtDetail('🔍 <b>ผลค้นหา "' + tgEsc(kw) + '" ({n})</b>', list)
-      || '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"';
+    // กรองสถานะถ้าระบุ
+    if (wantStatus) {
+      list = list.filter(t =>
+        wantStatus === 'Done' ? t.done : (t.task_status === wantStatus && !t.done));
+    }
+    const statusLabel = wantStatus ? ' [' + wantStatus + ']' : '';
+    return fmtDetail('🔍 <b>ผลค้นหา "' + tgEsc(kw) + '"' + tgEsc(statusLabel) + ' ({n})</b>', list)
+      || '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"' + (wantStatus ? ' สถานะ ' + wantStatus : '');
   }
 
   // ไม่ใช่คำสั่งที่รู้จัก — เงียบไว้ (return null = ไม่ตอบ)
