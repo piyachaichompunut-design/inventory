@@ -1143,6 +1143,130 @@ async function handleTelegramCommand(text) {
 }
 
 // ============================================================================
+//  CRON: สรุปงานรับ/ส่งประจำวัน (7:00 น.)
+// ============================================================================
+async function dailyReceiveSend() {
+  const today = todayStr();
+  const { data } = await db.from('tasks').select('task, duration, categories, sales_name, task_status, done')
+    .eq('action_date', today).order('done', { ascending: true });
+  const list = data || [];
+  const rap = list.filter(t => t.duration === 'รับ');
+  const send = list.filter(t => t.duration === 'ส่ง');
+  if (!rap.length && !send.length) return { success: true, count: 0 };
+  let msg = '📦 <b>งานรับ/ส่งประจำวัน</b>\n';
+  msg += '📅 ' + tgDate(today) + '\n';
+  if (rap.length) {
+    msg += '\n📦 <b>งานรับ (' + rap.length + ')</b>\n';
+    rap.forEach((t, i) => {
+      msg += (i + 1) + '. ' + tgEsc(t.task || '-') + (t.done ? ' ✅' : ' [' + tgEsc(t.task_status || '-') + ']');
+      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
+      msg += '\n';
+    });
+  }
+  if (send.length) {
+    msg += '\n🚚 <b>งานส่ง (' + send.length + ')</b>\n';
+    send.forEach((t, i) => {
+      msg += (i + 1) + '. ' + tgEsc(t.task || '-') + (t.done ? ' ✅' : ' [' + tgEsc(t.task_status || '-') + ']');
+      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
+      msg += '\n';
+    });
+  }
+  await notifyTelegram(msg);
+  return { success: true, count: list.length };
+}
+
+// ============================================================================
+//  CRON: สรุปงานตอนเย็น + แจ้งเตือนงานพรุ่งนี้ (16:45 น.)
+// ============================================================================
+async function eveningReport() {
+  const today = todayStr();
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const tmrStr = tomorrow.toISOString().slice(0, 10);
+
+  // สรุปวันนี้
+  const { data: todayData } = await db.from('tasks').select('done, task_status').eq('action_date', today);
+  const todayList = todayData || [];
+  const doneToday = todayList.filter(t => t.done).length;
+  const pendingToday = todayList.filter(t => !t.done).length;
+
+  // งานพรุ่งนี้
+  const { data: tmrData } = await db.from('tasks').select('task, sales_name, duration')
+    .eq('done', false).eq('action_date', tmrStr).order('seq', { ascending: true });
+  const tmrList = tmrData || [];
+
+  // งานค้างทั้งหมด
+  const { data: allPending } = await db.from('tasks').select('task_status').eq('done', false);
+  const totalPending = (allPending || []).length;
+
+  let msg = '🌆 <b>สรุปงานประจำวัน</b>\n';
+  msg += '📅 ' + tgDate(today) + '\n\n';
+  msg += '📊 <b>สรุปวันนี้</b>\n';
+  msg += '✅ เสร็จแล้ว: ' + doneToday + ' งาน\n';
+  msg += '⏳ ยังค้าง: ' + pendingToday + ' งาน\n';
+  msg += '📋 ค้างทั้งหมดในระบบ: ' + totalPending + ' งาน\n';
+
+  if (tmrList.length) {
+    msg += '\n📅 <b>งานพรุ่งนี้ (' + tgDate(tmrStr) + ') มี ' + tmrList.length + ' งาน</b>\n';
+    tmrList.slice(0, 15).forEach((t, i) => {
+      const icon = t.duration === 'รับ' ? '📦' : t.duration === 'ส่ง' ? '🚚' : '📋';
+      msg += (i + 1) + '. ' + icon + ' ' + tgEsc(t.task || '-');
+      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
+      msg += '\n';
+    });
+    if (tmrList.length > 15) msg += '…และอีก ' + (tmrList.length - 15) + ' งาน\n';
+  } else {
+    msg += '\n📅 พรุ่งนี้ (' + tgDate(tmrStr) + ') ไม่มีงานครบกำหนด\n';
+  }
+  await notifyTelegram(msg);
+  return { success: true };
+}
+
+// ============================================================================
+//  CRON: สรุป KPI รายเดือน (วันที่ 1 ของเดือน 8:00 น.)
+// ============================================================================
+async function monthlyKPIReport() {
+  // ดึงเดือนที่แล้ว
+  const now = new Date();
+  const prevMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // getMonth() คืน 0-11
+  const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+
+  const { data: staff } = await db.from('kpi_staff').select('*').neq('active', false);
+  if (!staff || !staff.length) return { success: true, count: 0 };
+
+  let passCount = 0, failCount = 0, noDataCount = 0;
+  let details = '';
+
+  for (const emp of staff) {
+    const { data: km } = await db.from('kpi_monthly').select('*')
+      .eq('emp_id', emp.id).eq('month', prevMonth).eq('year', prevYear);
+    const row = km && km[0];
+    const fullName = tgEsc((emp.name || '') + ' ' + (emp.surname || ''));
+    if (!row) {
+      noDataCount++;
+      details += '⬜ ' + fullName + ' — ไม่มีข้อมูล\n';
+      continue;
+    }
+    const items = Array.isArray(row.kpi_data) ? row.kpi_data : [];
+    const tMax = items.reduce((s, x) => s + (parseFloat(x.maxScore) || 0), 0);
+    const tScore = items.reduce((s, x) => s + (parseFloat(x.score) || 0), 0);
+    const pct = tMax > 0 ? Math.round(tScore / tMax * 100) : 0;
+    const thr = parseFloat(row.pass_threshold) || 70;
+    const pass = pct >= thr;
+    if (pass) passCount++; else failCount++;
+    details += (pass ? '✅' : '❌') + ' ' + fullName + ' — ' + pct + '% (' + tScore + '/' + tMax + ')\n';
+  }
+
+  let msg = '📈 <b>สรุป KPI เดือน ' + prevMonth + '/' + prevYear + '</b>\n\n';
+  msg += '✅ ผ่าน: ' + passCount + ' คน\n';
+  msg += '❌ ไม่ผ่าน: ' + failCount + ' คน\n';
+  if (noDataCount) msg += '⬜ ไม่มีข้อมูล: ' + noDataCount + ' คน\n';
+  msg += '\n<b>รายละเอียด:</b>\n' + details;
+
+  await notifyTelegram(msg);
+  return { success: true, pass: passCount, fail: failCount };
+}
+
+// ============================================================================
 //  CRON: เช็คงานครบกำหนด/เลยกำหนด แล้วแจ้ง Telegram (เรียกวันละครั้ง)
 // ============================================================================
 async function checkDueTasks() {
@@ -1184,7 +1308,8 @@ async function checkDueTasks() {
 //  DISPATCH TABLE
 // ============================================================================
 const HANDLERS = {
-  getTasks, addTask, updateTask, deleteTask, checkDueTasks,
+  getTasks, addTask, updateTask, deleteTask,
+  checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
   getCategories, addCategory, deleteCategory, getDashboardData,
   saveAttachment, getAttachments, deleteAttachment, getFileAsBase64,
   getWeightJobs, saveWeightJob, deleteWeightJob,
@@ -1201,7 +1326,7 @@ const HANDLERS = {
 };
 
 export const __handlers = HANDLERS;
-export { checkDueTasks, handleTelegramCommand };
+export { checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport, handleTelegramCommand };
 
 // ส่งข้อความตอบกลับไปยัง chat ที่ระบุ (ใช้โดย webhook)
 export async function sendTelegramReply(chatId, text) {
