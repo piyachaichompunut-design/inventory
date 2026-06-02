@@ -870,10 +870,10 @@ async function handleTelegramCommand(text) {
       '📋 /งานค้าง — งานที่ยังไม่เสร็จ\n' +
       '🔴 /เลยกำหนด — งานที่เลยกำหนดแล้ว\n' +
       '✅ /งานเสร็จวันนี้ — งานที่เสร็จวันนี้\n' +
-      '📦 /งานรับ — งานประเภทรับ\n' +
-      '🚚 /งานส่ง — งานประเภทส่ง\n' +
+      '📦 /งานรับ — งานประเภทรับ (เพิ่มวันที่ได้ เช่น /งานรับ วันที่ 4/6/2026)\n' +
+      '🚚 /งานส่ง — งานประเภทส่ง (เพิ่มวันที่ได้)\n' +
       '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
-      '🗓️ /งานวันที่ [YYYY-MM-DD] — เช่น /งานวันที่ 2026-06-10\n' +
+      '🗓️ /งานวันที่ [วันที่] — เช่น /งานวันที่ 4/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ'
     );
@@ -910,6 +910,37 @@ async function handleTelegramCommand(text) {
     return m;
   };
   const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+
+  // แปลงวันที่จากหลายรูปแบบ → YYYY-MM-DD (คืน null ถ้าไม่ถูกต้อง)
+  // รองรับ: 4/6/2026, 4-6-2026, 2026-06-04, 04/06/2569 (พ.ศ.)
+  const parseDate = (s) => {
+    if (!s) return null;
+    s = s.trim();
+    // รูปแบบ ISO อยู่แล้ว: YYYY-MM-DD
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      let [, y, mo, d] = m; y = +y;
+      if (y >= 2500) y -= 543; // พ.ศ. → ค.ศ.
+      return y + '-' + pad(+mo, 2) + '-' + pad(+d, 2);
+    }
+    // รูปแบบ วัน/เดือน/ปี หรือ วัน-เดือน-ปี
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      let [, d, mo, y] = m; y = +y;
+      if (y < 100) y += 2000;        // 26 → 2026
+      if (y >= 2500) y -= 543;       // พ.ศ. → ค.ศ.
+      if (+mo < 1 || +mo > 12 || +d < 1 || +d > 31) return null;
+      return y + '-' + pad(+mo, 2) + '-' + pad(+d, 2);
+    }
+    return null;
+  };
+  // ดึงส่วนวันที่ออกจากคำสั่ง รองรับทั้ง "วันที่ 4/6/2026" และ "4/6/2026"
+  const extractDate = (str) => {
+    const cleaned2 = str.replace(/วันที่/g, ' ').trim();
+    const tok = cleaned2.split(/\s+/).filter(Boolean);
+    for (const t of tok) { const p = parseDate(t); if (p) return p; }
+    return null;
+  };
 
   // /สรุป
   if (cleaned === '/สรุป' || lower === '/summary') {
@@ -978,13 +1009,24 @@ async function handleTelegramCommand(text) {
       || '🟢 ไม่มีงานเลยกำหนดครับ';
   }
 
-  // /งานรับ , /งานส่ง
-  if (cleaned === '/งานรับ' || cleaned === '/งานส่ง') {
-    const dur = cleaned === '/งานรับ' ? 'รับ' : 'ส่ง';
-    const { data } = await db.from('tasks').select('*')
-      .eq('done', false).eq('duration', dur).order('action_date', { ascending: true });
-    return fmtDetail('📦 <b>งาน' + dur + ' (ที่ยังไม่เสร็จ) ({n})</b>', data || [])
-      || '🟢 ไม่มีงาน' + dur + 'ที่ค้างครับ';
+  // /งานรับ , /งานส่ง  (รองรับระบุวันที่: /งานรับ วันที่ 4/6/2026)
+  if (cleaned.startsWith('/งานรับ') || cleaned.startsWith('/งานส่ง')) {
+    const isRap = cleaned.startsWith('/งานรับ');
+    const dur = isRap ? 'รับ' : 'ส่ง';
+    const rest = cleaned.replace(/^\/งาน(รับ|ส่ง)/, '').trim();
+    const dArg = rest ? extractDate(rest) : null;
+    if (rest && !dArg) return 'รูปแบบวันที่ไม่ถูกต้องครับ ลองใหม่ เช่น /งาน' + dur + ' วันที่ 4/6/2026';
+
+    let q = db.from('tasks').select('*').eq('duration', dur);
+    if (dArg) {
+      q = q.eq('action_date', dArg);                 // ระบุวันที่ → เอาทุกสถานะของวันนั้น
+    } else {
+      q = q.eq('done', false);                        // ไม่ระบุวันที่ → เฉพาะที่ยังไม่เสร็จ
+    }
+    const { data } = await q.order('action_date', { ascending: true });
+    const titleDate = dArg ? ' วันที่ ' + dArg : ' (ที่ยังไม่เสร็จ)';
+    return fmtDetail('📦 <b>งาน' + dur + titleDate + ' ({n})</b>', data || [])
+      || '🟢 ไม่มีงาน' + dur + (dArg ? ' วันที่ ' + dArg : 'ที่ค้าง') + 'ครับ';
   }
 
   // /งานของ [ชื่อ]
@@ -999,10 +1041,11 @@ async function handleTelegramCommand(text) {
       || '🔍 ไม่พบงานของ "' + tgEsc(name) + '"';
   }
 
-  // /งานวันที่ [YYYY-MM-DD]
+  // /งานวันที่ [วันที่]  รองรับ 4/6/2026, 4-6-2569, 2026-06-04
   if (cleaned.startsWith('/งานวันที่') || lower.startsWith('/date')) {
-    const dArg = cleaned.replace(/^\/งานวันที่/, '').replace(/^\/date/i, '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dArg)) return 'พิมพ์วันที่รูปแบบ YYYY-MM-DD ด้วยครับ เช่น /งานวันที่ 2026-06-10';
+    const dRaw = cleaned.replace(/^\/งานวันที่/, '').replace(/^\/date/i, '').trim();
+    const dArg = extractDate(dRaw);
+    if (!dArg) return 'พิมพ์วันที่ให้ถูกต้องครับ เช่น /งานวันที่ 4/6/2026 หรือ /งานวันที่ 2026-06-04';
     const { data } = await db.from('tasks').select('*')
       .eq('action_date', dArg).order('seq', { ascending: true });
     return fmtDetail('🗓️ <b>งานวันที่ ' + dArg + ' ({n})</b>', data || [])
