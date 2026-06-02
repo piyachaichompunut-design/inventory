@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Task Management System</title>
+<script>
+// ── Login guard: ยังไม่ได้ login → เด้งไปหน้า login ──
+(function(){
+  try {
+    if (!localStorage.getItem('app_token')) {
+      window.location.replace('/login.html');
+    }
+  } catch(e){}
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="/app-shim.js"></script>
 <style>
@@ -1362,8 +1372,15 @@ body.dark-mode .task-date-txt{color:#93c5fd!important}
     <div style="background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;font-size:12px;font-weight:700;padding:6px 14px;border-radius:20px;box-shadow:0 2px 8px rgba(249,115,22,.3)">TMS v2.0</div>
     <button class="dm-btn" id="dm-btn" onclick="toggleAppDark()" title="Dark / Light Mode">🌙</button>
     <button class="dm-btn dp-open-btn" onclick="toggleDisplayPanel()" title="ตั้งค่าการแสดงผล" id="dp-open-btn">🎨</button>
+    <button class="dm-btn" onclick="appLogout()" title="ออกจากระบบ">🚪</button>
   </div>
 </div>
+<script>
+function appLogout(){
+  try { localStorage.removeItem('app_token'); } catch(e){}
+  window.location.href = '/login.html';
+}
+</script>
 
 <!-- NAV -->
 <div class="nav">

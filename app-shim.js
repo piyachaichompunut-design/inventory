@@ -10,13 +10,21 @@
   window.google.script = window.google.script || {};
 
   function callBackend(fn, args, onSuccess, onFailure) {
+    var token = '';
+    try { token = window.localStorage.getItem('app_token') || ''; } catch (e) {}
     fetch('/api/rpc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-App-Token': token },
       body: JSON.stringify({ fn: fn, args: args })
     })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        // ถ้า token หมดอายุ/ไม่ผ่าน → เด้งกลับหน้า login
+        if (d && d.ok === false && d.error === 'unauthorized') {
+          try { window.localStorage.removeItem('app_token'); } catch (e) {}
+          window.location.href = '/login.html';
+          return;
+        }
         if (d && d.ok) { if (onSuccess) onSuccess(d.result); }
         else { if (onFailure) onFailure(new Error((d && d.error) || 'เกิดข้อผิดพลาด')); }
       })

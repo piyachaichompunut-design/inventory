@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>เข้าสู่ระบบ — Task Management System</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', 'Sarabun', Tahoma, sans-serif;
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 50%, #fed7aa 100%);
+      padding: 20px;
+    }
+    .card {
+      background: #fff;
+      width: 100%; max-width: 400px;
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(234, 88, 12, 0.18);
+      padding: 40px 32px;
+      text-align: center;
+    }
+    .logo {
+      width: 64px; height: 64px; margin: 0 auto 16px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 30px;
+    }
+    h1 { font-size: 20px; color: #1f2937; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #9ca3af; margin-bottom: 28px; }
+    label { display: block; text-align: left; font-size: 13px; color: #6b7280; margin-bottom: 6px; }
+    input {
+      width: 100%; padding: 13px 14px; font-size: 15px;
+      border: 1.5px solid #e5e7eb; border-radius: 10px;
+      outline: none; transition: border .2s;
+    }
+    input:focus { border-color: #f97316; }
+    button {
+      width: 100%; margin-top: 20px; padding: 13px;
+      font-size: 15px; font-weight: 600; color: #fff;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      border: none; border-radius: 10px; cursor: pointer;
+      transition: opacity .2s;
+    }
+    button:hover { opacity: .92; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .err {
+      margin-top: 14px; font-size: 13px; color: #dc2626;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">📋</div>
+    <h1>Task Management System</h1>
+    <div class="sub">กรุณาใส่รหัสผ่านเพื่อเข้าใช้งาน</div>
+
+    <label for="pw">รหัสผ่าน</label>
+    <input id="pw" type="password" placeholder="••••••••" autofocus
+           onkeydown="if(event.key==='Enter') doLogin()" />
+
+    <button id="btn" onclick="doLogin()">เข้าสู่ระบบ</button>
+    <div class="err" id="err"></div>
+  </div>
+
+  <script>
+    // ถ้ามี token อยู่แล้ว ข้ามไปหน้าหลักเลย
+    try {
+      if (localStorage.getItem('app_token')) { window.location.href = '/'; }
+    } catch (e) {}
+
+    function doLogin() {
+      var pw = document.getElementById('pw').value;
+      var btn = document.getElementById('btn');
+      var err = document.getElementById('err');
+      err.textContent = '';
+      btn.disabled = true; btn.textContent = 'กำลังตรวจสอบ...';
+
+      fetch('/api/rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fn: 'login', args: [pw] })
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok && d.result && d.result.token) {
+          try { localStorage.setItem('app_token', d.result.token); } catch (e) {}
+          window.location.href = '/';
+        } else {
+          err.textContent = (d && d.error) || 'เข้าสู่ระบบไม่สำเร็จ';
+          btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
+        }
+      })
+      .catch(function () {
+        err.textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้';
+        btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
+      });
+    }
+  </script>
+</body>
+</html>
