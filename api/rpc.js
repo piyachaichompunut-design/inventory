@@ -1177,30 +1177,67 @@ async function handleTelegramCommand(text) {
 // ============================================================================
 async function dailyReceiveSend() {
   const today = todayStr();
-  const { data } = await db.from('tasks').select('task, duration, categories, sales_name, task_status, done')
-    .eq('action_date', today).order('done', { ascending: true });
+  // ดึงครบทุก field รวมไฟล์แนบ
+  const { data } = await db.from('tasks').select('*')
+    .eq('action_date', today).order('done', { ascending: true }).order('seq', { ascending: true });
   const list = data || [];
-  const rap = list.filter(t => t.duration === 'รับ');
-  const send = list.filter(t => t.duration === 'ส่ง');
-  if (!rap.length && !send.length) return { success: true, count: 0 };
-  let msg = '📦 <b>งานรับ/ส่งประจำวัน</b>\n';
+  const rap   = list.filter(t => t.duration === 'รับ');
+  const send  = list.filter(t => t.duration === 'ส่ง');
+  const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
+
+  if (!rap.length && !send.length && !other.length) return { success: true, count: 0 };
+
+  // helper แสดงรายละเอียด 1 งาน พร้อมสถานะ + ไฟล์แนบ
+  const fmtTask = (t, i) => {
+    const statusIcon = t.done ? '✅' : t.task_status === 'Doing' ? '🟣' : '🔵';
+    let s = (i + 1) + '. 📋 <b>' + tgEsc(t.task || '-') + '</b>\n';
+    s += '   ' + statusIcon + ' ' + tgEsc(t.done ? 'Done' : (t.task_status || 'To Do')) + '\n';
+    if (t.categories) s += '   🏷️ ' + tgEsc(t.categories) + '\n';
+    if (t.sales_name)  s += '   👤 ' + tgEsc(t.sales_name) + '\n';
+    if (t.note)        s += '   📝 ' + tgEsc(t.note) + '\n';
+    try {
+      const files = typeof t.attachments === 'string'
+        ? JSON.parse(t.attachments || '[]')
+        : (Array.isArray(t.attachments) ? t.attachments : []);
+      files.forEach(f => {
+        const fname = tgEsc(f.name || 'ไฟล์');
+        const url = f.webViewLink || f.wl || '';
+        if (url) s += '   📎 <a href="' + url + '">' + fname + '</a>\n';
+        else if (fname) s += '   📎 ' + fname + '\n';
+      });
+    } catch (e) {}
+    return s;
+  };
+
+  let msg = '🌅 <b>งานรับ/ส่งประจำวัน</b>\n';
   msg += '📅 ' + tgDate(today) + '\n';
+  msg += '📊 รวมทั้งหมด: ' + list.length + ' งาน';
+  if (rap.length)   msg += ' | 📦 รับ ' + rap.length;
+  if (send.length)  msg += ' | 🚚 ส่ง ' + send.length;
+  if (other.length) msg += ' | 📋 อื่นๆ ' + other.length;
+  msg += '\n';
+
   if (rap.length) {
-    msg += '\n📦 <b>งานรับ (' + rap.length + ')</b>\n';
-    rap.forEach((t, i) => {
-      msg += (i + 1) + '. ' + tgEsc(t.task || '-') + (t.done ? ' ✅' : ' [' + tgEsc(t.task_status || '-') + ']');
-      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
-      msg += '\n';
-    });
+    msg += '\n━━━━━━━━━━━━━━━━\n';
+    msg += '📦 <b>งานรับ (' + rap.length + ')</b>\n';
+    msg += '━━━━━━━━━━━━━━━━\n';
+    rap.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
   }
+
   if (send.length) {
-    msg += '\n🚚 <b>งานส่ง (' + send.length + ')</b>\n';
-    send.forEach((t, i) => {
-      msg += (i + 1) + '. ' + tgEsc(t.task || '-') + (t.done ? ' ✅' : ' [' + tgEsc(t.task_status || '-') + ']');
-      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
-      msg += '\n';
-    });
+    msg += '\n━━━━━━━━━━━━━━━━\n';
+    msg += '🚚 <b>งานส่ง (' + send.length + ')</b>\n';
+    msg += '━━━━━━━━━━━━━━━━\n';
+    send.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
   }
+
+  if (other.length) {
+    msg += '\n━━━━━━━━━━━━━━━━\n';
+    msg += '📋 <b>งานอื่นๆ (' + other.length + ')</b>\n';
+    msg += '━━━━━━━━━━━━━━━━\n';
+    other.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
+  }
+
   await notifyTelegram(msg);
   return { success: true, count: list.length };
 }
@@ -1219,14 +1256,40 @@ async function eveningReport() {
   const doneToday = todayList.filter(t => t.done).length;
   const pendingToday = todayList.filter(t => !t.done).length;
 
-  // งานพรุ่งนี้
-  const { data: tmrData } = await db.from('tasks').select('task, sales_name, duration')
+  // งานพรุ่งนี้ — ดึงครบทุก field รวมไฟล์แนบ
+  const { data: tmrData } = await db.from('tasks').select('*')
     .eq('done', false).eq('action_date', tmrStr).order('seq', { ascending: true });
   const tmrList = tmrData || [];
 
   // งานค้างทั้งหมด
   const { data: allPending } = await db.from('tasks').select('task_status').eq('done', false);
   const totalPending = (allPending || []).length;
+
+  // helper แสดงรายละเอียดงาน 1 รายการ (พร้อมไฟล์แนบ)
+  const fmtTask = (t, i) => {
+    let s = (i + 1) + '. 📋 <b>' + tgEsc(t.task || '-') + '</b>\n';
+    if (t.categories) s += '   🏷️ ' + tgEsc(t.categories) + '\n';
+    if (t.sales_name)  s += '   👤 ' + tgEsc(t.sales_name) + '\n';
+    if (t.note)        s += '   📝 ' + tgEsc(t.note) + '\n';
+    // ไฟล์แนบ
+    try {
+      const files = typeof t.attachments === 'string'
+        ? JSON.parse(t.attachments || '[]')
+        : (Array.isArray(t.attachments) ? t.attachments : []);
+      files.forEach(f => {
+        const fname = tgEsc(f.name || 'ไฟล์');
+        const url = f.webViewLink || f.wl || '';
+        if (url) s += '   📎 <a href="' + url + '">' + fname + '</a>\n';
+        else if (fname) s += '   📎 ' + fname + '\n';
+      });
+    } catch (e) {}
+    return s;
+  };
+
+  // แยกประเภท รับ / ส่ง / อื่นๆ
+  const rapList  = tmrList.filter(t => t.duration === 'รับ');
+  const sendList = tmrList.filter(t => t.duration === 'ส่ง');
+  const otherList = tmrList.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
 
   let msg = '🌆 <b>สรุปงานประจำวัน</b>\n';
   msg += '📅 ' + tgDate(today) + '\n\n';
@@ -1235,17 +1298,27 @@ async function eveningReport() {
   msg += '⏳ ยังค้าง: ' + pendingToday + ' งาน\n';
   msg += '📋 ค้างทั้งหมดในระบบ: ' + totalPending + ' งาน\n';
 
-  if (tmrList.length) {
-    msg += '\n📅 <b>งานพรุ่งนี้ (' + tgDate(tmrStr) + ') มี ' + tmrList.length + ' งาน</b>\n';
-    tmrList.slice(0, 15).forEach((t, i) => {
-      const icon = t.duration === 'รับ' ? '📦' : t.duration === 'ส่ง' ? '🚚' : '📋';
-      msg += (i + 1) + '. ' + icon + ' ' + tgEsc(t.task || '-');
-      if (t.sales_name) msg += ' — ' + tgEsc(t.sales_name);
-      msg += '\n';
-    });
-    if (tmrList.length > 15) msg += '…และอีก ' + (tmrList.length - 15) + ' งาน\n';
+  if (!tmrList.length) {
+    msg += '\n📅 พรุ่งนี้ (' + tgDate(tmrStr) + ') ไม่มีงานครับ\n';
   } else {
-    msg += '\n📅 พรุ่งนี้ (' + tgDate(tmrStr) + ') ไม่มีงานครบกำหนด\n';
+    msg += '\n━━━━━━━━━━━━━━━━\n';
+    msg += '📅 <b>งานพรุ่งนี้ ' + tgDate(tmrStr) + ' (' + tmrList.length + ' งาน)</b>\n';
+    msg += '━━━━━━━━━━━━━━━━\n';
+
+    if (rapList.length) {
+      msg += '\n📦 <b>งานรับ (' + rapList.length + ')</b>\n';
+      rapList.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
+    }
+
+    if (sendList.length) {
+      msg += '\n🚚 <b>งานส่ง (' + sendList.length + ')</b>\n';
+      sendList.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
+    }
+
+    if (otherList.length) {
+      msg += '\n📋 <b>งานอื่นๆ (' + otherList.length + ')</b>\n';
+      otherList.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
+    }
   }
   await notifyTelegram(msg);
   return { success: true };
