@@ -3996,9 +3996,9 @@ function setDP(el, preset) {
   // Update pill active state
   document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
   el.classList.add('active');
-  // Show/hide custom range
+  // Show/hide custom range (ถ้ามี element นี้)
   var box = document.getElementById('drange-box');
-  box.style.display = preset === 'custom' ? 'flex' : 'none';
+  if (box) box.style.display = preset === 'custom' ? 'flex' : 'none';
   // เวลากดปุ่มวันที่ ให้ reset status เป็น "ทั้งหมด" เพื่อให้เห็นงานทุกสถานะ
   if (preset !== 'all' && preset !== 'custom') {
     document.getElementById('f-st').value = 'All';
@@ -4121,7 +4121,8 @@ function resetF(){
   document.getElementById('f-mn').value='';
   document.getElementById('f-df').value='';
   document.getElementById('f-dt2').value='';
-  document.getElementById('drange-box').style.display='none';
+  var drangeBox = document.getElementById('drange-box');
+  if (drangeBox) drangeBox.style.display='none';
   document.getElementById('df-info').textContent='';
   // Reset pill to "All"
   document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
