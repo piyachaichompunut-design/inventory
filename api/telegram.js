@@ -1,4 +1,4 @@
-// Telegram Webhook
+// Telegram Webhook   
 // - /คำสั่ง → คำสั่งสำเร็จรูป (ดูข้อมูลจาก Supabase)
 // - @botname → ถาม Gemini AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat } from './rpc.js';
