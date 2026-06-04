@@ -1571,7 +1571,7 @@ function appLogout(){
       <input type="text" id="f-q" placeholder="ชื่องาน, หมายเหตุ, ผู้รับผิดชอบ..." oninput="applyF()">
     </div>
     <div class="fg"><label>สถานะ</label>
-      <select id="f-st" onchange="applyF()"><option value="All">ทั้งหมด</option><option selected>To Do</option><option>Doing</option><option>Done</option><option>Cancel</option></select>
+      <select id="f-st" onchange="applyF()"><option value="All">ทั้งหมด</option><option value="To Do" selected>To Do</option><option value="Doing">Doing</option><option value="Done">Done</option><option value="Cancel">Cancel</option></select>
     </div>
     <div class="fg"><label>หมวดหมู่</label>
       <select id="f-cat" onchange="applyF()"><option value="All">ทั้งหมด</option></select>
@@ -3992,21 +3992,22 @@ document.addEventListener('click',function(e){
 
 // Set date preset pill
 function setDP(el, preset) {
-  curDP = preset;
-  // Update pill active state
-  document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
-  if (el) el.classList.add('active');
-  // Show/hide custom range (ถ้ามี element นี้)
-  var box = document.getElementById('drange-box');
-  if (box) box.style.display = preset === 'custom' ? 'flex' : 'none';
-  // ปรับ status filter ให้สมดุล
-  var stEl = document.getElementById('f-st');
-  if (stEl) {
-    if (preset === 'all') {
-      stEl.value = 'To Do';          // กด "ทั้งหมด" → กลับเป็น To Do
-    } else if (preset !== 'custom') {
-      stEl.value = 'All';            // กดปุ่มวันที่ → เห็นทุกสถานะของช่วงนั้น
+  try {
+    curDP = preset;
+    // ไฮไลต์ปุ่มที่เลือก
+    document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
+    if (el) el.classList.add('active');
+    // ซ่อน/แสดงช่วงวันที่กำหนดเอง (ถ้ามี)
+    var box = document.getElementById('drange-box');
+    if (box) box.style.display = (preset === 'custom') ? 'flex' : 'none';
+    // ปรับสถานะให้เหมาะกับการกดปุ่มวันที่
+    var stEl = document.getElementById('f-st');
+    if (stEl) {
+      if (preset === 'all')        stEl.value = 'To Do'; // "ทั้งหมด" → กลับ To Do
+      else if (preset !== 'custom') stEl.value = 'All';  // ปุ่มวันที่ → เห็นทุกสถานะ
     }
+  } catch (e) {
+    console.error('setDP error:', e);
   }
   if (preset !== 'custom') applyF();
 }
@@ -4115,20 +4116,22 @@ function applyF() {
 
 function resetF(){
   curDP = 'all';
-  document.getElementById('f-q').value='';
-  // reset สถานะกลับเป็น "To Do" (ซ่อน Done/Cancel โดย default)
-  document.getElementById('f-st').value='To Do';
-  ['f-cat','f-nf','f-dr','f-sl'].forEach(function(id){document.getElementById(id).value='All';});
-  document.getElementById('f-mn').value='';
-  document.getElementById('f-df').value='';
-  document.getElementById('f-dt2').value='';
+  var setV = function(id, v){ var e=document.getElementById(id); if(e) e.value=v; };
+  setV('f-q','');
+  setV('f-st','To Do');   // reset สถานะกลับเป็น To Do
+  ['f-cat','f-nf','f-dr','f-sl'].forEach(function(id){ setV(id,'All'); });
+  setV('f-mn','');
+  setV('f-df','');
+  setV('f-dt2','');
   var drangeBox = document.getElementById('drange-box');
   if (drangeBox) drangeBox.style.display='none';
-  document.getElementById('df-info').textContent='';
-  // Reset pill to "All"
+  var dfInfo = document.getElementById('df-info');
+  if (dfInfo) dfInfo.textContent='';
+  // ไฮไลต์ปุ่ม "ทั้งหมด"
   document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
-  document.querySelector('.dpill[data-dp="all"]').classList.add('active');
-  // โหลดข้อมูลใหม่จาก server จริงๆ (ไม่ใช้แค่ข้อมูลเก่า)
+  var allPill = document.querySelector('.dpill[data-dp="all"]');
+  if (allPill) allPill.classList.add('active');
+  // โหลดข้อมูลใหม่จาก server
   loadTasks();
 }
 function renderTable(){
