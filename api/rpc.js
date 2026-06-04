@@ -1,3 +1,4 @@
+// v2
 // ============================================================================
 //  /api/rpc.js  —  Vercel Serverless Function
 //  จุดเดียวที่ frontend เรียกผ่าน google.script.run (ดู app-shim.js)
