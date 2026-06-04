@@ -3999,6 +3999,14 @@ function setDP(el, preset) {
   // Show/hide custom range
   var box = document.getElementById('drange-box');
   box.style.display = preset === 'custom' ? 'flex' : 'none';
+  // เวลากดปุ่มวันที่ ให้ reset status เป็น "ทั้งหมด" เพื่อให้เห็นงานทุกสถานะ
+  if (preset !== 'all' && preset !== 'custom') {
+    document.getElementById('f-st').value = 'All';
+  }
+  // กด "ทั้งหมด" ให้กลับเป็น To Do
+  if (preset === 'all') {
+    document.getElementById('f-st').value = 'To Do';
+  }
   if (preset !== 'custom') applyF();
 }
 
