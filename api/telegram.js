@@ -1,15 +1,15 @@
 // Telegram Webhook
-// - / → คำสั่งสำเร็จรูป
-// - @botname → ถาม Groq AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
+// - /คำสั่ง → คำสั่งสำเร็จรูป (ดูข้อมูลจาก Supabase)
+// - @botname → ถาม Gemini AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat } from './rpc.js';
 
-const GROQ_KEY     = process.env.GROQ_API_KEY || '';
+const GEMINI_KEY   = process.env.GEMINI_API_KEY || '';
 const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
-const GROQ_URL     = 'https://api.groq.com/openai/v1/chat/completions';
+const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
 const TAVILY_URL   = 'https://api.tavily.com/search';
 
-// ── System prompt ────────────────────────────────────────────────────────────
+// ── System prompt ─────────────────────────────────────────────────────────────
 const SYSTEM = `คุณคือ "Odoo Bot" ผู้ช่วย AI ของทีมโรงงาน/คลังสินค้าในประเทศไทย
 บุคลิก: กันเอง อบอุ่น เหมือนเพื่อนร่วมงานที่ฉลาด พูดภาษาไทยเป็นธรรมชาติ ใช้ "ครับ" ลงท้าย
 สไตล์: ถามง่าย → ตอบสั้นกระชับ | ถามซับซ้อน → ตอบละเอียดเป็นขั้นตอน
@@ -17,22 +17,21 @@ const SYSTEM = `คุณคือ "Odoo Bot" ผู้ช่วย AI ของ
 ถ้าถูกถามเรื่องข้อมูลงานในระบบ ให้แนะนำใช้คำสั่ง /งานวันนี้ /สรุป /kpi แทน เพราะจะได้ข้อมูลสดจากฐานข้อมูล
 ห้ามแต่งข้อมูลงานขึ้นมาเอง
 
+เรื่องทั่วไปเช่น ดูดวง ราศี โหราศาสตร์ สุขภาพ อาหาร ความรัก ให้ตอบได้เต็มที่ สนุกและอบอุ่น
 เมื่อได้รับผลการค้นหาเว็บ (ขึ้นต้นด้วย [ข้อมูลจากเว็บ]):
 - สรุปให้กระชับ เข้าใจง่าย ภาษาไทย
-- บอกแหล่งที่มาด้วยถ้าสำคัญ
-- ถ้าข้อมูลไม่ชัดเจนหรือไม่ตรงคำถาม ให้บอกตรงๆ`;
+- บอกแหล่งที่มาด้วยถ้าสำคัญ`;
 
-// ── ตรวจว่าต้องค้นเว็บไหม ────────────────────────────────────────────────────
+// ── ตรวจว่าต้องค้นเว็บไหม ─────────────────────────────────────────────────────
 function needsWebSearch(text) {
   const t = text.toLowerCase();
-  // คำที่บ่งบอกว่าต้องการข้อมูล real-time
   const triggers = [
-    'วันนี้','ตอนนี้','ล่าสุด','ปัจจุบัน','เมื่อกี้','เพิ่งเกิด',
+    'วันนี้','ตอนนี้','ล่าสุด','ปัจจุบัน','เพิ่งเกิด',
     'ราคา','หุ้น','ค่าเงิน','อัตราแลกเปลี่ยน',
     'สภาพอากาศ','ฝน','น้ำท่วม','พายุ','อุณหภูมิ',
     'รถติด','การจราจร','ถนน','ทางด่วน',
     'ข่าว','เหตุการณ์','ประกาศ','แถลง',
-    'เปิด','ปิด','วันหยุด','วันทำงาน',
+    'เปิด','ปิด','วันหยุด',
     'today','now','latest','current','news','price','weather','traffic'
   ];
   return triggers.some(kw => t.includes(kw));
@@ -56,7 +55,6 @@ async function searchWeb(query) {
     });
     const data = await res.json();
     if (!res.ok) return null;
-    // รวมผลลัพธ์
     let result = '';
     if (data.answer) result += data.answer + '\n\n';
     if (data.results && data.results.length) {
@@ -71,37 +69,51 @@ async function searchWeb(query) {
   }
 }
 
-// ── ถาม Groq ─────────────────────────────────────────────────────────────────
-async function askGroq(userMessage, history = [], webContext = null) {
-  if (!GROQ_KEY) return '❌ ยังไม่ได้ตั้งค่า GROQ_API_KEY ครับ';
+// ── ถาม Gemini ────────────────────────────────────────────────────────────────
+async function askGemini(userMessage, history = [], webContext = null) {
+  if (!GEMINI_KEY) return '❌ ยังไม่ได้ตั้งค่า GEMINI_API_KEY ครับ';
   try {
-    // ถ้ามีข้อมูลจากเว็บ ใส่เป็น context ให้ AI
     const finalMessage = webContext
       ? `[ข้อมูลจากเว็บ]\n${webContext}\n\n[คำถาม]\n${userMessage}`
       : userMessage;
 
-    const messages = [
-      { role: 'system', content: SYSTEM },
-      ...history,
-      { role: 'user', content: finalMessage }
-    ];
-    const res = await fetch(GROQ_URL, {
+    // แปลง history เป็นรูปแบบ Gemini
+    const contents = [];
+    // ใส่ system instruction เป็น user turn แรก
+    contents.push({ role: 'user', parts: [{ text: SYSTEM }] });
+    contents.push({ role: 'model', parts: [{ text: 'เข้าใจแล้วครับ พร้อมช่วยเสมอ!' }] });
+
+    // ใส่ history
+    history.forEach(h => {
+      contents.push({
+        role: h.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: h.content }]
+      });
+    });
+
+    // ใส่ข้อความปัจจุบัน
+    contents.push({ role: 'user', parts: [{ text: finalMessage }] });
+
+    const res = await fetch(GEMINI_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        max_tokens: 800,
-        temperature: 0.7
+        contents,
+        generationConfig: {
+          maxOutputTokens: 800,
+          temperature: 0.7
+        }
       })
     });
+
     const data = await res.json();
-    if (!res.ok) return '⚠️ ขอโทษครับ มีปัญหาเกิดขึ้น ลองใหม่อีกทีนะครับ';
-    return data?.choices?.[0]?.message?.content || '🤔 ไม่มีคำตอบครับ';
+    if (!res.ok) {
+      console.error('Gemini error:', JSON.stringify(data));
+      return '⚠️ ขอโทษครับ มีปัญหาเกิดขึ้น ลองใหม่อีกทีนะครับ';
+    }
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || '🤔 ไม่มีคำตอบครับ';
   } catch (e) {
+    console.error('Gemini exception:', e.message);
     return '⚠️ เชื่อมต่อไม่ได้ครับ ลองใหม่นะครับ';
   }
 }
@@ -114,7 +126,7 @@ function extractMention(text, botUsername) {
   return text.replace(new RegExp('@' + (botUsername || '[\\w]+') + '\\b', 'gi'), '').trim();
 }
 
-// ── History ───────────────────────────────────────────────────────────────────
+// ── History (เก็บใน memory ต่อ chat) ─────────────────────────────────────────
 const chatHistory = new Map();
 function getHistory(chatId) { return chatHistory.get(String(chatId)) || []; }
 function addHistory(chatId, role, content) {
@@ -147,7 +159,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // เส้นทางที่ 2: tag @บอท → ถาม Groq (+ ค้นเว็บถ้าจำเป็น)
+    // เส้นทางที่ 2: tag @บอท → ถาม Gemini (+ ค้นเว็บถ้าจำเป็น)
     let userMsg = null;
     if (BOT_USERNAME) {
       userMsg = extractMention(trimmed, BOT_USERNAME);
@@ -166,8 +178,7 @@ export default async function handler(req, res) {
         webContext = await searchWeb(userMsg);
       }
 
-      const reply = await askGroq(userMsg, history, webContext);
-      // เก็บ history แค่ข้อความจริง ไม่เก็บ web context
+      const reply = await askGemini(userMsg, history, webContext);
       addHistory(chatId, 'user', userMsg);
       addHistory(chatId, 'assistant', reply);
       await sendTelegramReply(chatId, reply);
