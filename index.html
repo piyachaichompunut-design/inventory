@@ -3995,17 +3995,18 @@ function setDP(el, preset) {
   curDP = preset;
   // Update pill active state
   document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
-  el.classList.add('active');
+  if (el) el.classList.add('active');
   // Show/hide custom range (ถ้ามี element นี้)
   var box = document.getElementById('drange-box');
   if (box) box.style.display = preset === 'custom' ? 'flex' : 'none';
-  // เวลากดปุ่มวันที่ ให้ reset status เป็น "ทั้งหมด" เพื่อให้เห็นงานทุกสถานะ
-  if (preset !== 'all' && preset !== 'custom') {
-    document.getElementById('f-st').value = 'All';
-  }
-  // กด "ทั้งหมด" ให้กลับเป็น To Do
-  if (preset === 'all') {
-    document.getElementById('f-st').value = 'To Do';
+  // ปรับ status filter ให้สมดุล
+  var stEl = document.getElementById('f-st');
+  if (stEl) {
+    if (preset === 'all') {
+      stEl.value = 'To Do';          // กด "ทั้งหมด" → กลับเป็น To Do
+    } else if (preset !== 'custom') {
+      stEl.value = 'All';            // กดปุ่มวันที่ → เห็นทุกสถานะของช่วงนั้น
+    }
   }
   if (preset !== 'custom') applyF();
 }
