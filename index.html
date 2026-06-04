@@ -4061,7 +4061,12 @@ function updateDFInfo(preset, range, count) {
 
 function applyF() {
   var q  = document.getElementById('f-q').value.toLowerCase();
-  var st = document.getElementById('f-st').value;
+  var stEl2 = document.getElementById('f-st');
+  // เมื่อกดปุ่ม filter วันที่ (ไม่ใช่ 'all') ให้แสดงทุกสถานะ
+  if (curDP && curDP !== 'all' && stEl2 && stEl2.value === 'To Do') {
+    stEl2.value = 'All';
+  }
+  var st = stEl2 ? stEl2.value : 'All';
   var ca = document.getElementById('f-cat').value;
   var nf = document.getElementById('f-nf').value;
   var dr = document.getElementById('f-dr').value;
