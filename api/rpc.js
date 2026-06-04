@@ -1,4 +1,3 @@
-
 // ============================================================================
 //  /api/rpc.js  —  Vercel Serverless Function
 //  จุดเดียวที่ frontend เรียกผ่าน google.script.run (ดู app-shim.js)
@@ -164,30 +163,14 @@ async function addTask(td) {
     attachments: []
   });
   if (error) return { success: false, error: error.message };
-
-  // 🔔 แจ้งเตือน: มีงานใหม่ (พร้อมรายละเอียดครบ)
-  const dur = td['Duration'] || '';
-  const durIcon = dur === 'รับ' ? '📦 รับ' : dur === 'ส่ง' ? '🚚 ส่ง' : '';
-  let newMsg = '🆕 <b>มีงานใหม่</b>';
-  if (durIcon) newMsg += ' — ' + durIcon;
-  newMsg += '\n\n';
-  newMsg += '📋 <b>' + tgEsc(td['Task'] || '-') + '</b>\n';
-  if (td['Categories']) newMsg += '🏷️ ' + tgEsc(td['Categories']) + '\n';
-  newMsg += '📅 ' + tgEsc(tgDate(td['Action Date'] || todayStr())) + '\n';
-  if (td['Sales Name']) newMsg += '👤 ' + tgEsc(td['Sales Name']) + '\n';
-  if (td['Note'])       newMsg += '📝 ' + tgEsc(td['Note']) + '\n';
-  // ไฟล์แนบ
-  try {
-    const files = Array.isArray(td['Attachments']) ? td['Attachments']
-      : (typeof td['Attachments'] === 'string' ? JSON.parse(td['Attachments'] || '[]') : []);
-    files.forEach(f => {
-      const fname = tgEsc(f.name || 'ไฟล์');
-      const url = f.webViewLink || f.wl || '';
-      if (url) newMsg += '📎 <a href="' + url + '">' + fname + '</a>\n';
-      else if (fname) newMsg += '📎 ' + fname + '\n';
-    });
-  } catch (e) {}
-  await notifyTelegram(newMsg);
+  // 🔔 แจ้งเตือน: มีงานใหม่
+  await notifyTelegram(
+    '🆕 <b>มีงานใหม่</b>\n' +
+    '📋 งาน: ' + tgEsc(td['Task'] || '-') + '\n' +
+    '🏷️ หมวด: ' + tgEsc(td['Categories'] || '-') + '\n' +
+    '📅 วันดำเนินการ: ' + tgEsc(td['Action Date'] || todayStr()) + '\n' +
+    '👤 ผู้รับผิดชอบ: ' + tgEsc(td['Sales Name'] || '-')
+  );
   return { success: true, id };
 }
 
@@ -203,49 +186,22 @@ async function updateTask(td) {
   if (td['Duration'] !== undefined)     patch.duration = td['Duration'];
   if (td['Note'] !== undefined)         patch.note = td['Note'];
   if (td['Sales Name'] !== undefined)   patch.sales_name = td['Sales Name'];
-  // ดึงข้อมูลเดิมก่อนอัปเดต
-  let wasDone = false; let prevData = null;
+  // ดึงสถานะเดิมก่อนอัปเดต เพื่อเช็คว่าเพิ่งเปลี่ยนเป็น Done หรือไม่
+  let wasDone = false;
   try {
-    const { data: prev } = await db.from('tasks').select('*').eq('id', td['ID']).single();
-    if (prev) {
-      wasDone = !!prev.done;
-      if (!td['Task'])       td['Task']       = prev.task;
-      if (!td['Sales Name']) td['Sales Name'] = prev.sales_name;
-      if (!td['Categories']) td['Categories'] = prev.categories;
-      if (!td['Duration'])   td['Duration']   = prev.duration;
-      if (!td['Action Date'])td['Action Date']= prev.action_date;
-      if (!td['Note'])       td['Note']       = prev.note;
-      prevData = prev;
-    }
+    const { data: prev } = await db.from('tasks').select('done, task').eq('id', td['ID']).single();
+    if (prev) { wasDone = !!prev.done; if (!td['Task']) td['Task'] = prev.task; }
   } catch (e) {}
   const { data, error } = await db.from('tasks').update(patch).eq('id', td['ID']).select('id, task');
   if (error) return { success: false, error: error.message };
   if (!data || !data.length) return { success: false, error: 'Task not found' };
-
-  // 🔔 แจ้งเตือน: งานเพิ่งเสร็จ (พร้อมรายละเอียดครบ)
+  // 🔔 แจ้งเตือน: งานเพิ่งเสร็จ (เปลี่ยนจากยังไม่เสร็จ → เสร็จ)
   if (done && !wasDone) {
-    const durD = td['Duration'] || '';
-    const durIconD = durD === 'รับ' ? '📦 รับ' : durD === 'ส่ง' ? '🚚 ส่ง' : '';
-    let doneMsg = '✅ <b>งานเสร็จแล้ว</b>';
-    if (durIconD) doneMsg += ' — ' + durIconD;
-    doneMsg += '\n\n';
-    doneMsg += '📋 <b>' + tgEsc(td['Task'] || '-') + '</b>\n';
-    if (td['Categories']) doneMsg += '🏷️ ' + tgEsc(td['Categories']) + '\n';
-    if (td['Action Date'])doneMsg += '📅 ' + tgEsc(tgDate(td['Action Date'])) + '\n';
-    if (td['Sales Name']) doneMsg += '👤 ' + tgEsc(td['Sales Name']) + '\n';
-    if (td['Note'])       doneMsg += '📝 ' + tgEsc(td['Note']) + '\n';
-    // ไฟล์แนบจากข้อมูลเดิม
-    try {
-      const att = prevData && prevData.attachments;
-      const files = Array.isArray(att) ? att : (typeof att === 'string' ? JSON.parse(att || '[]') : []);
-      files.forEach(f => {
-        const fname = tgEsc(f.name || 'ไฟล์');
-        const url = f.webViewLink || f.wl || '';
-        if (url) doneMsg += '📎 <a href="' + url + '">' + fname + '</a>\n';
-        else if (fname) doneMsg += '📎 ' + fname + '\n';
-      });
-    } catch (e) {}
-    await notifyTelegram(doneMsg);
+    await notifyTelegram(
+      '✅ <b>งานเสร็จแล้ว</b>\n' +
+      '📋 งาน: ' + tgEsc(td['Task'] || (data[0] && data[0].task) || '-') + '\n' +
+      '👤 ผู้รับผิดชอบ: ' + tgEsc(td['Sales Name'] || '-')
+    );
   }
   return { success: true };
 }
