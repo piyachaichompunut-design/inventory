@@ -3867,15 +3867,16 @@ function switchTab(t) {
   document.getElementById('tab-'+t).classList.add('active');
   var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi'].indexOf(t);
   document.querySelectorAll('.ntab')[idx].classList.add('active');
+  // โหลดข้อมูลใหม่ทุกครั้งที่เปลี่ยนแท็บ
+  if(t==='dashboard')  { loadTasks(); loadDash(); }
+  if(t==='tasks')      { loadTasks(); }
   if(t==='calendar'){
-    // Sync selectors to current calY/calM before rendering
+    loadTasks();
     var cm=document.getElementById('cal-m'); if(cm) cm.value=calM;
     var cy=document.getElementById('cal-y'); if(cy) cy.value=calY;
-    renderCal();
   }
-  if(t==='categories') renderCatGrid();
-  if(t==='dashboard')  { loadDash(); }
-  if(t==='weight')     {loadProducts(function(){loadWeightJobs();});}
+  if(t==='categories') { loadTasks(); renderCatGrid(); }
+  if(t==='weight')     { loadProducts(function(){loadWeightJobs();}); }
   if(t==='loedaroon')  loadLoedaroon();
   if(t==='ot')         loadOTData();
   if(t==='emp')        loadEMPData();
@@ -4061,12 +4062,7 @@ function updateDFInfo(preset, range, count) {
 
 function applyF() {
   var q  = document.getElementById('f-q').value.toLowerCase();
-  var stEl2 = document.getElementById('f-st');
-  // เมื่อกดปุ่ม filter วันที่ (ไม่ใช่ 'all') ให้แสดงทุกสถานะ
-  if (curDP && curDP !== 'all' && stEl2 && stEl2.value === 'To Do') {
-    stEl2.value = 'All';
-  }
-  var st = stEl2 ? stEl2.value : 'All';
+  var st = document.getElementById('f-st').value;
   var ca = document.getElementById('f-cat').value;
   var nf = document.getElementById('f-nf').value;
   var dr = document.getElementById('f-dr').value;
