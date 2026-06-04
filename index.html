@@ -4003,25 +4003,7 @@ function setDP(el, preset) {
   }
   if (preset !== 'custom') applyF();
 }
-  try {
-    curDP = preset;
-    // ไฮไลต์ปุ่มที่เลือก
-    document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
-    if (el) el.classList.add('active');
-    // ซ่อน/แสดงช่วงวันที่กำหนดเอง (ถ้ามี)
-    var box = document.getElementById('drange-box');
-    if (box) box.style.display = (preset === 'custom') ? 'flex' : 'none';
-    // ปรับสถานะให้เหมาะกับการกดปุ่มวันที่
-    var stEl = document.getElementById('f-st');
-    if (stEl) {
-      if (preset === 'all')        stEl.value = 'To Do'; // "ทั้งหมด" → กลับ To Do
-      else if (preset !== 'custom') stEl.value = 'All';  // ปุ่มวันที่ → เห็นทุกสถานะ
-    }
-  } catch (e) {
-    console.error('setDP error:', e);
-  }
-  if (preset !== 'custom') applyF();
-}
+ 
 
 // Get date range [from, to] as Date objects (midnight) for a preset
 function getDateRange(preset) {
