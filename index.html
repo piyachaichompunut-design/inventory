@@ -4077,7 +4077,20 @@ function applyF() {
       if(isNaN(d)||(d.getMonth()+1)!==+mn) return false;
     }
     if (range) {
-      var ad = new Date(t['Action Date']);
+      // แปลงวันที่ YYYY-MM-DD → local Date (ป้องกัน timezone shift)
+      var adRaw = t['Action Date'] || '';
+      var ad;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(adRaw)) {
+        var p = adRaw.split('-');
+        ad = new Date(+p[0], +p[1]-1, +p[2]); // local time ไม่ใช่ UTC
+      } else {
+        var adParts = adRaw.split('/');
+        if (adParts.length === 3) {
+          var dd2=parseInt(adParts[0]), mm2=parseInt(adParts[1])-1, yy2=parseInt(adParts[2]);
+          if (yy2 > 2400) yy2 -= 543;
+          ad = new Date(yy2, mm2, dd2);
+        } else { ad = new Date(adRaw); }
+      }
       if (isNaN(ad) || ad < range[0] || ad > range[1]) return false;
     }
     if (q) {
