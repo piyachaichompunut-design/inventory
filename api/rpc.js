@@ -1031,8 +1031,29 @@ async function handleTelegramCommand(text) {
   if (cleaned === '/งานวันนี้' || lower === '/today') {
     const { data } = await db.from('tasks').select('*')
       .eq('done', false).eq('action_date', today).order('seq', { ascending: true });
-    return fmtDetail('🟡 <b>งานครบกำหนดวันนี้ ({n})</b>', data || [])
-      || '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
+    const list = data || [];
+    if (!list.length) return '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
+    const rap   = list.filter(t => t.duration === 'รับ');
+    const send  = list.filter(t => t.duration === 'ส่ง');
+    const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
+    let msg = '🟡 <b>งานวันนี้ ' + tgDate(today) + ' (' + list.length + ' งาน)</b>\n';
+    if (rap.length)   msg += '📦 รับ ' + rap.length + ' | ';
+    if (send.length)  msg += '🚚 ส่ง ' + send.length + ' | ';
+    if (other.length) msg += '📋 อื่นๆ ' + other.length;
+    msg += '\n\n';
+    if (rap.length) {
+      msg += '━━━━━━━━━━━━━━\n📦 <b>งานรับ (' + rap.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      rap.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    if (send.length) {
+      msg += '━━━━━━━━━━━━━━\n🚚 <b>งานส่ง (' + send.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      send.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    if (other.length) {
+      msg += '━━━━━━━━━━━━━━\n📋 <b>งานอื่นๆ (' + other.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      other.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    return msg.trim();
   }
 
   // /งานพรุ่งนี้
@@ -1040,8 +1061,29 @@ async function handleTelegramCommand(text) {
     const tmr = addDays(1);
     const { data } = await db.from('tasks').select('*')
       .eq('done', false).eq('action_date', tmr).order('seq', { ascending: true });
-    return fmtDetail('🟠 <b>งานครบกำหนดพรุ่งนี้ (' + tgDate(tmr) + ') ({n})</b>', data || [])
-      || '🟢 พรุ่งนี้ไม่มีงานครบกำหนดครับ';
+    const list = data || [];
+    if (!list.length) return '🟢 พรุ่งนี้ไม่มีงานครบกำหนดครับ';
+    const rap   = list.filter(t => t.duration === 'รับ');
+    const send  = list.filter(t => t.duration === 'ส่ง');
+    const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
+    let msg = '🟠 <b>งานพรุ่งนี้ ' + tgDate(tmr) + ' (' + list.length + ' งาน)</b>\n';
+    if (rap.length)   msg += '📦 รับ ' + rap.length + ' | ';
+    if (send.length)  msg += '🚚 ส่ง ' + send.length + ' | ';
+    if (other.length) msg += '📋 อื่นๆ ' + other.length;
+    msg += '\n\n';
+    if (rap.length) {
+      msg += '━━━━━━━━━━━━━━\n📦 <b>งานรับ (' + rap.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      rap.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    if (send.length) {
+      msg += '━━━━━━━━━━━━━━\n🚚 <b>งานส่ง (' + send.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      send.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    if (other.length) {
+      msg += '━━━━━━━━━━━━━━\n📋 <b>งานอื่นๆ (' + other.length + ')</b>\n━━━━━━━━━━━━━━\n';
+      other.slice(0, 10).forEach((t, i) => { msg += (i+1) + '. ' + taskDetail(t) + '\n'; });
+    }
+    return msg.trim();
   }
 
   // /งานสัปดาห์นี้ (7 วันข้างหน้า)
