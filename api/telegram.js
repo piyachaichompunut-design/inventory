@@ -6,7 +6,7 @@ import { handleTelegramCommand, sendTelegramReply, isAllowedChat } from './rpc.j
 const GEMINI_KEY   = process.env.GEMINI_API_KEY || '';
 const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
-const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+const GEMINI_URL   = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
 const TAVILY_URL   = 'https://api.tavily.com/search';
 
 // ── System prompt ─────────────────────────────────────────────────────────────
