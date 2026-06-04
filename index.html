@@ -3993,6 +3993,16 @@ document.addEventListener('click',function(e){
 
 // Set date preset pill
 function setDP(el, preset) {
+  curDP = preset;
+  document.querySelectorAll('.dpill').forEach(function(p){ p.classList.remove('active'); });
+  if (el) el.classList.add('active');
+  var stEl = document.getElementById('f-st');
+  if (stEl) {
+    if (preset === 'all')         stEl.value = 'To Do';
+    else if (preset !== 'custom') stEl.value = 'All';
+  }
+  if (preset !== 'custom') applyF();
+}
   try {
     curDP = preset;
     // ไฮไลต์ปุ่มที่เลือก
