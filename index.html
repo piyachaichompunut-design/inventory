@@ -1440,7 +1440,7 @@ function appLogout(){
           style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-color:#f97316;font-weight:700">
           🖨️ ปริ้นซ์ ▾
         </button>
-        <div id="dbd-print-dd" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#1e293b;border:1px solid #334155;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.4);min-width:200px;z-index:600;overflow:hidden">
+        <div id="dbd-print-dd" style="display:none;position:fixed;top:auto;bottom:auto;right:auto;background:#1e293b;border:1px solid #334155;border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.6);min-width:220px;z-index:99999;overflow:hidden">
           <div style="padding:6px 12px;font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #334155">เลือกธีมปริ้นซ์</div>
           <div onclick="document.getElementById('dbd-print-dd').style.display='none';printDashboard('dark')" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-bottom:1px solid #334155;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
             <span style="font-size:18px">🌙</span><div><div>Dark Mode</div><div style="font-size:10px;color:#64748b;font-weight:400">โทนมืด เหมือนหน้าจอ</div></div>
@@ -3076,8 +3076,21 @@ function resetDash(){
 }
 function toggleDbdPrintDd(){
   var dd=document.getElementById('dbd-print-dd');
-  if(!dd) return;
-  dd.style.display=dd.style.display==='none'?'block':'none';
+  var btn=document.getElementById('dbd-print-wrap');
+  if(!dd||!btn) return;
+  if(dd.style.display!=='none'){
+    dd.style.display='none'; return;
+  }
+  // คำนวณตำแหน่งปุ่ม แล้ววาง dropdown เหนือปุ่ม
+  var rect=btn.getBoundingClientRect();
+  dd.style.display='block';
+  dd.style.position='fixed';
+  dd.style.zIndex='99999';
+  dd.style.minWidth='220px';
+  // วางให้ bottom ของ dropdown ตรงกับ top ของปุ่ม
+  var ddH=dd.offsetHeight||120;
+  dd.style.top=(rect.top - ddH - 6)+'px';
+  dd.style.left=(rect.right - 220)+'px';
 }
 document.addEventListener('click',function(e){
   var wrap=document.getElementById('dbd-print-wrap');
