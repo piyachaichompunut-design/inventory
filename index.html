@@ -4828,6 +4828,13 @@ function quickToggle(id, field, checked){
   var t=allTasks.find(function(x){return String(x['ID'])===String(id);});
   if(!t){ toast('ไม่พบงาน','error'); return; }
 
+  // ── ยืนยันก่อนเปลี่ยนสถานะ กันกดพลาด ──────────────────────────────
+  var taskName=t['Task']||'งานนี้';
+  var actionLabel;
+  if(field==='Done')  actionLabel=checked?'✅ เปลี่ยนเป็น "เสร็จแล้ว (Done)"':'↩️ ยกเลิกสถานะ "เสร็จแล้ว"';
+  else                actionLabel=checked?'🟣 เปลี่ยนเป็น "กำลังทำ (Doing)"':'↩️ ยกเลิกสถานะ "กำลังทำ"';
+  if(!confirm(actionLabel+'\n\n📋 '+taskName+'\n\nยืนยันหรือไม่?')) return;
+
   var doing=t['Doing']===true||t['Doing']==='TRUE';
   var done =t['Done'] ===true||t['Done'] ==='TRUE';
 
