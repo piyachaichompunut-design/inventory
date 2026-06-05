@@ -7876,7 +7876,7 @@ function drsRenderTable(){
     return '<tr style="background:'+bg+';border-bottom:1px solid var(--border)">'+
       '<td style="padding:6px 8px;text-align:center;font-weight:700;color:var(--muted)">'+(i+1)+'</td>'+
       '<td style="padding:6px 8px"><input list="drs-company-list" type="text" value="'+esc(r.company)+'" onchange="drsEdit('+i+',\'company\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="เลือกหรือพิมพ์ชื่อบริษัท"></td>'+
-      '<td style="padding:6px 4px;text-align:center"><input type="text" value="'+drsDateThai(r.recvDate)+'" onblur="drsEdit('+i+',\'recvDate\',drsDateFromThai(this.value))" style="width:92px;padding:5px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;background:var(--card);color:var(--txt);text-align:center" placeholder="5/6/2569"></td>'+
+      '<td style="padding:6px 4px;text-align:center"><div style="position:relative;display:inline-block;width:100px"><input type="text" readonly value="'+drsDateThai(r.recvDate)+'" style="width:100%;padding:5px 22px 5px 6px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;background:var(--card);color:var(--txt);text-align:center;cursor:pointer" placeholder="วว/ดด/ปปปป" onclick="this.nextElementSibling.showPicker&&this.nextElementSibling.showPicker();this.nextElementSibling.click()"><input type="date" value="'+(r.recvDate||'')+'" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="drsRowDate('+i+',this.value)"><span style="position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:11px;pointer-events:none">📅</span></div></td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headSet')+'</td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headMo')+'</td>'+
       '<td style="padding:6px 4px"><input type="text" value="'+esc(r.poNo)+'" onchange="drsEdit('+i+',\'poNo\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="PO/PR"></td>'+
@@ -7898,6 +7898,12 @@ function drsToggle(i, field){
 function drsEdit(i, field, val){
   if(!drsRows[i]) return;
   drsRows[i][field] = val;
+}
+// เลือกวันจากปฏิทินในแถว → เก็บ ISO แล้ว re-render เพื่อแสดง พ.ศ.
+function drsRowDate(i, iso){
+  if(!drsRows[i]) return;
+  drsRows[i].recvDate = iso;
+  drsRenderTable();
 }
 function drsAddRow(){
   drsRows.push({company:'',recvDate:'',headSet:false,headMo:false,poNo:'',docTaxOriginal:false,docTemp:false,docWeight:false,docReport:false,docGoods:false});
