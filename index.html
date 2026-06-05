@@ -1399,6 +1399,7 @@ function appLogout(){
   <div class="ntab" data-ico="📈" onclick="switchTab('kpi')">📈 KPI พนักงาน</div>
   <div class="ntab" data-ico="📝" onclick="switchTab('wire')">📝 Note สายไฟ</div>
   <div class="ntab" data-ico="🏭" onclick="switchTab('wkpi')">🏭 KPI ฝ่ายคลังสินค้า</div>
+  <div class="ntab" data-ico="📑" onclick="switchTab('docrs')">📑 เอกสาร รับ-ส่ง</div>
 </div>
 
 <div class="page">
@@ -4150,7 +4151,7 @@ function switchTab(t) {
   document.querySelectorAll('.pane').forEach(function(p){ p.classList.remove('active'); });
   document.querySelectorAll('.ntab').forEach(function(x){ x.classList.remove('active'); });
   document.getElementById('tab-'+t).classList.add('active');
-  var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi'].indexOf(t);
+  var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi','docrs'].indexOf(t);
   document.querySelectorAll('.ntab')[idx].classList.add('active');
   // โหลดข้อมูลใหม่ทุกครั้งที่เปลี่ยนแท็บ
   if(t==='dashboard')  { loadTasks(); loadDash(); }
@@ -4168,6 +4169,7 @@ function switchTab(t) {
   if(t==='kpi')        initKPITab();
   if(t==='wire')       loadWireNotes();
   if(t==='wkpi')       initWKPI();
+  if(t==='docrs')      initDocRS();
 }
 
 // ══════════════════════════════════════════════
@@ -7656,6 +7658,232 @@ var wnData = { aknee:[], mark:[] };
 var WN_CO  = { 'อาคเนย์':'a', 'เมิร์ค':'m' };
 var wnRowId = 1;
 
+
+// ══════════════════════════════════════════════
+//  เอกสาร รับ-ส่ง (Document Receive-Send)
+// ══════════════════════════════════════════════
+var drsCurMonth = null;       // 'YYYY-MM' เดือนที่กำลังดู
+var drsRows = [];             // ข้อมูลแถวปัจจุบัน
+var drsMonths = [];           // รายการเดือนที่มีประวัติ
+
+var DRS_TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+function drsMonthLabel(key){
+  // key = 'YYYY-MM' → 'มิ.ย. 2569'
+  if(!key) return '–';
+  var p = key.split('-');
+  if(p.length<2) return key;
+  return DRS_TH_MONTHS[parseInt(p[1])-1] + ' ' + (parseInt(p[0])+543);
+}
+
+function drsThisMonthKey(){
+  var n = new Date();
+  return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0');
+}
+
+function initDocRS(){
+  // โหลดรายการเดือนที่มีประวัติ
+  google.script.run
+    .withSuccessHandler(function(months){
+      drsMonths = months || [];
+      // ถ้ายังไม่ได้เลือกเดือน → ใช้เดือนปัจจุบัน
+      if(!drsCurMonth){
+        drsCurMonth = drsThisMonthKey();
+        // ถ้าเดือนปัจจุบันไม่อยู่ใน list ให้เพิ่ม (ตารางเปล่า)
+        if(drsMonths.indexOf(drsCurMonth)<0) drsMonths.unshift(drsCurMonth);
+      }
+      drsRenderMonthList();
+      drsLoadMonth(drsCurMonth);
+    })
+    .withFailureHandler(function(e){ toast('โหลดประวัติไม่ได้: '+e.message,'error'); })
+    .getDocRSMonths();
+}
+
+function drsRenderMonthList(){
+  var el = document.getElementById('drs-month-list');
+  if(!el) return;
+  if(!drsMonths.length){ el.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:10px">ยังไม่มีประวัติ</div>'; return; }
+  el.innerHTML = drsMonths.map(function(m){
+    var active = m===drsCurMonth;
+    return '<div onclick="drsLoadMonth(\''+m+'\')" style="padding:11px 13px;margin-bottom:6px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:'+(active?'800':'600')+';'+
+      (active?'background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff':'background:var(--bg);color:var(--txt);border:1px solid var(--border)')+';display:flex;align-items:center;justify-content:space-between;transition:.15s">'+
+      '<span>📅 '+drsMonthLabel(m)+'</span>'+
+      (active?'<span style="font-size:11px">●</span>':'')+
+      '</div>';
+  }).join('');
+}
+
+function drsLoadMonth(monthKey){
+  drsCurMonth = monthKey;
+  document.getElementById('drs-cur-month').textContent = drsMonthLabel(monthKey);
+  drsRenderMonthList();
+  google.script.run
+    .withSuccessHandler(function(rows){
+      drsRows = (rows||[]).map(function(r){
+        return {
+          company:r.company||'', recvDate:r.recvDate||'',
+          headSet:!!r.headSet, headMo:!!r.headMo, poNo:r.poNo||'',
+          docTaxOriginal:!!r.docTaxOriginal, docTemp:!!r.docTemp,
+          docWeight:!!r.docWeight, docReport:!!r.docReport, docGoods:!!r.docGoods
+        };
+      });
+      drsRenderTable();
+    })
+    .withFailureHandler(function(e){ toast('โหลดข้อมูลไม่ได้: '+e.message,'error'); drsRows=[]; drsRenderTable(); })
+    .getDocRSByMonth(monthKey);
+}
+
+function drsRenderTable(){
+  var tb = document.getElementById('drs-tbody');
+  if(!tb) return;
+  if(!drsRows.length){
+    tb.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--muted)">📭 ยังไม่มีข้อมูล กด "➕ เพิ่มแถว" เพื่อเริ่มลงข้อมูล</td></tr>';
+    return;
+  }
+  tb.innerHTML = drsRows.map(function(r,i){
+    var bg = i%2===0 ? 'var(--card)' : 'var(--bg)';
+    function chk(field){
+      return '<div onclick="drsToggle('+i+',\''+field+'\')" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:5px;border:2px solid '+(r[field]?'#16a34a':'#cbd5e1')+';background:'+(r[field]?'#16a34a':'#fff')+';cursor:pointer">'+
+        (r[field]?'<svg width="13" height="11" viewBox="0 0 11 9" fill="none"><path d="M1 4.5L4 7.5L10 1" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+
+        '</div>';
+    }
+    return '<tr style="background:'+bg+';border-bottom:1px solid var(--border)">'+
+      '<td style="padding:6px 8px;text-align:center;font-weight:700;color:var(--muted)">'+(i+1)+'</td>'+
+      '<td style="padding:6px 8px"><input type="text" value="'+esc(r.company)+'" onchange="drsEdit('+i+',\'company\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="ชื่อบริษัท"></td>'+
+      '<td style="padding:6px 4px;text-align:center"><input type="date" value="'+esc(r.recvDate)+'" onchange="drsEdit('+i+',\'recvDate\',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;background:var(--card);color:var(--txt)"></td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('headSet')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('headMo')+'</td>'+
+      '<td style="padding:6px 4px"><input type="text" value="'+esc(r.poNo)+'" onchange="drsEdit('+i+',\'poNo\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="PO/PR"></td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('docTaxOriginal')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('docTemp')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('docWeight')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('docReport')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('docGoods')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center"><button onclick="drsDelRow('+i+')" style="background:#fff5f5;border:1.5px solid #fecaca;color:#ef4444;padding:5px 8px;border-radius:6px;font-size:13px;cursor:pointer">🗑️</button></td>'+
+      '</tr>';
+  }).join('');
+}
+
+function drsToggle(i, field){
+  if(!drsRows[i]) return;
+  drsRows[i][field] = !drsRows[i][field];
+  drsRenderTable();
+}
+function drsEdit(i, field, val){
+  if(!drsRows[i]) return;
+  drsRows[i][field] = val;
+}
+function drsAddRow(){
+  drsRows.push({company:'',recvDate:'',headSet:false,headMo:false,poNo:'',docTaxOriginal:false,docTemp:false,docWeight:false,docReport:false,docGoods:false});
+  drsRenderTable();
+}
+function drsDelRow(i){
+  if(!confirm('ลบแถวที่ '+(i+1)+'?')) return;
+  drsRows.splice(i,1);
+  drsRenderTable();
+}
+
+function drsNewMonth(){
+  // ถามเดือน/ปี
+  var input = prompt('เริ่มเดือนใหม่ (พิมพ์ เดือน/ปี ค.ศ. เช่น 7/2026):', '');
+  if(!input) return;
+  var p = input.split('/');
+  if(p.length<2){ toast('รูปแบบไม่ถูกต้อง ตัวอย่าง 7/2026','error'); return; }
+  var mo = parseInt(p[0]), yr = parseInt(p[1]);
+  if(yr>2500) yr-=543; // พ.ศ. → ค.ศ.
+  if(isNaN(mo)||isNaN(yr)||mo<1||mo>12){ toast('เดือน/ปีไม่ถูกต้อง','error'); return; }
+  var key = yr + '-' + String(mo).padStart(2,'0');
+  if(drsMonths.indexOf(key)<0) drsMonths.unshift(key);
+  drsMonths.sort().reverse();
+  drsCurMonth = key;
+  drsRows = []; // ตารางเปล่า
+  drsRenderMonthList();
+  document.getElementById('drs-cur-month').textContent = drsMonthLabel(key);
+  drsRenderTable();
+  toast('เริ่มเดือน '+drsMonthLabel(key)+' (ตารางเปล่า)','success');
+}
+
+function drsSave(){
+  if(!drsCurMonth){ toast('ยังไม่ได้เลือกเดือน','error'); return; }
+  google.script.run
+    .withSuccessHandler(function(r){
+      if(r&&r.success){
+        toast('บันทึกเดือน '+drsMonthLabel(drsCurMonth)+' แล้ว ('+r.count+' รายการ) ✅','success');
+        // refresh เดือนใน list
+        if(drsMonths.indexOf(drsCurMonth)<0){ drsMonths.unshift(drsCurMonth); drsRenderMonthList(); }
+      } else {
+        toast('บันทึกไม่สำเร็จ: '+((r&&r.error)||'?'),'error');
+      }
+    })
+    .withFailureHandler(function(e){ toast('ผิดพลาด: '+e.message,'error'); })
+    .saveDocRSBatch({ monthKey:drsCurMonth, rows:drsRows });
+}
+
+function drsPrint(){
+  if(!drsRows.length){ toast('ไม่มีข้อมูลให้พิมพ์','error'); return; }
+  var monLabel = drsMonthLabel(drsCurMonth);
+  var n = drsRows.length;
+  // auto-scale ให้พอดี A4 portrait
+  var basePx = Math.min(13, Math.max(8, Math.floor(280/Math.max(n,8))));
+
+  function ck(v){ return v?'✔':''; }
+  var rows = drsRows.map(function(r,i){
+    var d = r.recvDate ? (function(){ var p=r.recvDate.split('-'); return p.length===3?(+p[2]+'/'+(+p[1])+'/'+(+p[0]+543)):r.recvDate; })() : '';
+    return '<tr>'+
+      '<td class="c">'+(i+1)+'</td>'+
+      '<td>'+esc(r.company)+'</td>'+
+      '<td class="c">'+d+'</td>'+
+      '<td class="c">'+ck(r.headSet)+'</td>'+
+      '<td class="c">'+ck(r.headMo)+'</td>'+
+      '<td class="c">'+esc(r.poNo)+'</td>'+
+      '<td class="c">'+ck(r.docTaxOriginal)+'</td>'+
+      '<td class="c">'+ck(r.docTemp)+'</td>'+
+      '<td class="c">'+ck(r.docWeight)+'</td>'+
+      '<td class="c">'+ck(r.docReport)+'</td>'+
+      '<td class="c">'+ck(r.docGoods)+'</td>'+
+      '</tr>';
+  }).join('');
+  // เติมแถวว่างให้เต็มหน้า
+  var emptyRows = '';
+  var fillCount = Math.max(0, 22 - n);
+  for(var k=0;k<fillCount;k++){
+    emptyRows += '<tr>'+'<td class="c">'+(n+k+1)+'</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
+  }
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>เอกสาร รับ-ส่ง '+monLabel+'</title><style>';
+  html += '*{margin:0;padding:0;box-sizing:border-box}';
+  html += 'html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;color:#1e293b;font-size:'+basePx+'px}';
+  html += '.title{text-align:center;font-size:1.5em;font-weight:900;margin-bottom:.3em;color:#15803d}';
+  html += '.sub{text-align:center;font-size:.9em;color:#64748b;margin-bottom:.8em}';
+  html += 'table{width:100%;border-collapse:collapse}';
+  html += 'th,td{border:1px solid #94a3b8;padding:.35em .4em;font-size:1em}';
+  html += 'thead th{background:#dcfce7;color:#15803d;font-weight:800;text-align:center;font-size:.85em}';
+  html += 'td.c,th.c{text-align:center}';
+  html += '.sig{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5em;margin-top:2em}';
+  html += '.sigitem{text-align:center}';
+  html += '.sigline{border-top:1px dotted #475569;margin:2.5em 1em .4em}';
+  html += '.signame{font-size:.85em;font-weight:700}';
+  html += '.sigsub{font-size:.75em;color:#64748b;margin-top:.3em}';
+  html += '@media print{@page{size:A4 portrait;margin:8mm}html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}tr{page-break-inside:avoid}}';
+  html += '</style></head><body>';
+  html += '<div class="title">📑 เอกสาร รับ-ส่ง</div>';
+  html += '<div class="sub">ประจำเดือน '+monLabel+'</div>';
+  html += '<table><thead>';
+  html += '<tr><th class="c" rowspan="2">#</th><th rowspan="2">บริษัท</th><th class="c" rowspan="2">วันรับสินค้า</th><th class="c" colspan="2">หัว</th><th class="c" rowspan="2">PO/PR</th><th class="c" rowspan="2">ใบกำกับภาษี/<br>ใบส่งของตัวจริง</th><th class="c" rowspan="2">ใบส่งของ<br>ชั่วคราว</th><th class="c" rowspan="2">ใบรับ<br>น้ำหนัก</th><th class="c" rowspan="2">ใบ<br>รายงาน</th><th class="c" rowspan="2">ใบส่ง<br>สินค้า</th></tr>';
+  html += '<tr><th class="c">SET</th><th class="c">MO</th></tr>';
+  html += '</thead><tbody>'+rows+emptyRows+'</tbody></table>';
+  html += '<div class="sig">';
+  html += '<div class="sigitem"><div class="sigline"></div><div class="signame">ผู้จัดทำเอกสาร</div><div class="sigsub">ตำแหน่ง ผู้ช่วยคลังสินค้า</div></div>';
+  html += '<div class="sigitem"><div class="sigline"></div><div class="signame">ผู้นำเอกสารเพื่อการจัดส่ง</div><div class="sigsub">ตำแหน่ง _______________</div></div>';
+  html += '<div class="sigitem"><div class="sigline"></div><div class="signame">ผู้รับเอกสาร</div><div class="sigsub">ตำแหน่ง _______________</div></div>';
+  html += '</div>';
+  html += '<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
+
+  var w = window.open('','_blank');
+  if(!w){ alert('กรุณาอนุญาต Popup สำหรับเว็บนี้ก่อนครับ'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
 function loadWireNotes(){
   ['a','m'].forEach(function(k){
     document.getElementById('wn-tbody-'+k).innerHTML=
@@ -7923,6 +8151,67 @@ document.addEventListener('DOMContentLoaded', function(){
     </div>
 
     <button class="dp-reset-btn" onclick="resetAllModes()">↺ รีเซ็ตทั้งหมด</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!--  เอกสาร รับ-ส่ง (Document Receive-Send)                       -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="pane" id="tab-docrs" style="padding:0">
+  <div style="display:flex;min-height:calc(100vh - 130px)">
+
+    <!-- SIDEBAR: ประวัติรายเดือน -->
+    <div id="drs-sidebar" style="width:230px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:16px 12px;overflow-y:auto">
+      <div style="font-size:13px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        🗂️ ประวัติรายเดือน
+      </div>
+      <button onclick="drsNewMonth()" style="width:100%;padding:10px;margin-bottom:12px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">
+        ➕ เริ่มเดือนใหม่
+      </button>
+      <div id="drs-month-list"></div>
+    </div>
+
+    <!-- MAIN -->
+    <div style="flex:1;padding:20px 24px;overflow-x:auto">
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:20px;font-weight:900;color:var(--txt)">📑 เอกสาร รับ-ส่ง</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:2px">เดือน: <span id="drs-cur-month" style="font-weight:700;color:#16a34a">–</span></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="drsAddRow()" style="padding:9px 16px;background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">➕ เพิ่มแถว</button>
+          <button onclick="drsSave()" style="padding:9px 16px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">💾 บันทึก</button>
+          <button onclick="drsPrint()" style="padding:9px 16px;background:linear-gradient(135deg,#c2410c,#ea580c);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">🖨️ พิมพ์</button>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+        <div style="overflow-x:auto">
+          <table id="drs-table" style="width:100%;border-collapse:collapse;font-size:13px;min-width:900px">
+            <thead>
+              <tr style="background:linear-gradient(135deg,#15803d,#16a34a);color:#fff">
+                <th style="padding:10px 8px;text-align:center;width:36px">#</th>
+                <th style="padding:10px 8px;text-align:left;min-width:200px">บริษัท</th>
+                <th style="padding:10px 8px;text-align:center;width:120px">วันรับสินค้า</th>
+                <th style="padding:10px 4px;text-align:center;width:50px">SET</th>
+                <th style="padding:10px 4px;text-align:center;width:50px">MO</th>
+                <th style="padding:10px 8px;text-align:center;width:110px">PO/PR</th>
+                <th style="padding:10px 4px;text-align:center;width:64px">ใบกำกับภาษี/<br>ใบส่งของตัวจริง</th>
+                <th style="padding:10px 4px;text-align:center;width:64px">ใบส่งของ<br>ชั่วคราว</th>
+                <th style="padding:10px 4px;text-align:center;width:56px">ใบรับ<br>น้ำหนัก</th>
+                <th style="padding:10px 4px;text-align:center;width:56px">ใบ<br>รายงาน</th>
+                <th style="padding:10px 4px;text-align:center;width:56px">ใบส่ง<br>สินค้า</th>
+                <th style="padding:10px 8px;text-align:center;width:50px">ลบ</th>
+              </tr>
+            </thead>
+            <tbody id="drs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px">💡 ติ๊กช่องเอกสารที่ได้รับ · กด "บันทึก" เพื่อเก็บเป็นประวัติของเดือนนี้</div>
+    </div>
   </div>
 </div>
 
