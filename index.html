@@ -4473,11 +4473,10 @@ function renderTable(){
       var doing=t['Doing']===true||t['Doing']==='TRUE';
       var done2=t['Done']===true||t['Done']==='TRUE';
       var mkChk=function(checked,lbl,field){
-        return '<label style="display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-size:10px;color:#64748b;font-weight:700" title="คลิกเพื่อสลับสถานะ">'+
-          '<input type="checkbox" '+(checked?'checked':'')+' style="display:none" onchange="quickToggle(\''+tid+'\',\''+field+'\',this.checked)">'+
-          '<div style="width:20px;height:20px;border-radius:4px;border:2px solid '+(checked?'#16a34a':'#cbd5e1')+';background:'+(checked?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;transition:.15s">'+
-          (checked?'<svg width="11" height="9" viewBox="0 0 11 9" fill="none"><path d="M1 4.5L4 7.5L10 1" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+
-          '</div>'+lbl+'</label>';
+        return '<div onclick="quickToggle(\''+tid+'\',\''+field+'\','+(!checked)+')" style="display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-size:10px;color:#64748b;font-weight:700;user-select:none" title="คลิกเพื่อสลับสถานะ">'+
+          '<div style="width:22px;height:22px;border-radius:5px;border:2px solid '+(checked?'#16a34a':'#cbd5e1')+';background:'+(checked?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;transition:.15s;pointer-events:none">'+
+          (checked?'<svg width="12" height="10" viewBox="0 0 11 9" fill="none"><path d="M1 4.5L4 7.5L10 1" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+
+          '</div>'+lbl+'</div>';
       };
       // Border color by status
       var bdClr=stClr[s]||'#2563eb';
