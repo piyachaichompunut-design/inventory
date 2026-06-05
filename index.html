@@ -8151,7 +8151,7 @@ function drsPrint(){
     +''
     +''
     +'.hdr-left .doc-sub{font-size:.82em;color:#78553a;margin-top:.25em;font-weight:600}'
-    +'.hdr-center .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#fde8c8;color:#7c3a00;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.3em}'+'.hdr-center{text-align:center;flex:1;padding:0 1em}'+'.hdr-center .doc-title{font-size:2.2em;font-weight:900;color:#5c2d0e;letter-spacing:-.5px;line-height:1.1}'+'.hdr-center .doc-sub{font-size:.8em;color:#78553a;margin-top:.25em;font-weight:600}'+'.hdr-right{text-align:right}'
+    +'.hdr-center .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#fde8c8;color:#7c3a00;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.3em}'+'.co-name{font-size:1.4em;font-weight:900;color:#5c2d0e;line-height:1.2;margin-bottom:.2em}'+'.hdr-left .print-date{font-size:.7em;color:#9a7c5a}'+'.hdr-left{min-width:200px}'+'.hdr-center{text-align:center;flex:1;padding:0 .8em}'+'.hdr-center .doc-title{font-size:2.2em;font-weight:900;color:#5c2d0e;letter-spacing:-.5px;line-height:1.1}'+'.hdr-center .doc-sub{font-size:.8em;color:#78553a;margin-top:.25em;font-weight:600}'+'.hdr-right{text-align:right}'
     +'.hdr-right .month-pill{display:inline-block;background:linear-gradient(135deg,#92400e,#d97706);color:#fff;padding:.35em 1.1em;border-radius:20px;font-weight:800;font-size:.95em;box-shadow:0 2px 8px rgba(146,64,14,.25)}'
     +'.hdr-right .print-date{font-size:.7em;color:#6b7280;margin-top:.3em}'
     // stats strip
@@ -8191,15 +8191,19 @@ function drsPrint(){
 
     // HEADER
     +'<div class="page-hdr">'
-      +'<div class="hdr-left" style="min-width:140px">'
-        +'<div class="print-date" style="color:#6b7280;font-size:.7em">พิมพ์: '+today+'</div>'
+      // ซ้าย — ชื่อบริษัทตัวใหญ่
+      +'<div class="hdr-left">'
+        +'<div class="co-name">บริษัท อาคเนย์ทร้าฟฟิค จำกัด</div>'
+        +'<div class="print-date">พิมพ์: '+today+'</div>'
       +'</div>'
+      // กลาง — ชื่อเอกสาร
       +'<div class="hdr-center">'
         +'<div class="doc-badge">📑 TMS Document System</div>'
         +'<div class="doc-title">เอกสาร รับ-ส่ง</div>'
-        +'<div class="doc-sub">บริษัท อาคเนย์ทร้าฟฟิค จำกัด'+(dateRangeStr ? ' &nbsp;·&nbsp; '+dateRangeStr : '')+'</div>'
+        +'<div class="doc-sub">รอบจัดส่งเอกสาร'+(dateRangeStr ? ' &nbsp;·&nbsp; '+dateRangeStr : '')+'</div>'
       +'</div>'
-      +'<div class="hdr-right" style="min-width:140px">'
+      // ขวา — pill เดือน
+      +'<div class="hdr-right">'
         +'<div class="month-pill">'+monLabel+'</div>'
       +'</div>'
     +'</div>'
