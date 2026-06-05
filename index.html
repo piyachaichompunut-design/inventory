@@ -4045,22 +4045,29 @@ function getDateRange(preset) {
   var monthStart = new Date(y, m, 1);
   var monthEnd   = new Date(y, m+1, 0, 23, 59, 59);
 
-  if (preset === 'today')    return [today, todayE];
-  if (preset === 'tomorrow') return [new Date(y,m,d+1), new Date(y,m,d+1,23,59,59)];
-  if (preset === '3days')    return [today, new Date(y,m,d+3,23,59,59)];
-  if (preset === '7days')    return [today, new Date(y,m,d+7,23,59,59)];
-  if (preset === 'week')     return [weekStart, weekEnd];
-  if (preset === 'month')    return [monthStart, monthEnd];
-  if (preset === 'overdue')  return [new Date(2000,0,1), new Date(y,m,d-1,23,59,59)];
+  // fmtD: แปลง local Date → YYYY-MM-DD string (ไม่ผ่าน UTC เลย)
+  var fmtD = function(dt) {
+    return dt.getFullYear() + '-' +
+      String(dt.getMonth()+1).padStart(2,'0') + '-' +
+      String(dt.getDate()).padStart(2,'0');
+  };
+  // mkR: สร้าง range array พร้อม string [dateObj, dateObj, fromStr, toStr]
+  var mkR = function(s, e) { return [s, e, fmtD(s), fmtD(e)]; };
+
+  if (preset === 'today')    return mkR(today, today);
+  if (preset === 'tomorrow') return mkR(new Date(y,m,d+1), new Date(y,m,d+1));
+  if (preset === '3days')    return mkR(today, new Date(y,m,d+3));
+  if (preset === '7days')    return mkR(today, new Date(y,m,d+7));
+  if (preset === 'week')     return mkR(weekStart, weekEnd);
+  if (preset === 'month')    return mkR(monthStart, monthEnd);
+  if (preset === 'overdue')  return mkR(new Date(2000,0,1), new Date(y,m,d-1));
   if (preset === 'custom') {
     var from = document.getElementById('f-df').value;
     var to   = document.getElementById('f-dt2').value;
     if (!from && !to) return null;
-    // แปลงเป็น local date (ไม่ใช่ UTC) กัน timezone shift ทำให้วันคลาดเคลื่อน
-    var parseLocal = function(s){ var p=s.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); };
-    var f = from ? parseLocal(from) : new Date(2000,0,1);
-    var t = to   ? new Date(+parseLocal(to)+86399999) : new Date(2099,11,31,23,59,59);
-    return [f, t];
+    var fromStr = from || '2000-01-01';
+    var toStr   = to   || '2099-12-31';
+    return [null, null, fromStr, toStr]; // ใช้แค่ string compare ไม่ต้อง Date object
   }
   return null; // 'all'
 }
@@ -4106,21 +4113,13 @@ function applyF() {
       if(isNaN(d)||(d.getMonth()+1)!==+mn) return false;
     }
     if (range) {
-      // แปลงวันที่ YYYY-MM-DD → local Date (ป้องกัน timezone shift)
-      var adRaw = t['Action Date'] || '';
-      var ad;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(adRaw)) {
-        var p = adRaw.split('-');
-        ad = new Date(+p[0], +p[1]-1, +p[2]); // local time ไม่ใช่ UTC
-      } else {
-        var adParts = adRaw.split('/');
-        if (adParts.length === 3) {
-          var dd2=parseInt(adParts[0]), mm2=parseInt(adParts[1])-1, yy2=parseInt(adParts[2]);
-          if (yy2 > 2400) yy2 -= 543;
-          ad = new Date(yy2, mm2, dd2);
-        } else { ad = new Date(adRaw); }
-      }
-      if (isNaN(ad) || ad < range[0] || ad > range[1]) return false;
+      // เปรียบเทียบ string YYYY-MM-DD ตรงๆ — ไม่ยุ่งกับ Date/timezone เลย
+      var adStr = (t['Action Date'] || '').slice(0, 10); // ได้ YYYY-MM-DD เสมอ
+      var fromStr = range[2] || '';
+      var toStr   = range[3] || '';
+      if (!adStr) return false;
+      if (fromStr && adStr < fromStr) return false;
+      if (toStr   && adStr > toStr)   return false;
     }
     if (q) {
       var h=(t['Task']||'')+(t['Note']||'')+(t['Sales Name']||'');
