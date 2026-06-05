@@ -7698,39 +7698,39 @@ function drsUpdateDateRange(){
   var fromEl = document.getElementById('drs-date-from');
   var toEl   = document.getElementById('drs-date-to');
   var lbl    = document.getElementById('drs-date-range-lbl');
-  if(fromEl) drsDateFrom = drsDateFromThai(fromEl.value.trim());
-  if(toEl)   drsDateTo   = drsDateFromThai(toEl.value.trim());
-  // อัปเดต label รวมกับชื่อเดือน
+  // type="date" คืนค่า ISO YYYY-MM-DD โดยตรง
+  if(fromEl) drsDateFrom = fromEl.value || '';
+  if(toEl)   drsDateTo   = toEl.value   || '';
   drsUpdateMonthLabel();
 }
 
 // อัปเดตชื่อเดือนรวมช่วงวันที่
 function drsUpdateMonthLabel(){
-  var el = document.getElementById('drs-cur-month');
+  var el  = document.getElementById('drs-cur-month');
   var lbl = document.getElementById('drs-date-range-lbl');
   if(!el) return;
-  var base = drsMonthLabel(drsCurMonth);
+  var base  = drsMonthLabel(drsCurMonth);
   var range = (drsDateFrom && drsDateTo)
     ? drsDateThai(drsDateFrom) + ' – ' + drsDateThai(drsDateTo)
     : (drsDateFrom ? drsDateThai(drsDateFrom) + ' – ?' : '');
   el.textContent = base + (range ? ' (' + range + ')' : '');
-  // อัปเดต sidebar ด้วย
   drsRenderMonthList();
   if(lbl) lbl.textContent = range ? '✓ ' + range : '';
 }
 
-// ตั้งค่าช่วงวันที่เริ่มต้นตามเดือน (วันที่ 1 ถึง วันสุดท้าย)
+// ตั้งค่าช่วงวันที่เริ่มต้นตามเดือน (วันที่ 1 ถึงวันสุดท้าย)
 function drsSetDefaultDateRange(monthKey){
   if(!monthKey) return;
   var p = monthKey.split('-');
   var yr = parseInt(p[0]), mo = parseInt(p[1]);
-  var lastDay = new Date(yr, mo, 0).getDate(); // วันสุดท้ายของเดือน
+  var lastDay = new Date(yr, mo, 0).getDate();
   drsDateFrom = yr+'-'+String(mo).padStart(2,'0')+'-01';
   drsDateTo   = yr+'-'+String(mo).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+  // set value ให้ date picker โดยตรง (ISO format)
   var fromEl = document.getElementById('drs-date-from');
   var toEl   = document.getElementById('drs-date-to');
-  if(fromEl) fromEl.value = drsDateThai(drsDateFrom);
-  if(toEl)   toEl.value   = drsDateThai(drsDateTo);
+  if(fromEl) fromEl.value = drsDateFrom;
+  if(toEl)   toEl.value   = drsDateTo;
   drsUpdateMonthLabel();
 }
 
@@ -8048,11 +8048,11 @@ function drsPrint(){
     // accent bar top
     +'.accent-bar{height:6px;background:linear-gradient(90deg,#065f46,#16a34a,#4ade80,#86efac);border-radius:0 0 6px 6px}'
     // header
-    +'.page-hdr{padding:.9em 1.1em .7em;display:flex;align-items:flex-start;justify-content:space-between;border-bottom:2px solid #dcfce7}'
-    +'.hdr-left .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#dcfce7;color:#14532d;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.4em}'
-    +'.hdr-left .doc-title{font-size:1.7em;font-weight:900;color:#065f46;letter-spacing:-.3px;line-height:1.1}'
+    +'.page-hdr{padding:.9em 1.1em .7em;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #dcfce7}'
+    +''
+    +''
     +'.hdr-left .doc-sub{font-size:.82em;color:#4b7c5a;margin-top:.25em;font-weight:600}'
-    +'.hdr-right{text-align:right}'
+    +'.hdr-center .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#dcfce7;color:#14532d;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.3em}'+'.hdr-center{text-align:center;flex:1;padding:0 1em}'+'.hdr-center .doc-title{font-size:2.2em;font-weight:900;color:#065f46;letter-spacing:-.5px;line-height:1.1}'+'.hdr-center .doc-sub{font-size:.8em;color:#4b7c5a;margin-top:.25em;font-weight:600}'+'.hdr-right{text-align:right}'
     +'.hdr-right .month-pill{display:inline-block;background:linear-gradient(135deg,#16a34a,#4ade80);color:#fff;padding:.35em 1.1em;border-radius:20px;font-weight:800;font-size:.95em;box-shadow:0 2px 8px rgba(22,163,74,.25)}'
     +'.hdr-right .print-date{font-size:.7em;color:#6b7280;margin-top:.3em}'
     // stats strip
@@ -8092,14 +8092,16 @@ function drsPrint(){
 
     // HEADER
     +'<div class="page-hdr">'
-      +'<div class="hdr-left">'
+      +'<div class="hdr-left" style="min-width:140px">'
+        +'<div class="print-date" style="color:#6b7280;font-size:.7em">พิมพ์: '+today+'</div>'
+      +'</div>'
+      +'<div class="hdr-center">'
         +'<div class="doc-badge">📑 TMS Document System</div>'
         +'<div class="doc-title">เอกสาร รับ-ส่ง</div>'
         +'<div class="doc-sub">บริษัท อาคเนย์ทร้าฟฟิค จำกัด'+(dateRangeStr ? ' &nbsp;·&nbsp; '+dateRangeStr : '')+'</div>'
       +'</div>'
-      +'<div class="hdr-right">'
+      +'<div class="hdr-right" style="min-width:140px">'
         +'<div class="month-pill">'+monLabel+'</div>'
-        +'<div class="print-date">พิมพ์: '+today+'</div>'
       +'</div>'
     +'</div>'
 
@@ -8470,12 +8472,12 @@ document.addEventListener('DOMContentLoaded', function(){
           <!-- ช่วงวันที่ -->
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--muted);font-weight:600">📅 ช่วงวันที่:</span>
-            <input type="text" id="drs-date-from" placeholder="1/6/2569" maxlength="12"
-              style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt);text-align:center"
+            <input type="date" id="drs-date-from"
+              style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt)"
               onchange="drsUpdateDateRange()">
             <span style="font-size:12px;color:var(--muted)">–</span>
-            <input type="text" id="drs-date-to" placeholder="30/6/2569" maxlength="12"
-              style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt);text-align:center"
+            <input type="date" id="drs-date-to"
+              style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt)"
               onchange="drsUpdateDateRange()">
             <span id="drs-date-range-lbl" style="font-size:11px;color:#16a34a;font-weight:700"></span>
           </div>
