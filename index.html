@@ -8213,7 +8213,14 @@ function drsPrint(){
       var total = drsRows.length;
       var setCount = drsRows.filter(function(r){return r.headSet;}).length;
       var mdCount  = drsRows.filter(function(r){return r.headMo;}).length;
-      var docCount = drsRows.filter(function(r){return r.docTaxOriginal||r.docTemp||r.docWeight||r.docReport||r.docGoods;}).length;
+      var docCount = drsRows.reduce(function(sum,r){
+        return sum
+          + (r.docTaxOriginal?1:0)
+          + (r.docTemp?1:0)
+          + (r.docWeight?1:0)
+          + (r.docReport?1:0)
+          + (r.docGoods?1:0);
+      },0);
       return '<div class="stats">'
         +'<div class="stat"><div class="sv">'+total+'</div><div class="sl">รายการทั้งหมด</div></div>'
         +'<div class="stat"><div class="sv">'+setCount+'</div><div class="sl">SET</div></div>'
