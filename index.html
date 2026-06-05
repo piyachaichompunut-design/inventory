@@ -7665,6 +7665,7 @@ var wnRowId = 1;
 var drsCurMonth = null;       // 'YYYY-MM' เดือนที่กำลังดู
 var drsRows = [];             // ข้อมูลแถวปัจจุบัน
 var drsMonths = [];           // รายการเดือนที่มีประวัติ
+var drsCompanies = [];        // ฐานข้อมูลชื่อบริษัท
 
 var DRS_TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
 
@@ -7682,6 +7683,13 @@ function drsThisMonthKey(){
 }
 
 function initDocRS(){
+  // โหลดฐานข้อมูลบริษัทก่อน
+  google.script.run
+    .withSuccessHandler(function(companies){
+      drsCompanies = companies || [];
+    })
+    .withFailureHandler(function(){ drsCompanies = []; })
+    .getDocRSCompanies();
   // โหลดรายการเดือนที่มีประวัติ
   google.script.run
     .withSuccessHandler(function(months){
@@ -7736,6 +7744,14 @@ function drsLoadMonth(monthKey){
 function drsRenderTable(){
   var tb = document.getElementById('drs-tbody');
   if(!tb) return;
+  // อัปเดต datalist ชื่อบริษัท
+  var dl = document.getElementById('drs-company-list');
+  if(!dl){
+    dl = document.createElement('datalist');
+    dl.id = 'drs-company-list';
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = drsCompanies.map(function(c){ return '<option value="'+esc(c.name)+'">'; }).join('');
   if(!drsRows.length){
     tb.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--muted)">📭 ยังไม่มีข้อมูล กด "➕ เพิ่มแถว" เพื่อเริ่มลงข้อมูล</td></tr>';
     return;
@@ -7749,7 +7765,7 @@ function drsRenderTable(){
     }
     return '<tr style="background:'+bg+';border-bottom:1px solid var(--border)">'+
       '<td style="padding:6px 8px;text-align:center;font-weight:700;color:var(--muted)">'+(i+1)+'</td>'+
-      '<td style="padding:6px 8px"><input type="text" value="'+esc(r.company)+'" onchange="drsEdit('+i+',\'company\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="ชื่อบริษัท"></td>'+
+      '<td style="padding:6px 8px"><input list="drs-company-list" type="text" value="'+esc(r.company)+'" onchange="drsEdit('+i+',\'company\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="เลือกหรือพิมพ์ชื่อบริษัท"></td>'+
       '<td style="padding:6px 4px;text-align:center"><input type="date" value="'+esc(r.recvDate)+'" onchange="drsEdit('+i+',\'recvDate\',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;background:var(--card);color:var(--txt)"></td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headSet')+'</td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headMo')+'</td>'+
@@ -7801,6 +7817,86 @@ function drsNewMonth(){
   document.getElementById('drs-cur-month').textContent = drsMonthLabel(key);
   drsRenderTable();
   toast('เริ่มเดือน '+drsMonthLabel(key)+' (ตารางเปล่า)','success');
+}
+
+function drsManageCompanies(){
+  // สร้าง modal ถ้ายังไม่มี
+  var ov = document.getElementById('drs-company-ov');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'drs-company-ov';
+    ov.className = 'ov';
+    ov.innerHTML =
+      '<div class="modal" style="max-width:480px">'+
+        '<div class="mhdr" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6)">'+
+          '<div class="mttl">🏢 จัดการฐานข้อมูลบริษัท</div>'+
+          '<button class="mx" onclick="closeOv(\'drs-company-ov\')">×</button>'+
+        '</div>'+
+        '<div class="mbdy">'+
+          '<div style="display:flex;gap:8px;margin-bottom:16px">'+
+            '<input type="text" id="drs-new-company" placeholder="พิมพ์ชื่อบริษัทใหม่..." style="flex:1;padding:10px 12px;border:1.5px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;background:var(--card);color:var(--txt)" onkeydown="if(event.key===\'Enter\')drsAddCompany()">'+
+            '<button onclick="drsAddCompany()" style="padding:10px 18px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:9px;font-weight:700;cursor:pointer;font-family:inherit">➕ เพิ่ม</button>'+
+          '</div>'+
+          '<div id="drs-company-mgr-list" style="max-height:340px;overflow-y:auto"></div>'+
+        '</div>'+
+      '</div>';
+    document.body.appendChild(ov);
+  }
+  ov.classList.add('show');
+  drsRenderCompanyMgr();
+}
+
+function drsRenderCompanyMgr(){
+  var el = document.getElementById('drs-company-mgr-list');
+  if(!el) return;
+  if(!drsCompanies.length){
+    el.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;font-size:13px">ยังไม่มีบริษัทในฐานข้อมูล<br>พิมพ์ชื่อด้านบนแล้วกด "เพิ่ม"</div>';
+    return;
+  }
+  el.innerHTML = drsCompanies.map(function(c){
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);border-radius:9px">'+
+      '<span style="font-size:14px;font-weight:600;color:var(--txt)">🏢 '+esc(c.name)+'</span>'+
+      '<button onclick="drsDelCompany(\''+c.id+'\',\''+esc(c.name).replace(/\'/g,"\\\\'")+'\')" style="background:#fff5f5;border:1.5px solid #fecaca;color:#ef4444;padding:5px 10px;border-radius:7px;font-size:12px;cursor:pointer;font-family:inherit">🗑️ ลบ</button>'+
+      '</div>';
+  }).join('');
+}
+
+function drsAddCompany(){
+  var inp = document.getElementById('drs-new-company');
+  var name = (inp.value||'').trim();
+  if(!name){ toast('พิมพ์ชื่อบริษัทก่อน','error'); return; }
+  google.script.run
+    .withSuccessHandler(function(r){
+      if(r&&r.success){
+        drsCompanies.push({id:r.id, name:r.name});
+        drsCompanies.sort(function(a,b){return a.name.localeCompare(b.name,'th');});
+        inp.value='';
+        drsRenderCompanyMgr();
+        drsRenderTable(); // อัปเดต datalist
+        toast('เพิ่ม "'+name+'" แล้ว ✅','success');
+      } else {
+        toast(r&&r.error||'เพิ่มไม่สำเร็จ','error');
+      }
+    })
+    .withFailureHandler(function(e){ toast('ผิดพลาด: '+e.message,'error'); })
+    .addDocRSCompany(name);
+}
+
+function drsDelCompany(id, name){
+  if(!confirm('ลบบริษัท "'+name+'" ออกจากฐานข้อมูล?')) return;
+  google.script.run
+    .withSuccessHandler(function(r){
+      if(r&&r.success){
+        drsCompanies = drsCompanies.filter(function(c){return c.id!==id;});
+        drsRenderCompanyMgr();
+        drsRenderTable();
+        toast('ลบแล้ว','success');
+      } else {
+        toast(r&&r.error||'ลบไม่สำเร็จ','error');
+      }
+    })
+    .withFailureHandler(function(e){ toast('ผิดพลาด: '+e.message,'error'); })
+    .deleteDocRSCompany(id);
 }
 
 function drsSave(){
@@ -8180,6 +8276,7 @@ document.addEventListener('DOMContentLoaded', function(){
           <div style="font-size:13px;color:var(--muted);margin-top:2px">เดือน: <span id="drs-cur-month" style="font-weight:700;color:#16a34a">–</span></div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="drsManageCompanies()" style="padding:9px 16px;background:linear-gradient(135deg,#7c3aed,#8b5cf6);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">🏢 จัดการบริษัท</button>
           <button onclick="drsAddRow()" style="padding:9px 16px;background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">➕ เพิ่มแถว</button>
           <button onclick="drsSave()" style="padding:9px 16px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">💾 บันทึก</button>
           <button onclick="drsPrint()" style="padding:9px 16px;background:linear-gradient(135deg,#c2410c,#ea580c);color:#fff;border:none;border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">🖨️ พิมพ์</button>
