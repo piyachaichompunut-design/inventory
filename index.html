@@ -4472,9 +4472,10 @@ function renderTable(){
       // Doing / Done checkboxes
       var doing=t['Doing']===true||t['Doing']==='TRUE';
       var done2=t['Done']===true||t['Done']==='TRUE';
-      var mkChk=function(checked,lbl){
-        return '<label style="display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-size:10px;color:#64748b;font-weight:700">'+
-          '<div style="width:18px;height:18px;border-radius:4px;border:2px solid '+(checked?'#16a34a':'#cbd5e1')+';background:'+(checked?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center">'+
+      var mkChk=function(checked,lbl,field){
+        return '<label style="display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-size:10px;color:#64748b;font-weight:700" title="คลิกเพื่อสลับสถานะ">'+
+          '<input type="checkbox" '+(checked?'checked':'')+' style="display:none" onchange="quickToggle(\''+tid+'\',\''+field+'\',this.checked)">'+
+          '<div style="width:20px;height:20px;border-radius:4px;border:2px solid '+(checked?'#16a34a':'#cbd5e1')+';background:'+(checked?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;transition:.15s">'+
           (checked?'<svg width="11" height="9" viewBox="0 0 11 9" fill="none"><path d="M1 4.5L4 7.5L10 1" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>':'')+
           '</div>'+lbl+'</label>';
       };
@@ -4499,7 +4500,7 @@ function renderTable(){
         '<td style="text-align:center;padding:12px 8px;vertical-align:middle">'+stBadge+'</td>'+
         // กำลังทำ / เสร็จ
         '<td style="text-align:center;padding:12px 8px;vertical-align:middle">'+
-          '<div style="display:flex;gap:12px;justify-content:center">'+mkChk(doing,'กำลังทำ')+mkChk(done2,'เสร็จ')+'</div>'+
+          '<div style="display:flex;gap:12px;justify-content:center">'+mkChk(doing,'กำลังทำ','Doing')+mkChk(done2,'เสร็จ','Done')+'</div>'+
         '</td>'+
         // Assignee + note + update
         '<td style="padding:12px 10px;vertical-align:middle;max-width:160px">'+
@@ -4823,6 +4824,69 @@ function saveTask(){
     .withFailureHandler(function(e){btn.disabled=false;btn.textContent='💾 บันทึก';toast(e.message,'error');})
     [id?'updateTask':'addTask'](data);
 }
+function quickToggle(id, field, checked){
+  // หา task จาก allTasks
+  var t=allTasks.find(function(x){return String(x['ID'])===String(id);});
+  if(!t){ toast('ไม่พบงาน','error'); return; }
+
+  var doing=t['Doing']===true||t['Doing']==='TRUE';
+  var done =t['Done'] ===true||t['Done'] ==='TRUE';
+
+  // อัปเดตค่าตาม checkbox ที่กด
+  if(field==='Done'){
+    done=checked;
+    if(checked) doing=false;   // เสร็จแล้ว → ไม่กำลังทำ
+  } else if(field==='Doing'){
+    doing=checked;
+    if(checked) done=false;    // กลับมาทำ → ยังไม่เสร็จ
+  }
+
+  // กำหนดสถานะใหม่
+  var newStatus = done ? 'Done' : doing ? 'Doing' : 'To Do';
+
+  // อัปเดตใน UI ทันที (optimistic) เพื่อให้ลื่น
+  t['Doing']=doing; t['Done']=done; t['Task Status']=newStatus;
+  renderTable();
+
+  // ส่งไป backend
+  var data={
+    'ID':id,
+    'Task':t['Task'],
+    'Categories':t['Categories']||'',
+    'Notification':t['Notification']||'',
+    'Action Date':t['Action Date']||'',
+    'Duration':t['Duration']||'',
+    'Task Status':newStatus,
+    'Sales Name':t['Sales Name']||'',
+    'Note':t['Note']||'',
+    'Doing':doing,
+    'Done':done
+  };
+
+  google.script.run
+    .withSuccessHandler(function(r){
+      if(r&&r.success){
+        toast(done?'✅ เปลี่ยนเป็น Done แล้ว':doing?'🟣 กำลังทำ':'🔵 To Do','success');
+        // โหลดข้อมูลใหม่จาก server เพื่อ sync
+        google.script.run.withSuccessHandler(function(tasks){
+          allTasks=tasks; filteredTasks=tasks.slice();
+          applyF(); loadDash();
+        }).getTasks(null);
+      } else {
+        toast('บันทึกไม่สำเร็จ: '+((r&&r.error)||'?'),'error');
+        // rollback
+        t['Doing']=field==='Doing'?!checked:doing;
+        t['Done']=field==='Done'?!checked:done;
+        applyF();
+      }
+    })
+    .withFailureHandler(function(e){
+      toast('ผิดพลาด: '+e.message,'error');
+      applyF();
+    })
+    .updateTask(data);
+}
+
 function delTask(id){
   if(!confirm('ต้องการลบงานนี้?')) return;
   google.script.run
