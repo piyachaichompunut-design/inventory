@@ -7693,6 +7693,21 @@ function drsDateFromThai(s){
   return y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
 }
 
+// รับค่าจาก date picker แล้วแสดงเป็น DD/MM/YYYY พ.ศ.
+function drsPickDate(which, iso){
+  if(!iso) return;
+  if(which==='from'){
+    drsDateFrom = iso;
+    var el = document.getElementById('drs-from-display');
+    if(el) el.value = drsDateThai(iso);
+  } else {
+    drsDateTo = iso;
+    var el2 = document.getElementById('drs-to-display');
+    if(el2) el2.value = drsDateThai(iso);
+  }
+  drsUpdateMonthLabel();
+}
+
 // เมื่อแก้ไขช่วงวันที่ → อัปเดตตัวแปรและ label
 function drsUpdateDateRange(){
   var fromEl = document.getElementById('drs-date-from');
@@ -7731,6 +7746,11 @@ function drsSetDefaultDateRange(monthKey){
   var toEl   = document.getElementById('drs-date-to');
   if(fromEl) fromEl.value = drsDateFrom;
   if(toEl)   toEl.value   = drsDateTo;
+  // set display (DD/MM/YYYY พ.ศ.)
+  var fromDisp = document.getElementById('drs-from-display');
+  var toDisp   = document.getElementById('drs-to-display');
+  if(fromDisp) fromDisp.value = drsDateThai(drsDateFrom);
+  if(toDisp)   toDisp.value   = drsDateThai(drsDateTo);
   drsUpdateMonthLabel();
 }
 
@@ -7997,7 +8017,7 @@ function drsPrint(){
   var rows = drsRows.map(function(r,i){
     var d = drsDateThai(r.recvDate);
     var even = i%2===0;
-    var bg = even ? '#ffffff' : '#f0fdf4';
+    var bg = even ? '#fefcf5' : '#f5f2e8';
     return '<tr style="background:'+bg+'">'
       +'<td style="text-align:center;color:#6b7280;font-weight:600;font-size:.85em;border-right:1px solid #d1fae5">'+(i+1)+'</td>'
       +'<td style="font-weight:600;color:#1e293b;border-right:1px solid #d1fae5;padding:.45em .6em">'+esc(r.company)+'</td>'
@@ -8017,7 +8037,7 @@ function drsPrint(){
   var fillCount = Math.max(0, 22 - n);
   var emptyRows = '';
   for(var k=0;k<fillCount;k++){
-    var bg2 = (n+k)%2===0 ? '#ffffff' : '#f0fdf4';
+    var bg2 = (n+k)%2===0 ? '#fefcf5' : '#f5f2e8';
     emptyRows += '<tr style="background:'+bg2+'">'
       +'<td style="text-align:center;color:#d1d5db;font-size:.85em;border-right:1px solid #d1fae5">'+(n+k+1)+'</td>'
       +'<td style="border-right:1px solid #d1fae5"></td>'
@@ -8044,7 +8064,7 @@ function drsPrint(){
     +'<style>'
     +'@import url("https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800;900&display=swap");'
     +'*{margin:0;padding:0;box-sizing:border-box}'
-    +'html,body{font-family:"Sarabun",sans-serif;color:#0f172a;background:#ffffff;font-size:'+basePx+'px}'
+    +'html,body{font-family:"Sarabun",sans-serif;color:#1a2e1a;background:#faf9f4;font-size:'+basePx+'px}'
     // accent bar top
     +'.accent-bar{height:6px;background:linear-gradient(90deg,#065f46,#16a34a,#4ade80,#86efac);border-radius:0 0 6px 6px}'
     // header
@@ -8052,7 +8072,7 @@ function drsPrint(){
     +''
     +''
     +'.hdr-left .doc-sub{font-size:.82em;color:#4b7c5a;margin-top:.25em;font-weight:600}'
-    +'.hdr-center .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#dcfce7;color:#14532d;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.3em}'+'.hdr-center{text-align:center;flex:1;padding:0 1em}'+'.hdr-center .doc-title{font-size:2.2em;font-weight:900;color:#065f46;letter-spacing:-.5px;line-height:1.1}'+'.hdr-center .doc-sub{font-size:.8em;color:#4b7c5a;margin-top:.25em;font-weight:600}'+'.hdr-right{text-align:right}'
+    +'.hdr-center .doc-badge{display:inline-flex;align-items:center;gap:.4em;background:#dcfce7;color:#14532d;padding:.2em .7em;border-radius:20px;font-size:.72em;font-weight:800;letter-spacing:.4px;margin-bottom:.3em}'+'.hdr-center{text-align:center;flex:1;padding:0 1em}'+'.hdr-center .doc-title{font-size:2.2em;font-weight:900;color:#065f46;letter-spacing:-.5px;line-height:1.1}'+'.hdr-center .doc-sub{font-size:.8em;color:#5a6e3a;margin-top:.25em;font-weight:600}'+'.hdr-right{text-align:right}'
     +'.hdr-right .month-pill{display:inline-block;background:linear-gradient(135deg,#16a34a,#4ade80);color:#fff;padding:.35em 1.1em;border-radius:20px;font-weight:800;font-size:.95em;box-shadow:0 2px 8px rgba(22,163,74,.25)}'
     +'.hdr-right .print-date{font-size:.7em;color:#6b7280;margin-top:.3em}'
     // stats strip
@@ -8062,10 +8082,10 @@ function drsPrint(){
     +'.stat .sl{font-size:.65em;color:#6b7280;font-weight:700;margin-top:.1em;text-transform:uppercase;letter-spacing:.3px}'
     // table
     +'.tbl-wrap{padding:.6em 1.1em}'
-    +'table{width:100%;border-collapse:collapse;border:1.5px solid #86efac;border-radius:8px;overflow:hidden}'
+    +'table{width:100%;border-collapse:collapse;border:1.5px solid #b8b090;border-radius:8px;overflow:hidden}'
     +'thead tr:first-child th{background:linear-gradient(135deg,#065f46,#16a34a);color:#fff;font-weight:800;padding:.5em .5em;font-size:.82em;text-align:center;letter-spacing:.2px}'
-    +'thead tr:last-child th{background:#d1fae5;color:#065f46;font-weight:800;padding:.35em .4em;font-size:.78em;text-align:center;border-bottom:1.5px solid #86efac}'
-    +'tbody tr td{padding:.4em .4em;font-size:.9em;border-bottom:1px solid #d1fae5;vertical-align:middle}'
+    +'thead tr:last-child th{background:#e8e0c8;color:#3d5c1e;font-weight:800;padding:.35em .4em;font-size:.78em;text-align:center;border-bottom:1.5px solid #c8b878}'
+    +'tbody tr td{padding:.5em .5em;font-size:1.05em;border-bottom:1px solid #ddd8c4;vertical-align:middle}'
     +'tbody tr:last-child td{border-bottom:none}'
     // signature
     +'.sig-section{padding:.5em 1.1em .6em;display:grid;grid-template-columns:repeat(3,1fr);gap:1.2em}'
@@ -8472,13 +8492,25 @@ document.addEventListener('DOMContentLoaded', function(){
           <!-- ช่วงวันที่ -->
           <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
             <span style="font-size:12px;color:var(--muted);font-weight:600">📅 ช่วงวันที่:</span>
-            <input type="date" id="drs-date-from"
-              style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt)"
-              onchange="drsUpdateDateRange()">
+            <div style="position:relative;display:inline-block">
+              <input type="text" id="drs-from-display" readonly
+                style="width:100px;padding:5px 28px 5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt);cursor:pointer"
+                placeholder="วว/ดด/ปปปป" onclick="document.getElementById('drs-date-from').showPicker&&document.getElementById('drs-date-from').showPicker();document.getElementById('drs-date-from').click()">
+              <input type="date" id="drs-date-from"
+                style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer"
+                onchange="drsPickDate('from',this.value)">
+              <span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none">📅</span>
+            </div>
             <span style="font-size:12px;color:var(--muted)">–</span>
-            <input type="date" id="drs-date-to"
-              style="padding:5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt)"
-              onchange="drsUpdateDateRange()">
+            <div style="position:relative;display:inline-block">
+              <input type="text" id="drs-to-display" readonly
+                style="width:100px;padding:5px 28px 5px 8px;border:1.5px solid var(--border);border-radius:7px;font-size:12px;font-family:inherit;background:var(--card);color:var(--txt);cursor:pointer"
+                placeholder="วว/ดด/ปปปป" onclick="document.getElementById('drs-date-to').showPicker&&document.getElementById('drs-date-to').showPicker();document.getElementById('drs-date-to').click()">
+              <input type="date" id="drs-date-to"
+                style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer"
+                onchange="drsPickDate('to',this.value)">
+              <span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none">📅</span>
+            </div>
             <span id="drs-date-range-lbl" style="font-size:11px;color:#16a34a;font-weight:700"></span>
           </div>
         </div>
