@@ -1638,6 +1638,31 @@ async function deleteDocRSMonth(monthKey) {
   return { success: true };
 }
 
+// ── ฐานข้อมูลชื่อบริษัท (สำหรับ dropdown ในเอกสาร รับ-ส่ง) ──────────────────
+async function getDocRSCompanies() {
+  const { data, error } = await db.from('docs_companies').select('*').order('name');
+  if (error) throw error;
+  return (data || []).filter(r => r.id).map(r => ({ id: String(r.id), name: String(r.name || '') }));
+}
+
+async function addDocRSCompany(name) {
+  const nm = (name || '').trim();
+  if (!nm) return { success: false, error: 'ชื่อบริษัทว่าง' };
+  // กันชื่อซ้ำ
+  const { data: existing } = await db.from('docs_companies').select('id').eq('name', nm);
+  if (existing && existing.length) return { success: false, error: 'มีชื่อบริษัทนี้แล้ว' };
+  const id = 'DC' + Date.now().toString(36).toUpperCase();
+  const { error } = await db.from('docs_companies').insert({ id, name: nm });
+  if (error) return { success: false, error: error.message };
+  return { success: true, id, name: nm };
+}
+
+async function deleteDocRSCompany(id) {
+  const { error } = await db.from('docs_companies').delete().eq('id', id);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
 const HANDLERS = {
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
@@ -1654,7 +1679,8 @@ const HANDLERS = {
   getDashSummary,
   getWHDashData, saveWHDashData, getWHYearData,
   getKPIForm, saveKPIForm,
-  getDocRSMonths, getDocRSByMonth, saveDocRSBatch, deleteDocRSMonth
+  getDocRSMonths, getDocRSByMonth, saveDocRSBatch, deleteDocRSMonth,
+  getDocRSCompanies, addDocRSCompany, deleteDocRSCompany
 };
 
 export const __handlers = HANDLERS;
