@@ -1442,10 +1442,10 @@ function appLogout(){
         </button>
         <div id="dbd-print-dd" style="display:none;position:absolute;top:calc(100% + 6px);right:0;background:#1e293b;border:1px solid #334155;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.4);min-width:200px;z-index:600;overflow:hidden">
           <div style="padding:6px 12px;font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #334155">เลือกธีมปริ้นซ์</div>
-          <div onclick="printDashboard('dark');toggleDbdPrintDd()" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-bottom:1px solid #334155;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
+          <div onclick="document.getElementById('dbd-print-dd').style.display='none';printDashboard('dark')" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-bottom:1px solid #334155;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
             <span style="font-size:18px">🌙</span><div><div>Dark Mode</div><div style="font-size:10px;color:#64748b;font-weight:400">โทนมืด เหมือนหน้าจอ</div></div>
           </div>
-          <div onclick="printDashboard('cream');toggleDbdPrintDd()" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
+          <div onclick="document.getElementById('dbd-print-dd').style.display='none';printDashboard('cream')" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
             <span style="font-size:18px">☀️</span><div><div>Cream Minimal</div><div style="font-size:10px;color:#64748b;font-weight:400">พื้นครีม สะอาด อ่านง่าย</div></div>
           </div>
         </div>
@@ -3373,9 +3373,14 @@ function printDashboard(theme){
   html+='<div class="foot">TMS v2.0 &nbsp;·&nbsp; Dashboard Report &nbsp;·&nbsp; '+monLabel+' &nbsp;·&nbsp; พิมพ์: '+printDate+'</div>';
   html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
-  var w=window.open('','_blank','width=1200,height=820');
-  w.document.write(html);
-  w.document.close();
+  // ใช้ Blob URL กัน popup blocker
+  var blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url; a.target='_blank'; a.rel='noopener';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
 }
 
 
@@ -4130,9 +4135,14 @@ function kf2Print(){
   html+='</div>';
   html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
-  var w=window.open('','_blank','width=1200,height=820');
-  w.document.write(html);
-  w.document.close();
+  // ใช้ Blob URL กัน popup blocker
+  var blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url; a.target='_blank'; a.rel='noopener';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
 }
 
 
