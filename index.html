@@ -3957,11 +3957,12 @@ function calPreset(type){
   var fmt=function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   document.getElementById('f-df').value=fmt(s);
   document.getElementById('f-dt2').value=fmt(e);
+  curDP = 'custom'; // สำคัญ: ต้อง set ก่อน applyF เสมอ
   var stEl2=document.getElementById('f-st'); if(stEl2) stEl2.value='All';
   calUpdateLabel(); applyF();
 }
 
-// รันอัตโนมัติเมื่อ user พิมพ์/เลือกวันในช่อง input — filter เฉพาะเมื่อมีวันครบทั้งคู่
+// รันอัตโนมัติเมื่อ user เลือกวันในช่อง input — filter เฉพาะเมื่อมีวันครบทั้งคู่
 function calAutoApply(){
   var df = document.getElementById('f-df').value;
   var dt = document.getElementById('f-dt2').value;
@@ -3971,6 +3972,7 @@ function calAutoApply(){
       document.getElementById('f-dt2').value = df;
       calUpdateLabel();
     }
+    curDP = 'custom'; // สำคัญ: ต้อง set ก่อน applyF เสมอ
     var stEl=document.getElementById('f-st');
     if(stEl) stEl.value='All';
     applyF();
@@ -3984,6 +3986,7 @@ function calApply(){
   var dt = document.getElementById('f-dt2').value;
   if(df && !dt){ document.getElementById('f-dt2').value=df; calUpdateLabel(); }
   if(!df && dt){ document.getElementById('f-df').value=dt;  calUpdateLabel(); }
+  curDP = 'custom'; // สำคัญ: ต้อง set ก่อน applyF เสมอ
   var stEl=document.getElementById('f-st');
   if(stEl) stEl.value='All';
   applyF();
