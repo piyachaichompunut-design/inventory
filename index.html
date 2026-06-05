@@ -3643,80 +3643,99 @@ function kf2Load(){
 }
 function kf2Print(){
   var d=kf2CollectData(); kf2State.data=d;
-  var pass=0,fail=0;
-  KF2_KPIS.forEach(function(kb){var k=kf2GetKPI(kb.id);if(kf2IsPass(k,parseFloat(d.actuals[k.id])||0))pass++;else fail++;});
+  var pass=0, fail=0;
+  KF2_KPIS.forEach(function(kb){
+    var k=kf2GetKPI(kb.id);
+    if(kf2IsPass(k, parseFloat(d.actuals[k.id])||0)) pass++; else fail++;
+  });
   var mon=KF2_MONTHS[d.month-1]; var yr=d.year;
   var today=new Date().toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'});
-  var prepDate=d.preparerDate?new Date(d.preparerDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'....................................';
-  var apprDate=d.approverDate?new Date(d.approverDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'....................................';
+  var prepDate=d.preparerDate?new Date(d.preparerDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'................................';
+  var apprDate=d.approverDate?new Date(d.approverDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'................................';
+  var n=KF2_KPIS.length;
+
+  // auto-scale: A4 portrait ~190mm wide, fit all content
+  // n KPIs + header cards + correction table + sig
+  // base 11px at 10 KPIs; cap 14, floor 8
+  var basePx=Math.min(14, Math.max(8, Math.floor(110/Math.max(n,4))));
+  var scale=(basePx/11).toFixed(3);
 
   var css=[
     '*{margin:0;padding:0;box-sizing:border-box}',
-    'body{font-family:Segoe UI,Arial,sans-serif;background:#f0f9ff;font-size:13px;color:#0f172a}',
-    '.ph{background:linear-gradient(135deg,#0c4a6e,#0369a1 45%,#0ea5e9);padding:12px 20px}',
-    '.ph-co{font-size:18px;font-weight:900;color:#fff;text-align:center;letter-spacing:.4px;margin-bottom:6px}',
-    '.ph-div{height:1px;background:rgba(255,255,255,.2);margin:8px 0}',
+    'html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;background:#f0f9ff;color:#0f172a;font-size:'+basePx+'px}',
+    // HEADER
+    '.ph{background:linear-gradient(135deg,#0c4a6e,#0369a1 45%,#0ea5e9);padding:.6em 1em}',
+    '.ph-co{font-size:1.3em;font-weight:900;color:#fff;text-align:center;letter-spacing:.3px;margin-bottom:.3em}',
+    '.ph-div{height:1px;background:rgba(255,255,255,.2);margin:.4em 0}',
     '.ph-row{display:flex;align-items:center;justify-content:space-between}',
-    '.ph-logo{width:50px;height:50px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;border:1px solid rgba(255,255,255,.2)}',
-    '.ph-title{flex:1;margin:0 10px}.ph-title h1{font-size:15px;font-weight:900;color:#fff}.ph-title p{font-size:11px;color:#bae6fd;margin-top:1px}',
-    '.ph-meta{text-align:right;color:#fff;font-size:14px;font-weight:800}.ph-meta small{font-size:11px;color:#bae6fd;display:block;margin-top:2px}',
-    '.ph-sts{display:flex;gap:7px;margin-top:7px;justify-content:center}',
-    '.ph-st{padding:5px 14px;border-radius:20px;font-size:12px;font-weight:800}',
+    '.ph-logo{width:2.5em;height:2.5em;background:rgba(255,255,255,.15);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.3em;color:#fff;border:1px solid rgba(255,255,255,.2);flex-shrink:0}',
+    '.ph-title{flex:1;margin:0 .6em}.ph-title h1{font-size:1.1em;font-weight:900;color:#fff}.ph-title p{font-size:.72em;color:#bae6fd;margin-top:.1em}',
+    '.ph-meta{text-align:right;color:#fff;font-size:.95em;font-weight:800}.ph-meta small{font-size:.72em;color:#bae6fd;display:block;margin-top:.1em}',
+    '.ph-sts{display:flex;gap:.4em;margin-top:.4em;justify-content:center}',
+    '.ph-st{padding:.25em .8em;border-radius:20px;font-size:.8em;font-weight:800}',
     '.ph-pass{background:#dcfce7;color:#15803d;border:1.5px solid #86efac}',
     '.ph-fail{background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5}',
     '.ph-info{background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.3)}',
-    '.body{padding:10px 16px}',
-    '.sec{display:flex;align-items:center;gap:8px;margin:7px 0 5px;padding-bottom:4px;border-bottom:2px solid #bae6fd}',
-    '.sec span{font-size:15px;font-weight:800;color:#0369a1}',
-    '.dot{width:8px;height:8px;border-radius:50%;background:#0ea5e9;flex-shrink:0}',
-    '.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:3px}',
-    '.card{background:#fff;border-radius:8px;padding:9px 11px;border-left:4px solid var(--c);box-shadow:0 1px 4px rgba(14,165,233,.1)}',
-    '.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px}',
-    '.card-ico{width:28px;height:28px;border-radius:8px;background:var(--c);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff}',
-    '.card-tr{font-size:9px;font-weight:800;padding:2px 6px;border-radius:6px}',
+    '.body{padding:.4em .7em}',
+    // SECTION HEADER
+    '.sec{display:flex;align-items:center;gap:.4em;margin:.4em 0 .3em;padding-bottom:.2em;border-bottom:2px solid #bae6fd}',
+    '.sec span{font-size:1em;font-weight:800;color:#0369a1}',
+    '.dot{width:.5em;height:.5em;border-radius:50%;background:#0ea5e9;flex-shrink:0}',
+    // CARDS
+    '.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:.3em;margin-bottom:.25em}',
+    '.card{background:#fff;border-radius:6px;padding:.4em .5em;border-left:4px solid var(--c);box-shadow:0 1px 3px rgba(14,165,233,.1)}',
+    '.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.2em}',
+    '.card-ico{width:1.8em;height:1.8em;border-radius:6px;background:var(--c);display:flex;align-items:center;justify-content:center;font-size:.9em;font-weight:900;color:#fff}',
+    '.card-tr{font-size:.65em;font-weight:800;padding:.1em .4em;border-radius:5px}',
     '.ct-p{background:#dcfce7;color:#15803d}.ct-f{background:#fee2e2;color:#dc2626}',
-    '.card-val{font-size:18px;font-weight:900;color:#0f172a;line-height:1}',
-    '.card-nm{font-size:11px;color:#64748b;margin:2px 0 1px;font-weight:600}',
-    '.card-tg{font-size:10px;color:#94a3b8;margin-bottom:3px}',
-    '.card-bg{display:inline-block;padding:1px 7px;border-radius:7px;font-size:9px;font-weight:800}',
+    '.card-val{font-size:1.3em;font-weight:900;color:#0f172a;line-height:1}',
+    '.card-nm{font-size:.72em;color:#64748b;margin:.1em 0;font-weight:600}',
+    '.card-tg{font-size:.65em;color:#94a3b8;margin-bottom:.15em}',
+    '.card-bg{display:inline-block;padding:.05em .4em;border-radius:5px;font-size:.62em;font-weight:800}',
     '.bg-p{background:#dcfce7;color:#15803d}.bg-f{background:#fee2e2;color:#dc2626}',
-    '.tw{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(14,165,233,.1);margin-bottom:7px;border:1px solid #e0f2fe}',
+    // KPI TABLE
+    '.tw{background:#fff;border-radius:7px;overflow:hidden;box-shadow:0 1px 4px rgba(14,165,233,.1);margin-bottom:.35em;border:1px solid #e0f2fe}',
     'table{width:100%;border-collapse:collapse}',
     '.th-b{background:linear-gradient(135deg,#0369a1,#0ea5e9)}',
-    'thead th{padding:8px 10px;text-align:left;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#e0f2fe}',
-    'thead th:first-child{text-align:center;width:36px}',
+    'thead th{padding:.35em .5em;text-align:left;font-size:.65em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:#e0f2fe}',
     'tbody tr{border-bottom:1px solid #f0f9ff}tbody tr:nth-child(even){background:#f8fbff}',
-    'tbody td{padding:6px 10px;vertical-align:middle;color:#1e293b;font-size:13px;line-height:1.5}',
-    '.nb{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:900;color:#fff}',
-    '.ki{width:24px;height:24px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;vertical-align:middle;margin-right:5px}',
-    '.kn{font-weight:700;font-size:13px;color:#0f172a}.ks{font-size:10px;color:#64748b}',
-    '.tgb{background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8;padding:2px 8px;border-radius:8px;font-size:9px;font-weight:800;display:inline-block}',
-    '.av{font-size:17px;font-weight:900;text-align:center}',
-    '.rb{padding:3px 10px;border-radius:8px;font-size:9px;font-weight:800;display:inline-flex;align-items:center;gap:3px}',
+    'tbody td{padding:.3em .5em;vertical-align:middle;color:#1e293b;font-size:1em;line-height:1.35}',
+    '.nb{width:1.5em;height:1.5em;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.72em;font-weight:900;color:#fff}',
+    '.ki{width:1.5em;height:1.5em;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:.8em;font-weight:900;color:#fff;vertical-align:middle;margin-right:.3em}',
+    '.kn{font-weight:700;color:#0f172a}.ks{font-size:.72em;color:#64748b}',
+    '.tgb{background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8;padding:.1em .4em;border-radius:5px;font-size:.65em;font-weight:800;display:inline-block}',
+    '.av{font-size:1.1em;font-weight:900;text-align:center}',
+    '.rb{padding:.15em .5em;border-radius:6px;font-size:.65em;font-weight:800;display:inline-flex;align-items:center;gap:.2em;white-space:nowrap}',
     '.rb-p{background:#dcfce7;color:#15803d;border:1px solid #86efac}',
     '.rb-f{background:#fee2e2;color:#dc2626;border:1px solid #fca5a5}',
-    '.mc{font-size:13px;color:#1e293b;line-height:1.5;font-weight:500}',
-    '.tf{background:linear-gradient(135deg,#f0f9ff,#ecfdf5);padding:5px 10px;display:flex;justify-content:space-between;font-size:9px;font-weight:700;color:#0369a1;border-top:1px solid #bae6fd}',
-    '.p2w{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(14,165,233,.1);margin-bottom:7px;border:1px solid #e0f2fe}',
+    '.tf{background:linear-gradient(135deg,#f0f9ff,#ecfdf5);padding:.3em .5em;display:flex;justify-content:space-between;font-size:.65em;font-weight:700;color:#0369a1;border-top:1px solid #bae6fd}',
+    // P2 TABLE
+    '.p2w{background:#fff;border-radius:7px;overflow:hidden;margin-bottom:.35em;border:1px solid #e0f2fe}',
     '.p2h{background:linear-gradient(135deg,#065f46,#059669)}',
-    '.p2h th{padding:6px 8px;text-align:left;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#d1fae5}',
-    '.p2b td{padding:4px 8px;border-bottom:1px solid #f0fdf4;vertical-align:top;font-size:9px;color:#1e293b}',
+    '.p2h th{padding:.3em .4em;text-align:left;font-size:.62em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:#d1fae5}',
+    '.p2b td{padding:.25em .4em;border-bottom:1px solid #f0fdf4;vertical-align:top;font-size:.85em;color:#1e293b}',
     '.p2b tr:nth-child(even) td{background:#f0fdf4}',
-    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:0;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(14,165,233,.1)}',
-    '.sl{background:linear-gradient(145deg,#f0f9ff,#e0f2fe);padding:12px 20px;text-align:center;border-right:1px solid #bae6fd}',
-    '.sr{background:linear-gradient(145deg,#f0fdf4,#dcfce7);padding:12px 20px;text-align:center}',
-    '.sav{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 7px;font-size:17px;color:#fff}',
-    '.savl{background:linear-gradient(135deg,#0369a1,#0ea5e9);box-shadow:0 4px 12px rgba(14,165,233,.35)}',
-    '.savr{background:linear-gradient(135deg,#059669,#22c55e);box-shadow:0 4px 12px rgba(34,197,94,.35)}',
-    '.sn{font-size:15px;font-weight:900;color:#0f172a;margin-bottom:8px}',
-    '.sll{border-top:2px solid #0ea5e9;margin:0 14px 7px}',
-    '.slr{border-top:2px solid #22c55e;margin:0 14px 7px}',
-    '.srl{font-size:11px;font-weight:800;color:#0369a1}',
-    '.srr{font-size:11px;font-weight:800;color:#059669}',
-    '.sp{font-size:13px;color:#475569;margin-top:3px}',
-    '.sd{font-size:10px;color:#64748b;margin-top:7px}',
-    '.foot{text-align:center;font-size:8px;color:#94a3b8;margin-top:10px;padding-top:6px;border-top:1px solid #e0f2fe}',
-    '@media print{@page{size:A4 landscape;margin:4mm}html{zoom:0.82}body{padding:0;background:#fff}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    // SIGS
+    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:0;border-radius:10px;overflow:hidden;box-shadow:0 1px 6px rgba(14,165,233,.1)}',
+    '.sl{background:linear-gradient(145deg,#f0f9ff,#e0f2fe);padding:.6em .8em;text-align:center;border-right:1px solid #bae6fd}',
+    '.sr{background:linear-gradient(145deg,#f0fdf4,#dcfce7);padding:.6em .8em;text-align:center}',
+    '.sav{width:2em;height:2em;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto .3em;font-size:1.1em;color:#fff}',
+    '.savl{background:linear-gradient(135deg,#0369a1,#0ea5e9)}.savr{background:linear-gradient(135deg,#059669,#22c55e)}',
+    '.sn{font-size:.95em;font-weight:900;color:#0f172a;margin-bottom:.4em}',
+    '.sll{border-top:2px solid #0ea5e9;margin:0 .8em .3em}.slr{border-top:2px solid #22c55e;margin:0 .8em .3em}',
+    '.srl{font-size:.75em;font-weight:800;color:#0369a1}.srr{font-size:.75em;font-weight:800;color:#059669}',
+    '.sp{font-size:.8em;color:#475569;margin-top:.15em}.sd{font-size:.65em;color:#64748b;margin-top:.4em}',
+    '.foot{text-align:center;font-size:.62em;color:#94a3b8;margin-top:.4em;padding-top:.3em;border-top:1px solid #e0f2fe}',
+    // PRINT: A4 portrait, auto-scale
+    '@media print{',
+      '@page{size:A4 portrait;margin:0}',
+      'html{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}',
+      'body{padding:5mm 6mm 4mm;background:#f0f9ff;',
+           'transform-origin:top left;',
+           'transform:scale('+scale+');',
+           'width:'+(100/parseFloat(scale)).toFixed(1)+'%}',
+      'tr{page-break-inside:avoid}',
+    '}'
   ].join('');
 
   var h=[];
@@ -3759,58 +3778,54 @@ function kf2Print(){
     h.push('</div>');
   });
 
-  // MAIN TABLE
+  // KPI TABLE
   h.push('<div class=sec><div class=dot></div><span>'+esc('รายละเอียด KPI')+' &#8212; '+esc(mon)+' '+yr+'</span></div>');
   h.push('<div class=tw><table><thead class=th-b><tr>');
-  h.push('<th style="text-align:center;width:34px">'+esc('ที่')+'</th>');
-  h.push('<th style="min-width:190px">KPI</th>');
-  h.push('<th style="min-width:170px">'+esc('คำอธิบาย')+'</th>');
-  h.push('<th style="text-align:center;width:90px">'+esc('เป้าหมาย')+'</th>');
-  h.push('<th style="text-align:center;width:80px">'+esc('ปฏิบัติจริง')+'</th>');
-  h.push('<th style="text-align:center;width:130px">'+esc('ผลการดำเนินงาน')+'</th>');
-  h.push('<th>'+esc('วิธีการวัด')+'</th></tr></thead><tbody>');
+  ['ที่','KPI','คำอธิบาย','เป้าหมาย','ปฏิบัติจริง','ผลการดำเนินงาน','วิธีการวัด'].forEach(function(lbl,i){
+    var w=['width:26px','min-width:130px','min-width:130px','text-align:center;width:70px','text-align:center;width:70px','text-align:center;width:100px',''][i];
+    h.push('<th style="'+(i===0?'text-align:center;':'')+w+'">'+esc(lbl)+'</th>');
+  });
+  h.push('</tr></thead><tbody>');
   KF2_KPIS.forEach(function(kb){
     var k=kf2GetKPI(kb.id); var v=parseFloat(d.actuals[k.id])||0; var p=kf2IsPass(k,v);
     var vs=v+(k.unit=='%'?'%':' '+k.unit);
     h.push('<tr>');
     h.push('<td style="text-align:center"><div class=nb style="background:'+k.clr+'">'+k.id+'</div></td>');
     h.push('<td><span class=ki style="background:'+k.clr+'">'+k.ico+'</span>');
-    h.push('<div class=kn>'+esc(k.name)+'</div><div class=ks>'+esc(k.nameEn)+'</div></td>');
-    h.push('<td style="font-size:12px;color:#1e293b;line-height:1.5;font-weight:500">'+esc(k.desc)+'</td>');
+    h.push('<span class=kn>'+esc(k.name)+'</span><br><span class=ks>'+esc(k.nameEn)+'</span></td>');
+    h.push('<td>'+esc(k.desc)+'</td>');
     h.push('<td style="text-align:center"><span class=tgb>'+esc(k.target)+'</span></td>');
     h.push('<td class=av style="color:'+k.clr+'">'+vs+'</td>');
-    h.push('<td style="text-align:center"><span class="rb '+(p?'rb-p':'rb-f')+'">'+(p?'&#9989; '+esc('บรรลุเป้าหมาย'):'&#10060; '+esc('ต่ำกว่าเป้าหมาย'))+'</span></td>');
-    h.push('<td class=mc>'+esc(k.measure)+'</td>');
+    h.push('<td style="text-align:center"><span class="rb '+(p?'rb-p':'rb-f')+'">'+(p?'&#9989; '+esc('บรรลุ'):'&#10060; '+esc('ต่ำกว่า'))+'</span></td>');
+    h.push('<td>'+esc(k.measure)+'</td>');
     h.push('</tr>');
   });
   h.push('</tbody></table>');
   h.push('<div class=tf>');
-  h.push('<span>&#128202; '+esc('รวม KPI ทั้งหมด')+' '+KF2_KPIS.length+' '+esc('รายการ')+'</span>');
-  h.push('<span style="color:#15803d">&#9989; '+esc('ผ่านเป้าหมาย')+' '+pass+' '+esc('รายการ')+'</span>');
-  h.push('<span style="color:#dc2626">&#10060; '+esc('ไม่ผ่าน')+' '+fail+' '+esc('รายการ')+'</span>');
+  h.push('<span>&#128202; '+esc('รวม')+' '+KF2_KPIS.length+' '+esc('รายการ')+'</span>');
+  h.push('<span style="color:#15803d">&#9989; '+esc('ผ่าน')+' '+pass+'</span>');
+  h.push('<span style="color:#dc2626">&#10060; '+esc('ไม่ผ่าน')+' '+fail+'</span>');
   h.push('<span style="color:#0369a1">'+esc('คะแนนรวม')+': '+Math.round(pass/KF2_KPIS.length*100)+'%</span>');
   h.push('</div></div>');
 
   // P2 TABLE
   h.push('<div class=sec><div class="dot" style="background:#059669"></div><span style="color:#059669">'+esc('การดำเนินการแก้ไข/ปรับปรุง (Corrective action / Improvement)')+'</span></div>');
   h.push('<div class=p2w><table><thead class=p2h><tr>');
-  h.push('<th style="width:32px;text-align:center">'+esc('ที่')+'</th>');
-  h.push('<th style="width:70px">'+esc('เดือน')+'</th>');
-  h.push('<th>'+esc('ข้อผิดพลาด / Fault')+'</th>');
-  h.push('<th>'+esc('การวิเคราะห์หาสาเหตุ / Root cause analysis')+'</th>');
-  h.push('<th>'+esc('แนวทางการแก้ไข/พัฒนา / Corrective action')+'</th>');
-  h.push('<th style="width:90px">'+esc('ผู้รับผิดชอบ')+'</th>');
-  h.push('<th style="width:80px">'+esc('กำหนดเสร็จ')+'</th></tr></thead><tbody class=p2b>');
-  var p2rows=d.p2&&d.p2.length?d.p2:Array(5).fill({});
+  ['ที่','เดือน','ข้อผิดพลาด / Fault','การวิเคราะห์หาสาเหตุ / Root cause analysis','แนวทางการแก้ไข / Corrective action','ผู้รับผิดชอบ','กำหนดเสร็จ'].forEach(function(lbl,i){
+    var w=['width:22px;text-align:center','width:50px','','','','width:70px','width:65px'][i];
+    h.push('<th style="'+w+'">'+esc(lbl)+'</th>');
+  });
+  h.push('</tr></thead><tbody class=p2b>');
+  var p2rows=d.p2&&d.p2.length?d.p2:Array(3).fill({});
   p2rows.forEach(function(r,i){
     h.push('<tr>');
-    h.push('<td style="text-align:center;font-weight:800;color:#059669;font-size:12px">'+(i+1)+'</td>');
-    h.push('<td style="font-size:10px;color:#059669;font-weight:700">'+esc((r&&r.month)||'')+'</td>');
-    h.push('<td>'+(r&&r.fault?esc(r.fault):'')+'</td>');
-    h.push('<td>'+(r&&r.cause?esc(r.cause):'')+'</td>');
-    h.push('<td>'+(r&&r.action?esc(r.action):'')+'</td>');
-    h.push('<td style="font-size:10px">'+esc((r&&r.person)||'')+'</td>');
-    h.push('<td style="font-size:10px">'+esc((r&&r.due)||'')+'</td>');
+    h.push('<td style="text-align:center;font-weight:800;color:#059669">'+(i+1)+'</td>');
+    h.push('<td style="color:#059669;font-weight:700">'+esc((r&&r.month)||'')+'</td>');
+    h.push('<td>'+((r&&r.fault)?esc(r.fault):'')+'</td>');
+    h.push('<td>'+((r&&r.cause)?esc(r.cause):'')+'</td>');
+    h.push('<td>'+((r&&r.action)?esc(r.action):'')+'</td>');
+    h.push('<td>'+esc((r&&r.person)||'')+'</td>');
+    h.push('<td>'+esc((r&&r.due)||'')+'</td>');
     h.push('</tr>');
   });
   h.push('</tbody></table></div>');
@@ -3832,16 +3847,16 @@ function kf2Print(){
   h.push('<div class=sd>'+esc('วันที่')+' '+apprDate+'</div></div>');
   h.push('</div>');
 
-  // FOOTER
-  h.push('<div class=foot>'+esc('บริษัท อาคเนย์ทร้าฟฟิค จำกัด')+' &nbsp;&middot;&nbsp; '+esc('แดชบอร์ด KPI คลังสินค้าและจัดส่ง')+' &nbsp;&middot;&nbsp; '+esc(mon)+' '+yr+'</div>');
+  h.push('<div class=foot>'+esc('บริษัท อาคเนย์ทร้าฟฟิค จำกัด')+' &nbsp;&middot;&nbsp; KPI '+esc('คลังสินค้าและจัดส่ง')+' &nbsp;&middot;&nbsp; '+esc(mon)+' '+yr+'</div>');
   h.push('</div>');
   h.push('<script>window.onload=function(){window.print();}<\/script>');
   h.push('</body></html>');
 
-  var w=window.open('','_blank','width=1280,height=900');
+  var w=window.open('','_blank','width=900,height=820');
   w.document.write(h.join(''));
   w.document.close();
 }
+
 
 function loadTasks() {
   google.script.run
