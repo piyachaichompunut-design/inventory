@@ -140,6 +140,8 @@ async function getTasks(filters) {
     if (f.duration && f.duration !== 'All')          rows = rows.filter(r => r['Duration'] === f.duration);
     if (f.month) rows = rows.filter(r => { const d = new Date(r['Action Date']); return !isNaN(d) && (d.getMonth() + 1) === +f.month; });
     if (f.year)  rows = rows.filter(r => { const d = new Date(r['Action Date']); return !isNaN(d) && d.getFullYear() === +f.year; });
+    if (f.dateFrom) { const from = new Date(f.dateFrom + 'T00:00:00'); rows = rows.filter(r => { const d = new Date(r['Action Date']); return !isNaN(d) && d >= from; }); }
+    if (f.dateTo)   { const to   = new Date(f.dateTo   + 'T23:59:59'); rows = rows.filter(r => { const d = new Date(r['Action Date']); return !isNaN(d) && d <= to;   }); }
     if (f.search) { const s = f.search.toLowerCase(); rows = rows.filter(r => ((r['Task'] || '') + (r['Note'] || '') + (r['Sales Name'] || '')).toLowerCase().includes(s)); }
   }
   return rows;
