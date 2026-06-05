@@ -3957,12 +3957,16 @@ function calPreset(type){
   var fmt=function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   document.getElementById('f-df').value=fmt(s);
   document.getElementById('f-dt2').value=fmt(e);
+  var stEl2=document.getElementById('f-st'); if(stEl2) stEl2.value='All';
   calUpdateLabel(); applyF();
 }
 
 function calApply(){
   var pop=document.getElementById('cal-pop');
   calOpen=false; pop.classList.remove('show');
+  // เมื่อกำหนดช่วงวันที่เอง → เปิดทุกสถานะให้เห็นงานครบทุกสถานะ
+  var stEl=document.getElementById('f-st');
+  if(stEl && document.getElementById('f-df').value && document.getElementById('f-dt2').value) stEl.value='All';
   applyF();
 }
 
@@ -7518,4 +7522,3 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </body>
 </html>
-  
