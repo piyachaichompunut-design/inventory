@@ -917,16 +917,16 @@ async function handleTelegramCommand(text) {
     return (
       '🤖 <b>คำสั่งที่ใช้ได้</b>\n\n' +
       '📊 /สรุป — สรุปจำนวนงานทั้งหมด\n' +
-      '📅 /งานวันนี้ — งานครบกำหนดวันนี้\n' +
+      '📅 /งานวันนี้ [สถานะ] — เช่น /งานวันนี้ to do\n' +
       '📅 /งานพรุ่งนี้ — งานครบกำหนดพรุ่งนี้\n' +
       '📅 /งานสัปดาห์นี้ — งานใน 7 วันข้างหน้า\n' +
       '📋 /งานค้าง — งานที่ยังไม่เสร็จ\n' +
       '🔴 /เลยกำหนด — งานที่เลยกำหนดแล้ว\n' +
       '✅ /งานเสร็จวันนี้ — งานที่เสร็จวันนี้\n' +
-      '📦 /งานรับ — งานประเภทรับ (เพิ่มวันที่ได้ เช่น /งานรับ วันที่ 4/6/2026)\n' +
-      '🚚 /งานส่ง — งานประเภทส่ง (เพิ่มวันที่ได้)\n' +
+      '📦 /งานรับ [สถานะ] [วันที่] — เช่น /งานรับ to do  /งานรับ 5/6/2026\n' +
+      '🚚 /งานส่ง [สถานะ] [วันที่] — เช่น /งานส่ง doing  /งานส่ง to do 5/6/2026\n' +
       '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
-      '🗓️ /งานวันที่ [วันที่] — เช่น /งานวันที่ 4/6/2026\n' +
+      '🗓️ /งานวันที่ [วันที่] [สถานะ] — เช่น /งานวันที่ 5/6/2026 to do\n' + '🗓️ /งาน [วันที่] — รูปแบบสั้น เช่น /งาน 5/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do'
     );
@@ -1029,16 +1029,43 @@ async function handleTelegramCommand(text) {
     );
   }
 
-  // /งานวันนี้
-  if (cleaned === '/งานวันนี้' || lower === '/today') {
-    const { data } = await db.from('tasks').select('*')
-      .eq('done', false).eq('action_date', today).order('seq', { ascending: true });
+  // ── helper: parse สถานะจาก text เช่น "to do", "doing", "done" ─────────────
+  // return { status: 'To Do'|'Doing'|'Done'|null, rest: string ที่เหลือ }
+  function parseStatus(s) {
+    const lower = s.toLowerCase().trim();
+    const map = [
+      { keys: ['to do', 'todo', 'รอ'], val: 'To Do' },
+      { keys: ['doing', 'กำลังทำ', 'ดำเนินการ'], val: 'Doing' },
+      { keys: ['done', 'เสร็จ', 'เสร็จแล้ว'], val: 'Done' },
+      { keys: ['cancel', 'ยกเลิก'], val: 'Cancel' },
+    ];
+    for (const { keys, val } of map) {
+      for (const k of keys) {
+        if (lower.includes(k)) {
+          const rest = s.replace(new RegExp(k, 'i'), '').trim();
+          return { status: val, rest };
+        }
+      }
+    }
+    return { status: null, rest: s };
+  }
+
+  // /งานวันนี้ [สถานะ]  เช่น /งานวันนี้ to do  /งานวันนี้ doing
+  if (cleaned.startsWith('/งานวันนี้') || lower === '/today') {
+    const argRaw = cleaned.replace(/^\/งานวันนี้/, '').replace(/^\/today/i, '').trim();
+    const { status } = parseStatus(argRaw);
+    let q = db.from('tasks').select('*').eq('action_date', today);
+    if (status === 'Done') { q = q.eq('done', true); }
+    else if (status) { q = q.eq('done', false).eq('task_status', status); }
+    else { q = q.eq('done', false); }
+    const { data } = await q.order('seq', { ascending: true });
     const list = data || [];
-    if (!list.length) return '🟢 วันนี้ไม่มีงานครบกำหนดครับ';
+    const stLabel = status ? ' [' + status + ']' : '';
+    if (!list.length) return '🟢 วันนี้ไม่มีงาน' + stLabel + 'ครับ';
     const rap   = list.filter(t => t.duration === 'รับ');
     const send  = list.filter(t => t.duration === 'ส่ง');
     const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
-    let msg = '🟡 <b>งานวันนี้ ' + tgDate(today) + ' (' + list.length + ' งาน)</b>\n';
+    let msg = '🟡 <b>งานวันนี้ ' + tgDate(today) + stLabel + ' (' + list.length + ' งาน)</b>\n';
     if (rap.length)   msg += '📦 รับ ' + rap.length + ' | ';
     if (send.length)  msg += '🚚 ส่ง ' + send.length + ' | ';
     if (other.length) msg += '📋 อื่นๆ ' + other.length;
@@ -1122,24 +1149,28 @@ async function handleTelegramCommand(text) {
       || '🟢 ไม่มีงานเลยกำหนดครับ';
   }
 
-  // /งานรับ , /งานส่ง  (รองรับระบุวันที่: /งานรับ วันที่ 4/6/2026)
+  // /งานรับ [สถานะ] [วันที่]  /งานส่ง [สถานะ] [วันที่]
+  // เช่น /งานรับ to do  /งานส่ง doing  /งานรับ 5/6/2026  /งานส่ง to do 5/6/2026
   if (cleaned.startsWith('/งานรับ') || cleaned.startsWith('/งานส่ง')) {
     const isRap = cleaned.startsWith('/งานรับ');
     const dur = isRap ? 'รับ' : 'ส่ง';
-    const rest = cleaned.replace(/^\/งาน(รับ|ส่ง)/, '').trim();
-    const dArg = rest ? extractDate(rest) : null;
-    if (rest && !dArg) return 'รูปแบบวันที่ไม่ถูกต้องครับ ลองใหม่ เช่น /งาน' + dur + ' วันที่ 4/6/2026';
-
-    let q = db.from('tasks').select('*').eq('duration', dur);
-    if (dArg) {
-      q = q.eq('action_date', dArg);                 // ระบุวันที่ → เอาทุกสถานะของวันนั้น
-    } else {
-      q = q.eq('done', false);                        // ไม่ระบุวันที่ → เฉพาะที่ยังไม่เสร็จ
+    let rest = cleaned.replace(/^\/งาน(รับ|ส่ง)/, '').trim();
+    const { status, rest: rest2 } = parseStatus(rest);
+    const dArg = rest2 ? extractDate(rest2) : null;
+    if (rest2 && !dArg && rest2.length > 0 && !status) {
+      return 'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/งาน' + dur + ' to do\n/งาน' + dur + ' 5/6/2026\n/งาน' + dur + ' to do 5/6/2026';
     }
+    let q = db.from('tasks').select('*').eq('duration', dur);
+    if (dArg)           { q = q.eq('action_date', dArg); }
+    if (status === 'Done') { q = q.eq('done', true); }
+    else if (status)    { q = q.eq('done', false).eq('task_status', status); }
+    else if (!dArg)     { q = q.eq('done', false); }
     const { data } = await q.order('action_date', { ascending: true });
-    const titleDate = dArg ? ' วันที่ ' + tgDate(dArg) : ' (ที่ยังไม่เสร็จ)';
-    return fmtDetail('📦 <b>งาน' + dur + titleDate + ' ({n})</b>', data || [])
-      || '🟢 ไม่มีงาน' + dur + (dArg ? ' วันที่ ' + tgDate(dArg) : 'ที่ค้าง') + 'ครับ';
+    const stLabel = status ? ' [' + status + ']' : (dArg ? '' : ' (ยังไม่เสร็จ)');
+    const titleDate = dArg ? ' วันที่ ' + tgDate(dArg) : '';
+    const icon = isRap ? '📦' : '🚚';
+    return fmtDetail(icon + ' <b>งาน' + dur + titleDate + stLabel + ' ({n})</b>', data || [])
+      || '🟢 ไม่มีงาน' + dur + titleDate + stLabel + 'ครับ';
   }
 
   // /งานของ [ชื่อ]
@@ -1154,15 +1185,24 @@ async function handleTelegramCommand(text) {
       || '🔍 ไม่พบงานของ "' + tgEsc(name) + '"';
   }
 
-  // /งานวันที่ [วันที่]  รองรับ 4/6/2026, 4-6-2569, 2026-06-04
-  if (cleaned.startsWith('/งานวันที่') || lower.startsWith('/date')) {
-    const dRaw = cleaned.replace(/^\/งานวันที่/, '').replace(/^\/date/i, '').trim();
-    const dArg = extractDate(dRaw);
-    if (!dArg) return 'พิมพ์วันที่ให้ถูกต้องครับ เช่น /งานวันที่ 4/6/2026 หรือ /งานวันที่ 2026-06-04';
-    const { data } = await db.from('tasks').select('*')
-      .eq('action_date', dArg).order('seq', { ascending: true });
-    return fmtDetail('🗓️ <b>งานวันที่ ' + tgDate(dArg) + ' ({n})</b>', data || [])
-      || '🟢 วันที่ ' + tgDate(dArg) + ' ไม่มีงานครับ';
+  // /งานวันที่ [วันที่] [สถานะ]  และ /งาน [วันที่] [สถานะ]  (รูปแบบสั้น)
+  // เช่น /งานวันที่ 5/6/2026  /งานวันที่ 5/6/2026 to do  /งาน 5/6/2026
+  const isDateCmd = cleaned.startsWith('/งานวันที่') || lower.startsWith('/date');
+  const isShortDate = !isDateCmd && cleaned.startsWith('/งาน ') &&
+    extractDate(cleaned.replace(/^\/งาน/, '').trim());
+  if (isDateCmd || isShortDate) {
+    let dRaw = cleaned
+      .replace(/^\/งานวันที่/, '').replace(/^\/date/i, '').replace(/^\/งาน/, '').trim();
+    const { status, rest: dRaw2 } = parseStatus(dRaw);
+    const dArg = extractDate(dRaw2 || dRaw);
+    if (!dArg) return 'พิมพ์วันที่ให้ถูกต้องครับ เช่น\n/งานวันที่ 5/6/2026\n/งาน 5/6/2026 to do\n/งาน 5/6/2026 doing';
+    let q = db.from('tasks').select('*').eq('action_date', dArg);
+    if (status === 'Done')  { q = q.eq('done', true); }
+    else if (status)        { q = q.eq('done', false).eq('task_status', status); }
+    const { data } = await q.order('seq', { ascending: true });
+    const stLabel = status ? ' [' + status + ']' : '';
+    return fmtDetail('🗓️ <b>งานวันที่ ' + tgDate(dArg) + stLabel + ' ({n})</b>', data || [])
+      || '🟢 วันที่ ' + tgDate(dArg) + stLabel + ' ไม่มีงานครับ';
   }
 
   // /kpi [ชื่อ] หรือ /kpi [ชื่อ] เดือน5/2026
