@@ -4873,22 +4873,31 @@ function quickToggle(id, field, checked){
     .withSuccessHandler(function(r){
       if(r&&r.success){
         toast(done?'✅ เปลี่ยนเป็น Done แล้ว':doing?'🟣 กำลังทำ':'🔵 To Do','success');
-        // โหลดข้อมูลใหม่จาก server เพื่อ sync
+        // sync allTasks เงียบๆ โดยไม่ re-filter (กันงานหายจากตาราง)
         google.script.run.withSuccessHandler(function(tasks){
-          allTasks=tasks; filteredTasks=tasks.slice();
-          applyF(); loadDash();
+          allTasks=tasks;
+          // อัปเดตเฉพาะ task ใน filteredTasks ให้ตรงกับของใหม่ ไม่กรองทิ้ง
+          filteredTasks=filteredTasks.map(function(ft){
+            var fresh=tasks.find(function(x){return String(x['ID'])===String(ft['ID']);});
+            return fresh||ft;
+          });
+          loadDash();
         }).getTasks(null);
       } else {
         toast('บันทึกไม่สำเร็จ: '+((r&&r.error)||'?'),'error');
         // rollback
         t['Doing']=field==='Doing'?!checked:doing;
         t['Done']=field==='Done'?!checked:done;
-        applyF();
+        t['Task Status']=(t['Done']===true||t['Done']==='TRUE')?'Done':(t['Doing']===true||t['Doing']==='TRUE')?'Doing':'To Do';
+        renderTable();
       }
     })
     .withFailureHandler(function(e){
       toast('ผิดพลาด: '+e.message,'error');
-      applyF();
+      // rollback
+      t['Doing']=field==='Doing'?!checked:doing;
+      t['Done']=field==='Done'?!checked:done;
+      renderTable();
     })
     .updateTask(data);
 }
