@@ -3067,31 +3067,8 @@ function resetDash(){
   document.getElementById('db-stat').value='All';
   loadDash();
 }
-function toggleDbdPrintDd(){
-  var dd=document.getElementById('dbd-print-dd');
-  var btn=document.getElementById('dbd-print-wrap');
-  if(!dd||!btn) return;
-  if(dd.style.display!=='none'){
-    dd.style.display='none'; return;
-  }
-  // คำนวณตำแหน่งปุ่ม แล้ววาง dropdown เหนือปุ่ม
-  var rect=btn.getBoundingClientRect();
-  dd.style.display='block';
-  dd.style.position='fixed';
-  dd.style.zIndex='99999';
-  dd.style.minWidth='220px';
-  // วางให้ bottom ของ dropdown ตรงกับ top ของปุ่ม
-  var ddH=dd.offsetHeight||120;
-  dd.style.top=(rect.top - ddH - 6)+'px';
-  dd.style.left=(rect.right - 220)+'px';
-}
-document.addEventListener('click',function(e){
-  var wrap=document.getElementById('dbd-print-wrap');
-  if(wrap&&!wrap.contains(e.target)){
-    var dd=document.getElementById('dbd-print-dd');
-    if(dd) dd.style.display='none';
-  }
-});
+// toggleDbdPrintDd removed
+
 
 function printDashboard(theme){
   try{
