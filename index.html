@@ -1,4 +1,4 @@
-<!-- v3.2 -->
+<!-- v3.3 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -7755,8 +7755,13 @@ function drsSetDefaultDateRange(monthKey){
 }
 
 function drsMonthLabel(key){
-  // key = 'YYYY-MM' → 'มิ.ย. 2569'
   if(!key) return '–';
+  // key แบบใหม่: 'YYYY-MM-DD_YYYY-MM-DD'
+  if(key.includes('_')){
+    var parts = key.split('_');
+    return drsDateThai(parts[0]) + ' – ' + drsDateThai(parts[1]);
+  }
+  // key แบบเก่า: 'YYYY-MM'
   var p = key.split('-');
   if(p.length<2) return key;
   return DRS_TH_MONTHS[parseInt(p[1])-1] + ' ' + (parseInt(p[0])+543);
@@ -7798,20 +7803,38 @@ function drsRenderMonthList(){
   if(!drsMonths.length){ el.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:10px">ยังไม่มีประวัติ</div>'; return; }
   el.innerHTML = drsMonths.map(function(m){
     var active = m===drsCurMonth;
-    var range = (active && drsDateFrom && drsDateTo)
+    var label = m.includes('_')
+      ? drsMonthLabel(m)   // แสดง วันที่ – วันที่
+      : drsMonthLabel(m);  // แสดง ชื่อเดือน พ.ศ.
+    var range = (active && drsDateFrom && drsDateTo && !m.includes('_'))
       ? '<div style="font-size:10px;opacity:.85;margin-top:2px">'+drsDateThai(drsDateFrom)+' – '+drsDateThai(drsDateTo)+'</div>'
       : '';
-    return '<div onclick="drsLoadMonth(\''+m+'\')" style="padding:11px 13px;margin-bottom:6px;border-radius:9px;cursor:pointer;font-size:13px;font-weight:'+(active?'800':'600')+';'+
-      (active?'background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff':'background:var(--bg);color:var(--txt);border:1px solid var(--border)')+';display:flex;align-items:center;justify-content:space-between;transition:.15s">'+
-      '<div><span>📅 '+drsMonthLabel(m)+'</span>'+range+'</div>'+
-      (active?'<span style="font-size:11px">●</span>':'')+
+    return '<div onclick="drsLoadMonth(\''+m+'\')" style="padding:11px 13px;margin-bottom:6px;border-radius:9px;cursor:pointer;font-size:12px;font-weight:'+(active?'800':'600')+';'+
+      (active?'background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff':'background:var(--bg);color:var(--txt);border:1px solid var(--border)')+';transition:.15s">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between">'+
+        '<span>📅 '+label+'</span>'+
+        (active?'<span style="font-size:11px">●</span>':'')+
+      '</div>'+
+      range+
       '</div>';
   }).join('');
 }
 
 function drsLoadMonth(monthKey){
   drsCurMonth = monthKey;
-  drsSetDefaultDateRange(monthKey);
+  // ถ้า key แบบใหม่ YYYY-MM-DD_YYYY-MM-DD → ดึงช่วงวันที่จาก key โดยตรง
+  if(monthKey && monthKey.includes('_')){
+    var parts = monthKey.split('_');
+    drsDateFrom = parts[0];
+    drsDateTo   = parts[1];
+    var f=document.getElementById('drs-date-from'), t=document.getElementById('drs-date-to');
+    var fd=document.getElementById('drs-from-display'), td=document.getElementById('drs-to-display');
+    if(f) f.value=drsDateFrom; if(t) t.value=drsDateTo;
+    if(fd) fd.value=drsDateThai(drsDateFrom); if(td) td.value=drsDateThai(drsDateTo);
+    drsUpdateMonthLabel();
+  } else {
+    drsSetDefaultDateRange(monthKey);
+  }
   google.script.run
     .withSuccessHandler(function(rows){
       drsRows = (rows||[]).map(function(r){
@@ -7887,23 +7910,68 @@ function drsDelRow(i){
 }
 
 function drsNewMonth(){
-  // ถามเดือน/ปี
-  var input = prompt('เริ่มเดือนใหม่ (พิมพ์ เดือน/ปี ค.ศ. เช่น 7/2026):', '');
-  if(!input) return;
-  var p = input.split('/');
-  if(p.length<2){ toast('รูปแบบไม่ถูกต้อง ตัวอย่าง 7/2026','error'); return; }
-  var mo = parseInt(p[0]), yr = parseInt(p[1]);
-  if(yr>2500) yr-=543; // พ.ศ. → ค.ศ.
-  if(isNaN(mo)||isNaN(yr)||mo<1||mo>12){ toast('เดือน/ปีไม่ถูกต้อง','error'); return; }
-  var key = yr + '-' + String(mo).padStart(2,'0');
+  // เปิด modal เลือกช่วงวันที่แทน prompt
+  var ov = document.getElementById('drs-newperiod-ov');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'drs-newperiod-ov';
+    ov.className = 'ov';
+    ov.innerHTML =
+      '<div class="modal" style="max-width:420px">'+
+        '<div class="mhdr" style="background:linear-gradient(135deg,#15803d,#16a34a)">'+
+          '<div class="mttl">📅 เริ่มช่วงเวลาใหม่</div>'+
+          '<button class="mx" onclick="closeOv(\'drs-newperiod-ov\')">×</button>'+
+        '</div>'+
+        '<div class="mbdy" style="padding:20px">'+
+          '<div style="font-size:13px;color:var(--muted);margin-bottom:16px">กำหนดช่วงวันที่สำหรับบันทึกใหม่ (สามารถเป็นสัปดาห์, ครึ่งเดือน หรือทั้งเดือนก็ได้)</div>'+
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'+
+            '<div><label style="font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">วันเริ่มต้น</label>'+
+            '<input type="date" id="drs-new-from" style="width:100%;padding:9px 10px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)"></div>'+
+            '<div><label style="font-size:12px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">วันสิ้นสุด</label>'+
+            '<input type="date" id="drs-new-to" style="width:100%;padding:9px 10px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)"></div>'+
+          '</div>'+
+          '<div style="display:flex;gap:8px;justify-content:flex-end">'+
+            '<button onclick="closeOv(\'drs-newperiod-ov\')" style="padding:9px 18px;background:var(--bg);border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-weight:600;cursor:pointer">ยกเลิก</button>'+
+            '<button onclick="drsConfirmNewPeriod()" style="padding:9px 18px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer">✅ สร้างช่วงใหม่</button>'+
+          '</div>'+
+        '</div>'+
+      '</div>';
+    document.body.appendChild(ov);
+  }
+  // ตั้งค่าเริ่มต้นเป็น 1 ถึงวันสุดท้ายของเดือนนี้
+  var now = new Date();
+  var yr = now.getFullYear(), mo = now.getMonth()+1;
+  var lastDay = new Date(yr, mo, 0).getDate();
+  var fromISO = yr+'-'+String(mo).padStart(2,'0')+'-01';
+  var toISO   = yr+'-'+String(mo).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+  document.getElementById('drs-new-from').value = fromISO;
+  document.getElementById('drs-new-to').value   = toISO;
+  ov.classList.add('show');
+}
+
+function drsConfirmNewPeriod(){
+  var fromISO = document.getElementById('drs-new-from').value;
+  var toISO   = document.getElementById('drs-new-to').value;
+  if(!fromISO || !toISO){ toast('กรุณาเลือกวันเริ่มต้นและสิ้นสุด','error'); return; }
+  if(fromISO > toISO){ toast('วันเริ่มต้นต้องไม่เกินวันสิ้นสุด','error'); return; }
+  // key = 'YYYY-MM-DD_YYYY-MM-DD' กันซ้ำได้แม้เดือนเดียวกัน
+  var key = fromISO + '_' + toISO;
+  closeOv('drs-newperiod-ov');
   if(drsMonths.indexOf(key)<0) drsMonths.unshift(key);
   drsMonths.sort().reverse();
   drsCurMonth = key;
-  drsRows = []; // ตารางเปล่า
-  drsSetDefaultDateRange(key);
+  drsDateFrom = fromISO;
+  drsDateTo   = toISO;
+  drsRows = [];
+  // อัปเดต date picker display
+  var f=document.getElementById('drs-date-from'), t=document.getElementById('drs-date-to');
+  var fd=document.getElementById('drs-from-display'), td=document.getElementById('drs-to-display');
+  if(f) f.value=fromISO; if(t) t.value=toISO;
+  if(fd) fd.value=drsDateThai(fromISO); if(td) td.value=drsDateThai(toISO);
+  drsUpdateMonthLabel();
   drsRenderMonthList();
   drsRenderTable();
-  toast('เริ่มเดือน '+drsMonthLabel(key)+' (ตารางเปล่า)','success');
+  toast('สร้างช่วง '+drsDateThai(fromISO)+' – '+drsDateThai(toISO)+' แล้ว ✅','success');
 }
 
 function drsManageCompanies(){
@@ -7987,12 +8055,23 @@ function drsDelCompany(id, name){
 }
 
 function drsSave(){
-  if(!drsCurMonth){ toast('ยังไม่ได้เลือกเดือน','error'); return; }
+  if(!drsCurMonth){ toast('ยังไม่ได้เลือกช่วงเวลา','error'); return; }
+  // ถ้า user แก้ date range → อัปเดต key ให้ตรงกัน
+  var saveKey = (drsDateFrom && drsDateTo) ? drsDateFrom+'_'+drsDateTo : drsCurMonth;
+  // อัปเดต drsCurMonth ให้เป็น key ใหม่
+  if(saveKey !== drsCurMonth){
+    // ลบ key เก่าออก (ถ้ายังว่าง) แล้วใส่ key ใหม่
+    var idx = drsMonths.indexOf(drsCurMonth);
+    if(idx>=0) drsMonths.splice(idx,1);
+    drsCurMonth = saveKey;
+    if(drsMonths.indexOf(saveKey)<0) drsMonths.unshift(saveKey);
+    drsMonths.sort().reverse();
+    drsRenderMonthList();
+  }
   google.script.run
     .withSuccessHandler(function(r){
       if(r&&r.success){
-        toast('บันทึกเดือน '+drsMonthLabel(drsCurMonth)+' แล้ว ('+r.count+' รายการ) ✅','success');
-        // refresh เดือนใน list
+        toast('บันทึก "'+drsMonthLabel(drsCurMonth)+'" แล้ว ('+r.count+' รายการ) ✅','success');
         if(drsMonths.indexOf(drsCurMonth)<0){ drsMonths.unshift(drsCurMonth); drsRenderMonthList(); }
       } else {
         toast('บันทึกไม่สำเร็จ: '+((r&&r.error)||'?'),'error');
