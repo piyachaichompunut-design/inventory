@@ -1617,11 +1617,11 @@ function appLogout(){
           <div class="cal-dates">
             <div class="cal-date-grp">
               <label>วันเริ่มต้น</label>
-              <input type="date" class="cal-date-inp" id="f-df" onchange="calUpdateLabel();applyF()">
+              <input type="date" class="cal-date-inp" id="f-df" onchange="calUpdateLabel();calAutoApply()">
             </div>
             <div class="cal-date-grp">
               <label>วันสิ้นสุด</label>
-              <input type="date" class="cal-date-inp" id="f-dt2" onchange="calUpdateLabel();applyF()">
+              <input type="date" class="cal-date-inp" id="f-dt2" onchange="calUpdateLabel();calAutoApply()">
             </div>
           </div>
         </div>
@@ -3961,12 +3961,31 @@ function calPreset(type){
   calUpdateLabel(); applyF();
 }
 
+// รันอัตโนมัติเมื่อ user พิมพ์/เลือกวันในช่อง input — filter เฉพาะเมื่อมีวันครบทั้งคู่
+function calAutoApply(){
+  var df = document.getElementById('f-df').value;
+  var dt = document.getElementById('f-dt2').value;
+  if(df && dt){
+    if(df > dt){
+      document.getElementById('f-df').value = dt;
+      document.getElementById('f-dt2').value = df;
+      calUpdateLabel();
+    }
+    var stEl=document.getElementById('f-st');
+    if(stEl) stEl.value='All';
+    applyF();
+  }
+}
+
 function calApply(){
   var pop=document.getElementById('cal-pop');
   calOpen=false; pop.classList.remove('show');
-  // เมื่อกำหนดช่วงวันที่เอง → เปิดทุกสถานะให้เห็นงานครบทุกสถานะ
+  var df = document.getElementById('f-df').value;
+  var dt = document.getElementById('f-dt2').value;
+  if(df && !dt){ document.getElementById('f-dt2').value=df; calUpdateLabel(); }
+  if(!df && dt){ document.getElementById('f-df').value=dt;  calUpdateLabel(); }
   var stEl=document.getElementById('f-st');
-  if(stEl && document.getElementById('f-df').value && document.getElementById('f-dt2').value) stEl.value='All';
+  if(stEl) stEl.value='All';
   applyF();
 }
 
