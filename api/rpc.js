@@ -1571,6 +1571,73 @@ async function checkDueTasks() {
 // ============================================================================
 //  DISPATCH TABLE
 // ============================================================================
+// ============================================================================
+//  เอกสาร รับ-ส่ง (Document Receive-Send) — แยกตามเดือน
+// ============================================================================
+// ดึงรายการเดือนทั้งหมดที่มีข้อมูล (สำหรับ sidebar ประวัติ)
+async function getDocRSMonths() {
+  const { data, error } = await db.from('docs_receive').select('month_key').order('month_key', { ascending: false });
+  if (error) throw error;
+  const seen = {};
+  (data || []).forEach(r => { if (r.month_key) seen[r.month_key] = true; });
+  return Object.keys(seen).sort().reverse();
+}
+
+// ดึงข้อมูลของเดือนที่ระบุ (month_key = 'YYYY-MM')
+async function getDocRSByMonth(monthKey) {
+  const { data, error } = await db.from('docs_receive').select('*')
+    .eq('month_key', monthKey).order('seq', { ascending: true });
+  if (error) throw error;
+  return (data || []).filter(r => r.id).map(r => ({
+    id: String(r.id),
+    company: String(r.company || ''),
+    recvDate: dstr(r.recv_date),
+    headSet: r.head_set === true,
+    headMo:  r.head_mo === true,
+    poNo: String(r.po_no || ''),
+    docTaxOriginal: r.doc_tax_original === true,
+    docTemp: r.doc_temp === true,
+    docWeight: r.doc_weight === true,
+    docReport: r.doc_report === true,
+    docGoods: r.doc_goods === true
+  }));
+}
+
+// บันทึกข้อมูลทั้งเดือน (ลบเก่าของเดือนนั้นแล้วใส่ใหม่)
+async function saveDocRSBatch(payload) {
+  const monthKey = payload.monthKey;
+  if (!monthKey) return { success: false, error: 'ไม่มี monthKey' };
+  await db.from('docs_receive').delete().eq('month_key', monthKey);
+  const rows = payload.rows || [];
+  if (rows.length > 0) {
+    const vals = rows.map((r, i) => ({
+      id: 'DR' + Date.now().toString(36).toUpperCase() + i,
+      month_key: monthKey,
+      seq: i,
+      company: r.company || '',
+      recv_date: r.recvDate || null,
+      head_set: r.headSet === true,
+      head_mo:  r.headMo === true,
+      po_no: r.poNo || '',
+      doc_tax_original: r.docTaxOriginal === true,
+      doc_temp: r.docTemp === true,
+      doc_weight: r.docWeight === true,
+      doc_report: r.docReport === true,
+      doc_goods: r.docGoods === true
+    }));
+    const { error } = await db.from('docs_receive').insert(vals);
+    if (error) return { success: false, error: error.message };
+  }
+  return { success: true, count: rows.length };
+}
+
+// ลบข้อมูลทั้งเดือน
+async function deleteDocRSMonth(monthKey) {
+  const { error } = await db.from('docs_receive').delete().eq('month_key', monthKey);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
 const HANDLERS = {
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
@@ -1586,7 +1653,8 @@ const HANDLERS = {
   getKPIStaff, saveKPIStaff, deleteKPIStaff, getKPIByEmpMonth, saveKPIByEmpMonth, getKPIMonthHistory,
   getDashSummary,
   getWHDashData, saveWHDashData, getWHYearData,
-  getKPIForm, saveKPIForm
+  getKPIForm, saveKPIForm,
+  getDocRSMonths, getDocRSByMonth, saveDocRSBatch, deleteDocRSMonth
 };
 
 export const __handlers = HANDLERS;
