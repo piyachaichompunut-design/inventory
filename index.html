@@ -3653,207 +3653,166 @@ function kf2Print(){
   var prepDate=d.preparerDate?new Date(d.preparerDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'................................';
   var apprDate=d.approverDate?new Date(d.approverDate).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'}):'................................';
   var n=KF2_KPIS.length;
+  // landscape A4 ~277x190mm usable; ยิ่งน้อย row ยิ่งใหญ่
+  var basePx=Math.min(16, Math.max(10, Math.floor(160/Math.max(n,4))));
 
-  // auto-scale: A4 portrait ~190mm wide, fit all content
-  // n KPIs + header cards + correction table + sig
-  // base 11px at 10 KPIs; cap 14, floor 8
-  var basePx=Math.min(14, Math.max(8, Math.floor(110/Math.max(n,4))));
-  var scale=(basePx/11).toFixed(3);
-
-  var css=[
-    '*{margin:0;padding:0;box-sizing:border-box}',
-    'html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;background:#f0f9ff;color:#0f172a;font-size:'+basePx+'px}',
-    // HEADER
-    '.ph{background:linear-gradient(135deg,#0c4a6e,#0369a1 45%,#0ea5e9);padding:.6em 1em}',
-    '.ph-co{font-size:1.3em;font-weight:900;color:#fff;text-align:center;letter-spacing:.3px;margin-bottom:.3em}',
-    '.ph-div{height:1px;background:rgba(255,255,255,.2);margin:.4em 0}',
-    '.ph-row{display:flex;align-items:center;justify-content:space-between}',
-    '.ph-logo{width:2.5em;height:2.5em;background:rgba(255,255,255,.15);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.3em;color:#fff;border:1px solid rgba(255,255,255,.2);flex-shrink:0}',
-    '.ph-title{flex:1;margin:0 .6em}.ph-title h1{font-size:1.1em;font-weight:900;color:#fff}.ph-title p{font-size:.72em;color:#bae6fd;margin-top:.1em}',
-    '.ph-meta{text-align:right;color:#fff;font-size:.95em;font-weight:800}.ph-meta small{font-size:.72em;color:#bae6fd;display:block;margin-top:.1em}',
-    '.ph-sts{display:flex;gap:.4em;margin-top:.4em;justify-content:center}',
-    '.ph-st{padding:.25em .8em;border-radius:20px;font-size:.8em;font-weight:800}',
-    '.ph-pass{background:#dcfce7;color:#15803d;border:1.5px solid #86efac}',
-    '.ph-fail{background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5}',
-    '.ph-info{background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.3)}',
-    '.body{padding:.4em .7em}',
-    // SECTION HEADER
-    '.sec{display:flex;align-items:center;gap:.4em;margin:.4em 0 .3em;padding-bottom:.2em;border-bottom:2px solid #bae6fd}',
-    '.sec span{font-size:1em;font-weight:800;color:#0369a1}',
-    '.dot{width:.5em;height:.5em;border-radius:50%;background:#0ea5e9;flex-shrink:0}',
-    // CARDS
-    '.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:.3em;margin-bottom:.25em}',
-    '.card{background:#fff;border-radius:6px;padding:.4em .5em;border-left:4px solid var(--c);box-shadow:0 1px 3px rgba(14,165,233,.1)}',
-    '.card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.2em}',
-    '.card-ico{width:1.8em;height:1.8em;border-radius:6px;background:var(--c);display:flex;align-items:center;justify-content:center;font-size:.9em;font-weight:900;color:#fff}',
-    '.card-tr{font-size:.65em;font-weight:800;padding:.1em .4em;border-radius:5px}',
-    '.ct-p{background:#dcfce7;color:#15803d}.ct-f{background:#fee2e2;color:#dc2626}',
-    '.card-val{font-size:1.3em;font-weight:900;color:#0f172a;line-height:1}',
-    '.card-nm{font-size:.72em;color:#64748b;margin:.1em 0;font-weight:600}',
-    '.card-tg{font-size:.65em;color:#94a3b8;margin-bottom:.15em}',
-    '.card-bg{display:inline-block;padding:.05em .4em;border-radius:5px;font-size:.62em;font-weight:800}',
-    '.bg-p{background:#dcfce7;color:#15803d}.bg-f{background:#fee2e2;color:#dc2626}',
-    // KPI TABLE
-    '.tw{background:#fff;border-radius:7px;overflow:hidden;box-shadow:0 1px 4px rgba(14,165,233,.1);margin-bottom:.35em;border:1px solid #e0f2fe}',
-    'table{width:100%;border-collapse:collapse}',
-    '.th-b{background:linear-gradient(135deg,#0369a1,#0ea5e9)}',
-    'thead th{padding:.35em .5em;text-align:left;font-size:.65em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:#e0f2fe}',
-    'tbody tr{border-bottom:1px solid #f0f9ff}tbody tr:nth-child(even){background:#f8fbff}',
-    'tbody td{padding:.3em .5em;vertical-align:middle;color:#1e293b;font-size:1em;line-height:1.35}',
-    '.nb{width:1.5em;height:1.5em;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.72em;font-weight:900;color:#fff}',
-    '.ki{width:1.5em;height:1.5em;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:.8em;font-weight:900;color:#fff;vertical-align:middle;margin-right:.3em}',
-    '.kn{font-weight:700;color:#0f172a}.ks{font-size:.72em;color:#64748b}',
-    '.tgb{background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8;padding:.1em .4em;border-radius:5px;font-size:.65em;font-weight:800;display:inline-block}',
-    '.av{font-size:1.1em;font-weight:900;text-align:center}',
-    '.rb{padding:.15em .5em;border-radius:6px;font-size:.65em;font-weight:800;display:inline-flex;align-items:center;gap:.2em;white-space:nowrap}',
-    '.rb-p{background:#dcfce7;color:#15803d;border:1px solid #86efac}',
-    '.rb-f{background:#fee2e2;color:#dc2626;border:1px solid #fca5a5}',
-    '.tf{background:linear-gradient(135deg,#f0f9ff,#ecfdf5);padding:.3em .5em;display:flex;justify-content:space-between;font-size:.65em;font-weight:700;color:#0369a1;border-top:1px solid #bae6fd}',
-    // P2 TABLE
-    '.p2w{background:#fff;border-radius:7px;overflow:hidden;margin-bottom:.35em;border:1px solid #e0f2fe}',
-    '.p2h{background:linear-gradient(135deg,#065f46,#059669)}',
-    '.p2h th{padding:.3em .4em;text-align:left;font-size:.62em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:#d1fae5}',
-    '.p2b td{padding:.25em .4em;border-bottom:1px solid #f0fdf4;vertical-align:top;font-size:.85em;color:#1e293b}',
-    '.p2b tr:nth-child(even) td{background:#f0fdf4}',
-    // SIGS
-    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:0;border-radius:10px;overflow:hidden;box-shadow:0 1px 6px rgba(14,165,233,.1)}',
-    '.sl{background:linear-gradient(145deg,#f0f9ff,#e0f2fe);padding:.6em .8em;text-align:center;border-right:1px solid #bae6fd}',
-    '.sr{background:linear-gradient(145deg,#f0fdf4,#dcfce7);padding:.6em .8em;text-align:center}',
-    '.sav{width:2em;height:2em;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto .3em;font-size:1.1em;color:#fff}',
-    '.savl{background:linear-gradient(135deg,#0369a1,#0ea5e9)}.savr{background:linear-gradient(135deg,#059669,#22c55e)}',
-    '.sn{font-size:.95em;font-weight:900;color:#0f172a;margin-bottom:.4em}',
-    '.sll{border-top:2px solid #0ea5e9;margin:0 .8em .3em}.slr{border-top:2px solid #22c55e;margin:0 .8em .3em}',
-    '.srl{font-size:.75em;font-weight:800;color:#0369a1}.srr{font-size:.75em;font-weight:800;color:#059669}',
-    '.sp{font-size:.8em;color:#475569;margin-top:.15em}.sd{font-size:.65em;color:#64748b;margin-top:.4em}',
-    '.foot{text-align:center;font-size:.62em;color:#94a3b8;margin-top:.4em;padding-top:.3em;border-top:1px solid #e0f2fe}',
-    // PRINT: A4 portrait, auto-scale
-    '@media print{',
-      '@page{size:A4 portrait;margin:0}',
-      'html{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}',
-      'body{padding:5mm 6mm 4mm;background:#f0f9ff;',
-           'transform-origin:top left;',
-           'transform:scale('+scale+');',
-           'width:'+(100/parseFloat(scale)).toFixed(1)+'%}',
-      'tr{page-break-inside:avoid}',
-    '}'
-  ].join('');
-
-  var h=[];
-  h.push('<!DOCTYPE html><html><head><meta charset=UTF-8><title>KPI '+mon+' '+yr+'</title>');
-  h.push('<style>'+css+'</style></head><body>');
-
-  // HEADER
-  h.push('<div class=ph>');
-  h.push('<div class=ph-co>&#127970; '+esc('บริษัท อาคเนย์ทร้าฟฟิค จำกัด')+'</div>');
-  h.push('<div class=ph-div></div>');
-  h.push('<div class=ph-row>');
-  h.push('<div class=ph-logo>&#127981;</div>');
-  h.push('<div class=ph-title><h1>&#128202; '+esc('แดชบอร์ด KPI คลังสินค้าและจัดส่ง')+'</h1>');
-  h.push('<p>'+esc('มุ่งเน้นความถูกต้อง รวดเร็ว ปลอดภัย และความพึงพอใจของลูกค้า')+'</p></div>');
-  h.push('<div class=ph-meta>'+esc(mon)+' '+yr+'<small>'+esc('รายงานสร้างเมื่อ')+' '+today+'</small></div>');
-  h.push('</div>');
-  h.push('<div class=ph-sts>');
-  h.push('<div class="ph-st ph-pass">&#9989; '+esc('ผ่านเป้าหมาย')+' '+pass+' '+esc('รายการ')+'</div>');
-  h.push('<div class="ph-st ph-fail">&#10060; '+esc('ไม่ผ่านเป้าหมาย')+' '+fail+' '+esc('รายการ')+'</div>');
-  h.push('<div class="ph-st ph-info">&#128202; KPI '+esc('ทั้งหมด')+' '+KF2_KPIS.length+' '+esc('รายการ')+'</div>');
-  h.push('</div></div>');
-  h.push('<div class=body>');
-
-  // CARDS
-  h.push('<div class=sec><div class=dot></div><span>'+esc('ภาพรวม KPI ประจำเดือน')+'</span></div>');
-  [KF2_KPIS.slice(0,5), KF2_KPIS.slice(5,10)].forEach(function(row){
-    h.push('<div class=cards>');
-    row.forEach(function(kb){
-      var k=kf2GetKPI(kb.id); var v=parseFloat(d.actuals[k.id])||0; var p=kf2IsPass(k,v);
-      var vs=v+(k.unit=='%'?'%':' '+k.unit);
-      h.push('<div class=card style="--c:'+k.clr+'">');
-      h.push('<div class=card-top><div class=card-ico>'+k.ico+'</div>');
-      h.push('<div class="card-tr '+(p?'ct-p':'ct-f')+'">'+(p?'&#10003; '+esc('ผ่าน'):'&#10007; '+esc('ไม่ผ่าน'))+'</div></div>');
-      h.push('<div class=card-val>'+vs+'</div>');
-      h.push('<div class=card-nm>'+k.id+'. '+esc(k.nameEn)+'</div>');
-      h.push('<div class=card-tg>'+esc('เป้าหมาย')+' '+esc(k.target)+'</div>');
-      h.push('<div class="card-bg '+(p?'bg-p':'bg-f')+'">'+(p?esc('บรรลุเป้าหมาย'):esc('ต่ำกว่าเป้าหมาย'))+'</div>');
-      h.push('</div>');
-    });
-    h.push('</div>');
-  });
-
-  // KPI TABLE
-  h.push('<div class=sec><div class=dot></div><span>'+esc('รายละเอียด KPI')+' &#8212; '+esc(mon)+' '+yr+'</span></div>');
-  h.push('<div class=tw><table><thead class=th-b><tr>');
-  ['ที่','KPI','คำอธิบาย','เป้าหมาย','ปฏิบัติจริง','ผลการดำเนินงาน','วิธีการวัด'].forEach(function(lbl,i){
-    var w=['width:26px','min-width:130px','min-width:130px','text-align:center;width:70px','text-align:center;width:70px','text-align:center;width:100px',''][i];
-    h.push('<th style="'+(i===0?'text-align:center;':'')+w+'">'+esc(lbl)+'</th>');
-  });
-  h.push('</tr></thead><tbody>');
+  var rows='';
   KF2_KPIS.forEach(function(kb){
     var k=kf2GetKPI(kb.id); var v=parseFloat(d.actuals[k.id])||0; var p=kf2IsPass(k,v);
     var vs=v+(k.unit=='%'?'%':' '+k.unit);
-    h.push('<tr>');
-    h.push('<td style="text-align:center"><div class=nb style="background:'+k.clr+'">'+k.id+'</div></td>');
-    h.push('<td><span class=ki style="background:'+k.clr+'">'+k.ico+'</span>');
-    h.push('<span class=kn>'+esc(k.name)+'</span><br><span class=ks>'+esc(k.nameEn)+'</span></td>');
-    h.push('<td>'+esc(k.desc)+'</td>');
-    h.push('<td style="text-align:center"><span class=tgb>'+esc(k.target)+'</span></td>');
-    h.push('<td class=av style="color:'+k.clr+'">'+vs+'</td>');
-    h.push('<td style="text-align:center"><span class="rb '+(p?'rb-p':'rb-f')+'">'+(p?'&#9989; '+esc('บรรลุ'):'&#10060; '+esc('ต่ำกว่า'))+'</span></td>');
-    h.push('<td>'+esc(k.measure)+'</td>');
-    h.push('</tr>');
+    var barC=p?'#059669':'#dc2626';
+    rows+='<tr>';
+    rows+='<td style="text-align:center"><div style="width:1.6em;height:1.6em;border-radius:50%;background:'+k.clr+';color:#fff;font-size:.75em;font-weight:900;display:inline-flex;align-items:center;justify-content:center">'+k.id+'</div></td>';
+    rows+='<td><span style="display:inline-flex;align-items:center;justify-content:center;width:1.6em;height:1.6em;border-radius:5px;background:'+k.clr+';color:#fff;font-size:.85em;margin-right:.3em;vertical-align:middle">'+k.ico+'</span>';
+    rows+='<strong style="color:#0f172a">'+esc(k.name)+'</strong><br>';
+    rows+='<span style="font-size:.72em;color:#64748b">'+esc(k.nameEn)+'</span></td>';
+    rows+='<td style="text-align:center"><span style="background:#fef3c7;color:#b45309;padding:.1em .5em;border-radius:6px;font-weight:800">'+esc(k.target)+'</span></td>';
+    rows+='<td style="text-align:center;font-size:1.25em;font-weight:900;color:'+barC+'">'+vs+'</td>';
+    rows+='<td style="text-align:center"><span style="padding:.2em .7em;border-radius:8px;font-weight:800;font-size:.85em;background:'+(p?'#dcfce7':'#fee2e2')+';color:'+(p?'#15803d':'#dc2626')+';border:1.5px solid '+(p?'#86efac':'#fca5a5')+'">'+(p?'✅ บรรลุ':'❌ ต่ำกว่า')+'</span></td>';
+    rows+='<td style="font-size:.85em;color:#334155;line-height:1.35">'+esc(k.measure)+'</td>';
+    rows+='</tr>';
   });
-  h.push('</tbody></table>');
-  h.push('<div class=tf>');
-  h.push('<span>&#128202; '+esc('รวม')+' '+KF2_KPIS.length+' '+esc('รายการ')+'</span>');
-  h.push('<span style="color:#15803d">&#9989; '+esc('ผ่าน')+' '+pass+'</span>');
-  h.push('<span style="color:#dc2626">&#10060; '+esc('ไม่ผ่าน')+' '+fail+'</span>');
-  h.push('<span style="color:#0369a1">'+esc('คะแนนรวม')+': '+Math.round(pass/KF2_KPIS.length*100)+'%</span>');
-  h.push('</div></div>');
 
-  // P2 TABLE
-  h.push('<div class=sec><div class="dot" style="background:#059669"></div><span style="color:#059669">'+esc('การดำเนินการแก้ไข/ปรับปรุง (Corrective action / Improvement)')+'</span></div>');
-  h.push('<div class=p2w><table><thead class=p2h><tr>');
-  ['ที่','เดือน','ข้อผิดพลาด / Fault','การวิเคราะห์หาสาเหตุ / Root cause analysis','แนวทางการแก้ไข / Corrective action','ผู้รับผิดชอบ','กำหนดเสร็จ'].forEach(function(lbl,i){
-    var w=['width:22px;text-align:center','width:50px','','','','width:70px','width:65px'][i];
-    h.push('<th style="'+w+'">'+esc(lbl)+'</th>');
+  var p2rows='';
+  var p2data=d.p2&&d.p2.length?d.p2:Array(3).fill({});
+  p2data.forEach(function(r,i){
+    p2rows+='<tr>';
+    p2rows+='<td style="text-align:center;font-weight:900;color:#059669">'+(i+1)+'</td>';
+    p2rows+='<td style="color:#059669;font-weight:700">'+esc((r&&r.month)||'')+'</td>';
+    p2rows+='<td>'+((r&&r.fault)?esc(r.fault):'')+'</td>';
+    p2rows+='<td>'+((r&&r.cause)?esc(r.cause):'')+'</td>';
+    p2rows+='<td>'+((r&&r.action)?esc(r.action):'')+'</td>';
+    p2rows+='<td>'+esc((r&&r.person)||'')+'</td>';
+    p2rows+='<td>'+esc((r&&r.due)||'')+'</td>';
+    p2rows+='</tr>';
   });
-  h.push('</tr></thead><tbody class=p2b>');
-  var p2rows=d.p2&&d.p2.length?d.p2:Array(3).fill({});
-  p2rows.forEach(function(r,i){
-    h.push('<tr>');
-    h.push('<td style="text-align:center;font-weight:800;color:#059669">'+(i+1)+'</td>');
-    h.push('<td style="color:#059669;font-weight:700">'+esc((r&&r.month)||'')+'</td>');
-    h.push('<td>'+((r&&r.fault)?esc(r.fault):'')+'</td>');
-    h.push('<td>'+((r&&r.cause)?esc(r.cause):'')+'</td>');
-    h.push('<td>'+((r&&r.action)?esc(r.action):'')+'</td>');
-    h.push('<td>'+esc((r&&r.person)||'')+'</td>');
-    h.push('<td>'+esc((r&&r.due)||'')+'</td>');
-    h.push('</tr>');
+
+  var cardHtml='';
+  [KF2_KPIS.slice(0,5),KF2_KPIS.slice(5,10)].forEach(function(row){
+    cardHtml+='<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:.3em;margin-bottom:.25em">';
+    row.forEach(function(kb){
+      var k=kf2GetKPI(kb.id); var v=parseFloat(d.actuals[k.id])||0; var p=kf2IsPass(k,v);
+      var vs=v+(k.unit=='%'?'%':' '+k.unit);
+      cardHtml+='<div style="background:#fff;border-radius:6px;padding:.4em .5em;border-left:4px solid '+k.clr+';box-shadow:0 1px 3px rgba(14,165,233,.12)">';
+      cardHtml+='<div style="display:flex;justify-content:space-between;margin-bottom:.2em">';
+      cardHtml+='<div style="width:1.8em;height:1.8em;border-radius:6px;background:'+k.clr+';color:#fff;font-size:.9em;font-weight:900;display:flex;align-items:center;justify-content:center">'+k.ico+'</div>';
+      cardHtml+='<span style="font-size:.65em;font-weight:800;padding:.1em .4em;border-radius:5px;background:'+(p?'#dcfce7':'#fee2e2')+';color:'+(p?'#15803d':'#dc2626')+'">'+(p?'✓ ผ่าน':'✗ ไม่ผ่าน')+'</span></div>';
+      cardHtml+='<div style="font-size:1.3em;font-weight:900;color:#0f172a;line-height:1">'+vs+'</div>';
+      cardHtml+='<div style="font-size:.7em;color:#64748b;margin:.1em 0;font-weight:600">'+k.id+'. '+esc(k.nameEn)+'</div>';
+      cardHtml+='<div style="font-size:.65em;color:#94a3b8">เป้า: '+esc(k.target)+'</div>';
+      cardHtml+='<div style="display:inline-block;padding:.05em .4em;border-radius:5px;font-size:.62em;font-weight:800;background:'+(p?'#dcfce7':'#fee2e2')+';color:'+(p?'#15803d':'#dc2626')+'margin-top:.1em">'+(p?'บรรลุเป้าหมาย':'ต่ำกว่าเป้าหมาย')+'</div>';
+      cardHtml+='</div>';
+    });
+    cardHtml+='</div>';
   });
-  h.push('</tbody></table></div>');
 
-  // SIGNATURES
-  h.push('<div class=sec><div class="dot" style="background:#8b5cf6"></div><span style="color:#7c3aed">'+esc('ลายเซ็นผู้รับรอง')+'</span></div>');
-  h.push('<div class=sigs>');
-  h.push('<div class=sl><div class="sav savl">&#9997;&#65039;</div>');
-  h.push('<div class=sn>'+esc(d.preparer||'................................................')+'</div>');
-  h.push('<div class=sll></div>');
-  h.push('<div class=srl>'+esc('ผู้จัดทำ (Prepared by)')+'</div>');
-  h.push('<div class=sp>'+esc(d.preparerPos||'ผู้ช่วยแผนกคลังสินค้า')+'</div>');
-  h.push('<div class=sd>'+esc('วันที่')+' '+prepDate+'</div></div>');
-  h.push('<div class=sr><div class="sav savr">&#9989;</div>');
-  h.push('<div class=sn>'+esc(d.approver||'................................................')+'</div>');
-  h.push('<div class=slr></div>');
-  h.push('<div class=srr>'+esc('อนุมัติ (Approve)')+'</div>');
-  h.push('<div class=sp>'+esc(d.approverPos||'หัวหน้าแผนกคลังสินค้า')+'</div>');
-  h.push('<div class=sd>'+esc('วันที่')+' '+apprDate+'</div></div>');
-  h.push('</div>');
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>KPI '+mon+' '+yr+'</title><style>';
+  html+='*{margin:0;padding:0;box-sizing:border-box}';
+  html+='html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;background:#f0f9ff;color:#0f172a;font-size:'+basePx+'px}';
+  html+='.ph{background:linear-gradient(135deg,#0c4a6e,#0369a1 45%,#0ea5e9);padding:.55em 1em;color:#fff}';
+  html+='.ph-co{font-size:1.2em;font-weight:900;text-align:center;margin-bottom:.25em}';
+  html+='.ph-row{display:flex;align-items:center;justify-content:space-between}';
+  html+='.ph-title h1{font-size:1.05em;font-weight:900}.ph-title p{font-size:.7em;color:#bae6fd;margin-top:.1em}';
+  html+='.ph-meta{text-align:right;font-size:.9em;font-weight:800}.ph-meta small{font-size:.7em;color:#bae6fd;display:block}';
+  html+='.ph-sts{display:flex;gap:.4em;margin-top:.35em;justify-content:center}';
+  html+='.ph-st{padding:.2em .7em;border-radius:20px;font-size:.78em;font-weight:800}';
+  html+='.body{padding:.35em .7em}';
+  html+='.sec{display:flex;align-items:center;gap:.35em;margin:.35em 0 .25em;padding-bottom:.2em;border-bottom:2px solid #bae6fd}';
+  html+='.sec span{font-size:.95em;font-weight:800;color:#0369a1}';
+  html+='.dot{width:.45em;height:.45em;border-radius:50%;background:#0ea5e9;flex-shrink:0}';
+  html+='.tw{background:#fff;border-radius:7px;overflow:hidden;margin-bottom:.3em;border:1px solid #e0f2fe}';
+  html+='table{width:100%;border-collapse:collapse}';
+  html+='.th-b{background:linear-gradient(135deg,#0369a1,#0ea5e9)}';
+  html+='thead th{padding:.3em .5em;text-align:left;font-size:.68em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:#e0f2fe}';
+  html+='tbody tr{border-bottom:1px solid #f0f9ff}tbody tr:nth-child(even){background:#f8fbff}';
+  html+='tbody td{padding:.3em .5em;vertical-align:middle}';
+  html+='.tf{background:linear-gradient(135deg,#f0f9ff,#ecfdf5);padding:.25em .5em;display:flex;justify-content:space-between;font-size:.65em;font-weight:700;color:#0369a1;border-top:1px solid #bae6fd}';
+  html+='.p2w{background:#fff;border-radius:7px;overflow:hidden;margin-bottom:.3em;border:1px solid #e0f2fe}';
+  html+='.p2h{background:linear-gradient(135deg,#065f46,#059669)}';
+  html+='.p2h th{padding:.25em .4em;text-align:left;font-size:.65em;font-weight:800;text-transform:uppercase;color:#d1fae5}';
+  html+='.p2b td{padding:.22em .4em;border-bottom:1px solid #f0fdf4;vertical-align:top;font-size:.85em}';
+  html+='.p2b tr:nth-child(even) td{background:#f0fdf4}';
+  html+='.sigs{display:grid;grid-template-columns:1fr 1fr;border-radius:8px;overflow:hidden}';
+  html+='.sl{background:linear-gradient(145deg,#f0f9ff,#e0f2fe);padding:.5em .8em;text-align:center;border-right:1px solid #bae6fd}';
+  html+='.sr{background:linear-gradient(145deg,#f0fdf4,#dcfce7);padding:.5em .8em;text-align:center}';
+  html+='.sn{font-size:.9em;font-weight:900;margin-bottom:.35em}';
+  html+='.sll{border-top:2px solid #0ea5e9;margin:0 .8em .25em}.slr{border-top:2px solid #22c55e;margin:0 .8em .25em}';
+  html+='.foot{text-align:center;font-size:.6em;color:#94a3b8;margin-top:.35em;padding-top:.25em;border-top:1px solid #e0f2fe}';
+  // PRINT — landscape A4 หน้าเดียว ไม่ scale เพราะเนื้อหาถูกออกแบบให้พอดีแล้ว
+  html+='@media print{';
+  html+='@page{size:A4 landscape;margin:5mm 6mm}';
+  html+='html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;background:#f0f9ff}';
+  html+='tr{page-break-inside:avoid}';
+  html+='}';
+  html+='</style></head><body>';
 
-  h.push('<div class=foot>'+esc('บริษัท อาคเนย์ทร้าฟฟิค จำกัด')+' &nbsp;&middot;&nbsp; KPI '+esc('คลังสินค้าและจัดส่ง')+' &nbsp;&middot;&nbsp; '+esc(mon)+' '+yr+'</div>');
-  h.push('</div>');
-  h.push('<script>window.onload=function(){window.print();}<\/script>');
-  h.push('</body></html>');
+  html+='<div class="ph">';
+  html+='<div class="ph-co">🏢 '+esc('บริษัท อาคเนย์ทร้าฟฟิค จำกัด')+'</div>';
+  html+='<div style="height:1px;background:rgba(255,255,255,.2);margin:.3em 0"></div>';
+  html+='<div class="ph-row">';
+  html+='<div style="width:2.4em;height:2.4em;background:rgba(255,255,255,.15);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.3em;color:#fff;flex-shrink:0">📦</div>';
+  html+='<div class="ph-title" style="flex:1;margin:0 .6em"><h1>📊 '+esc('แดชบอร์ด KPI คลังสินค้าและจัดส่ง')+'</h1><p>'+esc('มุ่งเน้นความถูกต้อง รวดเร็ว ปลอดภัย และความพึงพอใจของลูกค้า')+'</p></div>';
+  html+='<div class="ph-meta">'+esc(mon)+' '+yr+'<small>พิมพ์เมื่อ '+today+'</small></div>';
+  html+='</div>';
+  html+='<div class="ph-sts">';
+  html+='<div class="ph-st" style="background:#dcfce7;color:#15803d;border:1.5px solid #86efac">✅ ผ่านเป้าหมาย '+pass+' รายการ</div>';
+  html+='<div class="ph-st" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5">❌ ไม่ผ่าน '+fail+' รายการ</div>';
+  html+='<div class="ph-st" style="background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.3)">📊 KPI ทั้งหมด '+KF2_KPIS.length+' รายการ</div>';
+  html+='</div></div>';
 
-  var w=window.open('','_blank','width=900,height=820');
-  w.document.write(h.join(''));
+  html+='<div class="body">';
+  html+='<div class="sec"><div class="dot"></div><span>ภาพรวม KPI ประจำเดือน</span></div>';
+  html+=cardHtml;
+
+  html+='<div class="sec"><div class="dot"></div><span>รายละเอียด KPI — '+esc(mon)+' '+yr+'</span></div>';
+  html+='<div class="tw"><table><thead class="th-b"><tr>';
+  html+='<th style="width:26px;text-align:center">ที่</th>';
+  html+='<th style="min-width:120px">KPI</th>';
+  html+='<th style="text-align:center;width:80px">เป้าหมาย</th>';
+  html+='<th style="text-align:center;width:90px">ปฏิบัติจริง</th>';
+  html+='<th style="text-align:center;width:110px">ผลการดำเนินงาน</th>';
+  html+='<th>วิธีการวัด</th>';
+  html+='</tr></thead><tbody>'+rows+'</tbody>';
+  html+='<tfoot><tr><td colspan="2" style="padding:.25em .5em;background:#f0f9ff;font-size:.65em;font-weight:700;color:#0369a1;border-top:1px solid #bae6fd">รวม KPI ทั้งหมด '+KF2_KPIS.length+' รายการ</td>';
+  html+='<td colspan="2" style="padding:.25em .5em;background:#f0f9ff;text-align:center;font-size:.65em;font-weight:700;color:#15803d;border-top:1px solid #bae6fd">✅ ผ่าน '+pass+'</td>';
+  html+='<td colspan="2" style="padding:.25em .5em;background:#f0f9ff;text-align:center;font-size:.65em;font-weight:700;color:#dc2626;border-top:1px solid #bae6fd">❌ ไม่ผ่าน '+fail+' | คะแนนรวม '+Math.round(pass/KF2_KPIS.length*100)+'%</td>';
+  html+='</tr></tfoot></table></div>';
+
+  html+='<div class="sec"><div class="dot" style="background:#059669"></div><span style="color:#059669">การดำเนินการแก้ไข/ปรับปรุง (Corrective action / Improvement)</span></div>';
+  html+='<div class="p2w"><table><thead class="p2h"><tr>';
+  html+='<th style="width:22px;text-align:center">ที่</th>';
+  html+='<th style="width:55px">เดือน</th>';
+  html+='<th>ข้อผิดพลาด / Fault</th>';
+  html+='<th>การวิเคราะห์หาสาเหตุ / Root Cause Analysis</th>';
+  html+='<th>แนวทางแก้ไข / Corrective Action</th>';
+  html+='<th style="width:75px">ผู้รับผิดชอบ</th>';
+  html+='<th style="width:70px">กำหนดเสร็จ</th>';
+  html+='</tr></thead><tbody class="p2b">'+p2rows+'</tbody></table></div>';
+
+  html+='<div class="sec"><div class="dot" style="background:#8b5cf6"></div><span style="color:#7c3aed">ลายเซ็นผู้รับรอง</span></div>';
+  html+='<div class="sigs">';
+  html+='<div class="sl">';
+  html+='<div style="width:2em;height:2em;border-radius:50%;background:linear-gradient(135deg,#0369a1,#0ea5e9);color:#fff;font-size:1.1em;display:flex;align-items:center;justify-content:center;margin:0 auto .3em">✏️</div>';
+  html+='<div class="sn">'+esc(d.preparer||'................................................')+'</div>';
+  html+='<div class="sll"></div>';
+  html+='<div style="font-size:.75em;font-weight:800;color:#0369a1">ผู้จัดทำ (Prepared by)</div>';
+  html+='<div style="font-size:.75em;color:#475569;margin-top:.1em">'+esc(d.preparerPos||'ผู้ช่วยแผนกคลังสินค้า')+'</div>';
+  html+='<div style="font-size:.65em;color:#64748b;margin-top:.35em">วันที่ '+prepDate+'</div></div>';
+  html+='<div class="sr">';
+  html+='<div style="width:2em;height:2em;border-radius:50%;background:linear-gradient(135deg,#059669,#22c55e);color:#fff;font-size:1.1em;display:flex;align-items:center;justify-content:center;margin:0 auto .3em">✅</div>';
+  html+='<div class="sn">'+esc(d.approver||'................................................')+'</div>';
+  html+='<div class="slr"></div>';
+  html+='<div style="font-size:.75em;font-weight:800;color:#059669">อนุมัติ (Approve)</div>';
+  html+='<div style="font-size:.75em;color:#475569;margin-top:.1em">'+esc(d.approverPos||'หัวหน้าแผนกคลังสินค้า')+'</div>';
+  html+='<div style="font-size:.65em;color:#64748b;margin-top:.35em">วันที่ '+apprDate+'</div></div>';
+  html+='</div>';
+
+  html+='<div class="foot">บริษัท อาคเนย์ทร้าฟฟิค จำกัด &nbsp;·&nbsp; KPI คลังสินค้าและจัดส่ง &nbsp;·&nbsp; '+esc(mon)+' '+yr+'</div>';
+  html+='</div>';
+  html+='<script>window.onload=function(){window.print();}<\/script></body></html>';
+
+  var w=window.open('','_blank','width=1200,height=820');
+  w.document.write(html);
   w.document.close();
 }
 
