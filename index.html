@@ -3088,6 +3088,7 @@ document.addEventListener('click',function(e){
 });
 
 function printDashboard(theme){
+  try{
   var isDark=(theme==='dark');
   // ── รวบรวมข้อมูลจาก allTasks ──────────────────────────────────────────
   var filtered=allTasks.slice();
@@ -3373,14 +3374,13 @@ function printDashboard(theme){
   html+='<div class="foot">TMS v2.0 &nbsp;·&nbsp; Dashboard Report &nbsp;·&nbsp; '+monLabel+' &nbsp;·&nbsp; พิมพ์: '+printDate+'</div>';
   html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
-  // ใช้ Blob URL กัน popup blocker
-  var blob=new Blob([html],{type:'text/html;charset=utf-8'});
-  var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');
-  a.href=url; a.target='_blank'; a.rel='noopener';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
+  // เปิดในหน้าต่างใหม่แล้วเขียน HTML โดยตรง
+  var w=window.open('','_blank');
+  if(!w){ alert('กรุณาอนุญาต Popup สำหรับเว็บนี้ก่อนครับ\n(คลิกที่ไอคอน popup blocked ในแถบ address)'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  }catch(err){ alert('เกิดข้อผิดพลาด: '+err.message); }
 }
 
 
@@ -4135,14 +4135,13 @@ function kf2Print(){
   html+='</div>';
   html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
-  // ใช้ Blob URL กัน popup blocker
-  var blob=new Blob([html],{type:'text/html;charset=utf-8'});
-  var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');
-  a.href=url; a.target='_blank'; a.rel='noopener';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
+  // เปิดในหน้าต่างใหม่แล้วเขียน HTML โดยตรง
+  var w=window.open('','_blank');
+  if(!w){ alert('กรุณาอนุญาต Popup สำหรับเว็บนี้ก่อนครับ\n(คลิกที่ไอคอน popup blocked ในแถบ address)'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  }catch(err){ alert('เกิดข้อผิดพลาด: '+err.message); }
 }
 
 
