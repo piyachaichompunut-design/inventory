@@ -4056,8 +4056,10 @@ function getDateRange(preset) {
     var from = document.getElementById('f-df').value;
     var to   = document.getElementById('f-dt2').value;
     if (!from && !to) return null;
-    var f = from ? new Date(from) : new Date(2000,0,1);
-    var t = to   ? new Date(to+'T23:59:59') : new Date(2099,11,31);
+    // แปลงเป็น local date (ไม่ใช่ UTC) กัน timezone shift ทำให้วันคลาดเคลื่อน
+    var parseLocal = function(s){ var p=s.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); };
+    var f = from ? parseLocal(from) : new Date(2000,0,1);
+    var t = to   ? new Date(+parseLocal(to)+86399999) : new Date(2099,11,31,23,59,59);
     return [f, t];
   }
   return null; // 'all'
