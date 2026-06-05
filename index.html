@@ -3071,7 +3071,6 @@ function resetDash(){
 
 
 function printDashboard(theme){
-  try{
   var isDark=(theme==='dark');
   // ── รวบรวมข้อมูลจาก allTasks ──────────────────────────────────────────
   var filtered=allTasks.slice();
@@ -3363,7 +3362,7 @@ function printDashboard(theme){
   w.document.open();
   w.document.write(html);
   w.document.close();
-  }catch(err){ alert('เกิดข้อผิดพลาด: '+err.message); }
+}
 
 
 function loadDash(){
@@ -4123,7 +4122,6 @@ function kf2Print(){
   w.document.open();
   w.document.write(html);
   w.document.close();
-  }catch(err){ alert('เกิดข้อผิดพลาด: '+err.message); }
 }
 
 
