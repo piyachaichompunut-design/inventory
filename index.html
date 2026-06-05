@@ -6836,173 +6836,145 @@ function kpPrintTable(){
   var startThai=kpFmtThaiDate(emp.startDate);
   var passCount=kpState.kpiItems.filter(function(k){return k.maxScore>0&&Math.round(k.score/k.maxScore*100)>=k.target;}).length;
   var failCount=kpState.kpiItems.length-passCount;
+  var n=kpState.kpiItems.length;
+
+  // auto-scale: landscape A4 ~297×210mm usable ~283×194mm
+  // target: fit n rows + header in one page; base 13px at 10 rows
+  var basePx=Math.min(15,Math.max(9,Math.floor(130/Math.max(n,4))));
+  var scaleVal=(basePx/13).toFixed(3);
 
   var rows=kpState.kpiItems.map(function(k,i){
     var pct=k.maxScore>0?Math.min(100,Math.round(k.score/k.maxScore*100)):0;
     var pass=pct>=k.target;
     var barC=pct>=90?'#16a34a':pct>=75?'#2563eb':pct>=60?'#d97706':'#dc2626';
-    var isEven=i%2===0;
     return '<tr class="'+(pass?'pr':'pf')+'">'+
-      '<td style="text-align:center;width:40px;font-size:12px;font-weight:800;color:#94a3b8">'+(i+1)+'</td>'+
-      '<td style="font-weight:600;color:#1e293b;font-size:13px">'+esc(k.name)+'</td>'+
-      '<td style="text-align:center"><span style="background:#fef3c7;color:#b45309;padding:2px 10px;border-radius:14px;font-weight:700;font-size:11px">'+k.target+'%</span></td>'+
-      '<td style="text-align:center;font-weight:700;color:#64748b;font-size:13px">'+k.maxScore+'</td>'+
-      '<td style="text-align:center"><span style="font-size:20px;font-weight:900;color:'+barC+'">'+k.score+'</span></td>'+
-      '<td style="text-align:center;font-weight:900;color:'+barC+';font-size:14px">'+pct+'%</td>'+
-      '<td style="min-width:140px"><div style="background:#e2e8f0;border-radius:99px;height:8px;overflow:hidden;position:relative">'+
-        '<div style="width:'+pct+'%;height:100%;border-radius:99px;background:linear-gradient(90deg,'+barC+','+barC+'cc)"></div>'+
-        '<div style="position:absolute;top:0;bottom:0;left:'+k.target+'%;width:2px;background:#f59e0b;border-radius:1px"></div>'+
-      '</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:9px;margin-top:2px">'+
-        '<span style="color:'+barC+'">ได้: '+pct+'%</span>'+
-        '<span style="color:#f59e0b">เป้า: '+k.target+'%</span>'+
-      '</div></td>'+
-      '<td style="text-align:center"><span style="background:'+(pass?'#dcfce7':'#fee2e2')+';color:'+(pass?'#15803d':'#dc2626')+';border:1.5px solid '+(pass?'#86efac':'#fca5a5')+';padding:3px 12px;border-radius:20px;font-size:11px;font-weight:800;white-space:nowrap">'+(pass?'✅ ผ่าน':'❌ ไม่ผ่าน')+'</span></td>'+
-      '<td style="font-size:11px;color:#64748b;max-width:130px">'+esc(k.note||'–')+'</td>'+
+      '<td style="text-align:center;width:28px;font-weight:800;color:#94a3b8">'+(i+1)+'</td>'+
+      '<td style="font-weight:700;color:#0f172a">'+esc(k.name)+'</td>'+
+      '<td style="text-align:center"><span style="background:#fef3c7;color:#b45309;padding:1px 7px;border-radius:10px;font-weight:800">'+k.target+'%</span></td>'+
+      '<td style="text-align:center;color:#64748b;font-weight:700">'+k.maxScore+'</td>'+
+      '<td style="text-align:center;font-weight:900;color:'+barC+';font-size:1.15em">'+k.score+'</td>'+
+      '<td style="text-align:center;font-weight:900;color:'+barC+'">'+pct+'%</td>'+
+      '<td style="min-width:110px;padding-right:8px">'+
+        '<div style="background:#e2e8f0;border-radius:99px;height:7px;overflow:hidden;position:relative">'+
+          '<div style="width:'+pct+'%;height:100%;border-radius:99px;background:'+barC+'"></div>'+
+          '<div style="position:absolute;top:0;bottom:0;left:'+k.target+'%;width:2px;background:#f59e0b"></div>'+
+        '</div>'+
+        '<div style="display:flex;justify-content:space-between;font-size:.72em;margin-top:1px">'+
+          '<span style="color:'+barC+'">ได้ '+pct+'%</span>'+
+          '<span style="color:#f59e0b">เป้า '+k.target+'%</span>'+
+        '</div>'+
+      '</td>'+
+      '<td style="text-align:center">'+
+        '<span style="background:'+(pass?'#dcfce7':'#fee2e2')+';color:'+(pass?'#15803d':'#dc2626')+';border:1.5px solid '+(pass?'#86efac':'#fca5a5')+';padding:2px 10px;border-radius:20px;font-weight:800;white-space:nowrap">'+(pass?'✅ ผ่าน':'❌ ไม่ผ่าน')+'</span>'+
+      '</td>'+
+      '<td style="color:#64748b;max-width:120px;font-size:.9em">'+esc(k.note||'–')+'</td>'+
     '</tr>';
   }).join('');
 
-  var w=window.open('','_blank','width=1000,height=820');
+  var w=window.open('','_blank','width=1100,height=820');
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8">'+
     '<title>รายงาน KPI — '+esc(emp.name+' '+emp.surname)+'</title>'+
     '<style>'+
     '*{margin:0;padding:0;box-sizing:border-box}'+
-    'body{font-family:"Segoe UI",Sarabun,Arial,sans-serif;background:#eef2f7;color:#1e293b}'+
-
+    'html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;color:#1e293b;background:#eef2f7;font-size:'+basePx+'px}'+
     // HEADER
-    '.hdr{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 45%,#4f46e5 75%,#7c3aed 100%);'+
-      'color:#fff;padding:32px 40px;position:relative;overflow:hidden}'+
-    '.hdr-deco1{position:absolute;top:-70px;right:-70px;width:240px;height:240px;border-radius:50%;background:rgba(255,255,255,.05)}'+
-    '.hdr-deco2{position:absolute;bottom:-90px;right:100px;width:300px;height:300px;border-radius:50%;background:rgba(255,255,255,.03)}'+
-    '.hdr-deco3{position:absolute;top:20px;right:260px;width:60px;height:60px;border-radius:50%;background:rgba(255,255,255,.06)}'+
-    '.hdr-inner{display:flex;justify-content:space-between;align-items:center;position:relative;z-index:1}'+
-    '.hdr-badge{display:inline-block;font-size:9px;font-weight:900;letter-spacing:1px;text-transform:uppercase;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);padding:3px 10px;border-radius:4px;margin-bottom:10px}'+
-    '.hdr-title{font-size:22px;font-weight:900;margin-bottom:6px;letter-spacing:.3px}'+
-    '.hdr-sub{font-size:12px;opacity:.8;margin-bottom:4px}'+
-    '.hdr-tenure{font-size:11px;opacity:.6;display:flex;align-items:center;gap:6px;margin-top:6px}'+
-    '.hdr-tenure span{background:rgba(255,255,255,.1);padding:2px 8px;border-radius:4px}'+
-    '.hdr-score .num{font-size:62px;font-weight:900;line-height:1;background:linear-gradient(180deg,#fff,rgba(255,255,255,.6));-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:right}'+
-    '.pass-pill{display:inline-block;padding:5px 16px;border-radius:20px;font-size:12px;font-weight:800;margin-top:8px}'+
-    '.ppas{background:#16a34a;color:#fff}'+
-    '.pfai{background:#dc2626;color:#fff}'+
-
-    // METRICS STRIP
-    '.metrics{display:grid;grid-template-columns:repeat(5,1fr);background:#fff;border-bottom:3px solid #1e3a8a}'+
-    '.metric{padding:16px 12px;text-align:center;border-right:1px solid #f1f5f9;position:relative}'+
+    '.hdr{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 50%,#7c3aed 100%);color:#fff;padding:.8em 1.2em;display:flex;align-items:center;justify-content:space-between;border-radius:0 0 10px 10px}'+
+    '.hdr-l .badge{font-size:.65em;font-weight:800;letter-spacing:.6px;text-transform:uppercase;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);padding:2px 8px;border-radius:4px;margin-bottom:.4em;display:inline-block}'+
+    '.hdr-l .name{font-size:1.5em;font-weight:900;line-height:1.2}'+
+    '.hdr-l .sub{font-size:.8em;opacity:.75;margin-top:.25em}'+
+    '.hdr-r{text-align:right}'+
+    '.hdr-r .score{font-size:3em;font-weight:900;line-height:1;background:linear-gradient(180deg,#fff,rgba(255,255,255,.55));-webkit-background-clip:text;-webkit-text-fill-color:transparent}'+
+    '.hdr-r .pill{display:inline-block;padding:3px 12px;border-radius:20px;font-size:.8em;font-weight:800;margin-top:.3em}'+
+    '.ppas{background:#16a34a;color:#fff} .pfai{background:#dc2626;color:#fff}'+
+    // METRICS
+    '.metrics{display:grid;grid-template-columns:repeat(5,1fr);background:#fff;border-bottom:3px solid #1e3a8a;margin-bottom:.4em}'+
+    '.metric{padding:.5em .6em;text-align:center;border-right:1px solid #f1f5f9}'+
     '.metric:last-child{border-right:none}'+
-    '.metric .mv{font-size:24px;font-weight:900;line-height:1}'+
-    '.metric .ml{font-size:10px;color:#64748b;font-weight:700;margin-top:5px;text-transform:uppercase;letter-spacing:.4px}'+
-    '.metric .mi{position:absolute;top:12px;right:12px;font-size:18px;opacity:.15}'+
-    '.m1 .mv{color:#1e3a8a}'+
-    '.m2 .mv{color:#7c3aed}'+
-    '.m3 .mv{color:#0891b2}'+
-    '.m4 .mv{color:#16a34a}'+
-    '.m5 .mv{color:#dc2626}'+
-
-    // GRADE BAR
-    '.gbar{background:linear-gradient(90deg,#0f172a,#1e293b);color:#fff;padding:10px 40px;display:flex;align-items:center;justify-content:space-between}'+
-    '.gbar .gl{font-size:11px;color:#64748b}'+
-    '.gbar .gc{font-size:14px;font-weight:900;letter-spacing:.5px}'+
-
-    // TABLE SECTION
-    '.tsec{padding:24px 32px 0}'+
-    '.tsec-title{font-size:12px;font-weight:900;color:#1e3a8a;text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:10px}'+
-    '.tsec-line{flex:1;height:1.5px;background:linear-gradient(90deg,#1e3a8a33,transparent)}'+
-    'table{width:100%;border-collapse:separate;border-spacing:0 5px}'+
-    'thead th{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;padding:6px 12px;text-align:left;border-bottom:2px solid #e2e8f0}'+
-    'tbody tr td{padding:11px 12px;vertical-align:middle;background:#fff}'+
-    'tbody tr td:first-child{border-radius:8px 0 0 8px;border-left:4px solid #e2e8f0}'+
-    'tbody tr td:last-child{border-radius:0 8px 8px 0}'+
+    '.metric .mv{font-size:1.5em;font-weight:900;line-height:1}'+
+    '.metric .ml{font-size:.65em;color:#64748b;font-weight:700;margin-top:.2em;text-transform:uppercase;letter-spacing:.3px}'+
+    '.m1 .mv{color:#1e3a8a}.m2 .mv{color:#7c3aed}.m3 .mv{color:#0891b2}.m4 .mv{color:#16a34a}.m5 .mv{color:#dc2626}'+
+    // TABLE
+    '.tsec{padding:.3em .8em 0}'+
+    'table{width:100%;border-collapse:separate;border-spacing:0 3px;font-size:1em}'+
+    'thead th{font-size:.68em;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;padding:4px 8px;border-bottom:2px solid #e2e8f0;text-align:left}'+
+    'tbody tr td{padding:5px 8px;vertical-align:middle;background:#fff}'+
+    'tbody tr td:first-child{border-radius:6px 0 0 6px;border-left:4px solid #e2e8f0}'+
+    'tbody tr td:last-child{border-radius:0 6px 6px 0}'+
     'tbody tr.pr td:first-child{border-left-color:#16a34a}'+
     'tbody tr.pf td:first-child{border-left-color:#dc2626}'+
-    'tfoot tr td{padding:12px;background:#f0f5ff;font-weight:800;font-size:13px;border-top:2px solid #1e3a8a22}'+
-    'tfoot tr td:first-child{border-radius:8px 0 0 8px;border-left:4px solid #1e3a8a}'+
-    'tfoot tr td:last-child{border-radius:0 8px 8px 0}'+
-
-    // SIGNATURE
-    '.sigsec{padding:20px 32px 32px;margin:0 0 0 0}'+
-    '.sigtitle{font-size:10px;font-weight:900;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:20px}'+
-    '.siggrid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}'+
+    'tfoot tr td{padding:6px 8px;background:#eff6ff;font-weight:800;border-top:2px solid #1e3a8a22}'+
+    'tfoot tr td:first-child{border-radius:6px 0 0 6px;border-left:4px solid #1e3a8a}'+
+    'tfoot tr td:last-child{border-radius:0 6px 6px 0}'+
+    // SIG
+    '.sigsec{padding:.5em .8em .6em;display:grid;grid-template-columns:repeat(3,1fr);gap:1em;margin-top:.3em}'+
     '.sigitem{text-align:center}'+
-    '.sigspace{height:56px}'+
-    '.sigline{height:1px;background:linear-gradient(90deg,transparent,#334155 30%,#334155 70%,transparent);margin-bottom:10px}'+
-    '.signame{font-weight:800;font-size:13px;color:#1e293b}'+
-    '.sigsub{font-size:11px;color:#94a3b8;margin-top:3px}'+
-    '.sigdate{font-size:11px;color:#94a3b8;margin-top:3px}'+
-
+    '.sigspace{height:2.5em}'+
+    '.sigline{height:1px;background:linear-gradient(90deg,transparent,#334155 30%,#334155 70%,transparent);margin-bottom:.4em}'+
+    '.signame{font-weight:800;font-size:.9em}'+
+    '.sigsub,.sigdate{font-size:.75em;color:#94a3b8;margin-top:.15em}'+
     // FOOTER
-    '.foot{text-align:center;font-size:10px;color:#94a3b8;padding:14px 32px 20px;display:flex;justify-content:space-between;align-items:center}'+
-    '.foot-logo{font-size:11px;font-weight:800;color:#1e3a8a;opacity:.4}'+
-
-    // PRINT
-    '@media print{@page{size:A4;margin:0}body{background:#eef2f7}'+
-    '*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'+
+    '.foot{text-align:center;font-size:.65em;color:#94a3b8;padding:.4em .8em .5em;display:flex;justify-content:space-between;border-top:1px solid #e2e8f0}'+
+    // PRINT — landscape A4, scale to fit
+    '@media print{'+
+      '@page{size:A4 landscape;margin:0}'+
+      'html{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
+      'body{padding:5mm 6mm 4mm;background:#eef2f7;'+
+           'transform-origin:top left;'+
+           'transform:scale('+scaleVal+');'+
+           'width:'+(100/parseFloat(scaleVal)).toFixed(1)+'%;'+
+      '}'+
+      'tr{page-break-inside:avoid}'+
+    '}'+
     '</style></head><body>'+
 
-    // === HEADER ===
+    // HEADER
     '<div class="hdr">'+
-      '<div class="hdr-deco1"></div><div class="hdr-deco2"></div><div class="hdr-deco3"></div>'+
-      '<div class="hdr-inner">'+
-        '<div>'+
-          '<div class="hdr-badge">📈 รายงาน KPI พนักงาน</div>'+
-          '<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.35);border-radius:20px;padding:4px 12px;margin:6px 0;font-size:12px;font-weight:800;color:#fbbf24;letter-spacing:.3px">'+
-            '<span>🏢</span> บริษัท เมิร์ค ไดเมนชันส์ จำกัด'+
-          '</div>'+
-          '<div class="hdr-title">'+esc(emp.name+' '+emp.surname)+'</div>'+
-          '<div class="hdr-sub">'+esc(emp.position||'')+(emp.department?' &nbsp;·&nbsp; '+esc(emp.department):'')+' &nbsp;·&nbsp; ประเมิน: <strong>'+d.thM[d.month-1]+' '+(d.year+543)+'</strong></div>'+
-          (emp.startDate?'<div class="hdr-tenure">📅 <span>เริ่มงาน '+startThai+'</span> <span>อายุงาน '+tenureStr+'</span></div>':'')+
+      '<div class="hdr-l">'+
+        '<div class="badge">📈 รายงาน KPI พนักงาน — บริษัท เมิร์ค ไดเมนชันส์ จำกัด</div>'+
+        '<div class="name">'+esc(emp.name+' '+emp.surname)+'</div>'+
+        '<div class="sub">'+esc(emp.position||'')+(emp.department?' · '+esc(emp.department):'')+' · ประเมิน: <strong>'+d.thM[d.month-1]+' '+(d.year+543)+'</strong>'+
+          (emp.startDate?' · เริ่มงาน '+startThai+' · อายุงาน '+tenureStr:'')+
         '</div>'+
-        '<div class="hdr-score">'+
-          '<div class="num">'+d.totPct+'%</div>'+
-          '<div style="text-align:right"><span class="pass-pill '+(parseFloat(d.totPct)>=70?'ppas':'pfai')+'">'+(parseFloat(d.totPct)>=70?'✅ ผ่านการประเมิน':'❌ ไม่ผ่าน')+'</span></div>'+
-        '</div>'+
+      '</div>'+
+      '<div class="hdr-r">'+
+        '<div class="score">'+d.totPct+'%</div>'+
+        '<div><span class="pill '+(parseFloat(d.totPct)>=70?'ppas':'pfai')+'">'+(parseFloat(d.totPct)>=70?'✅ ผ่านการประเมิน':'❌ ไม่ผ่าน')+'</span></div>'+
       '</div>'+
     '</div>'+
 
-    // === METRICS ===
+    // METRICS
     '<div class="metrics">'+
-      '<div class="metric m1"><div class="mi">🏆</div><div class="mv">'+d.totScore+'/'+d.totMax+'</div><div class="ml">คะแนนรวม</div></div>'+
-      '<div class="metric m2"><div class="mi">📊</div><div class="mv">'+d.totPct+'%</div><div class="ml">เปอร์เซ็นต์รวม</div></div>'+
-      '<div class="metric m3"><div class="mi">📋</div><div class="mv">'+kpState.kpiItems.length+'</div><div class="ml">หัวข้อ KPI</div></div>'+
-      '<div class="metric m4"><div class="mi">✅</div><div class="mv">'+passCount+'</div><div class="ml">ผ่านเป้าหมาย</div></div>'+
-      '<div class="metric m5"><div class="mi">❌</div><div class="mv">'+failCount+'</div><div class="ml">ไม่ผ่านเป้าหมาย</div></div>'+
+      '<div class="metric m1"><div class="mv">'+d.totScore+'/'+d.totMax+'</div><div class="ml">คะแนนรวม</div></div>'+
+      '<div class="metric m2"><div class="mv">'+d.totPct+'%</div><div class="ml">เปอร์เซ็นต์</div></div>'+
+      '<div class="metric m3"><div class="mv">'+kpState.kpiItems.length+'</div><div class="ml">หัวข้อ KPI</div></div>'+
+      '<div class="metric m4"><div class="mv">'+passCount+'</div><div class="ml">ผ่านเป้าหมาย</div></div>'+
+      '<div class="metric m5"><div class="mv">'+failCount+'</div><div class="ml">ไม่ผ่าน</div></div>'+
     '</div>'+
 
-    // === GRADE BAR ===
-    '<div class="gbar">'+
-      '<span class="gl">เกณฑ์ผ่าน: <strong style="color:#fff">'+d.thr+'%</strong></span>'+
-      '<span class="gc">'+gradeLabel+'</span>'+
-      '<span class="gl">เปอร์เซ็นต์: <strong style="color:'+(parseFloat(d.totPct)>=70?'#4ade80':'#f87171')+'">'+d.totPct+'%</strong></span>'+
-    '</div>'+
-
-    // === TABLE ===
+    // TABLE
     '<div class="tsec">'+
-    '<div class="tsec-title">📋 ตาราง KPI ประจำเดือน <span class="tsec-line"></span></div>'+
     '<table><thead><tr>'+
-      '<th style="width:40px">#</th>'+
-      '<th style="min-width:200px">หัวข้อ KPI</th>'+
+      '<th style="width:28px">#</th>'+
+      '<th>หัวข้อ KPI</th>'+
       '<th style="text-align:center">เป้าหมาย</th>'+
       '<th style="text-align:center">คะแนนเต็ม</th>'+
       '<th style="text-align:center">คะแนนที่ได้</th>'+
       '<th style="text-align:center">%</th>'+
-      '<th style="min-width:150px">Progress</th>'+
+      '<th style="min-width:110px">Progress</th>'+
       '<th style="text-align:center">สถานะ</th>'+
       '<th>หมายเหตุ</th>'+
     '</tr></thead>'+
     '<tbody>'+rows+'</tbody>'+
     '<tfoot><tr>'+
-      '<td colspan="3" style="text-align:right;color:#1e3a8a;font-size:12px">รวมทั้งหมด</td>'+
+      '<td colspan="3" style="text-align:right;color:#1e3a8a;font-size:.9em">รวมทั้งหมด</td>'+
       '<td style="text-align:center;color:#1e3a8a">'+d.totMax+'</td>'+
-      '<td style="text-align:center;color:#1e3a8a;font-size:20px">'+d.totScore+'</td>'+
+      '<td style="text-align:center;color:#1e3a8a;font-size:1.2em">'+d.totScore+'</td>'+
       '<td style="text-align:center;color:#1e3a8a">'+d.totPct+'%</td>'+
-      '<td colspan="3"><div style="background:#e2e8f0;border-radius:99px;height:10px;overflow:hidden"><div style="width:'+d.totPct+'%;height:100%;background:linear-gradient(90deg,#1e3a8a,#4f46e5);border-radius:99px"></div></div></td>'+
-    '</tr></tfoot></table>'+
-    '</div>'+
+      '<td colspan="3"><div style="background:#e2e8f0;border-radius:99px;height:8px;overflow:hidden"><div style="width:'+d.totPct+'%;height:100%;background:linear-gradient(90deg,#1e3a8a,#4f46e5);border-radius:99px"></div></div></td>'+
+    '</tr></tfoot></table></div>'+
 
-    // === SIGNATURE ===
+    // SIGNATURE
     '<div class="sigsec">'+
-    '<div class="sigtitle">✍️ ลายเซ็นรับทราบ</div>'+
-    '<div class="siggrid">'+
     ['พนักงานรับทราบ','ผู้ประเมิน','หัวหน้าฝ่ายคลังสินค้า'].map(function(lbl){
       return '<div class="sigitem">'+
         '<div class="sigspace"></div>'+
@@ -7012,17 +6984,18 @@ function kpPrintTable(){
         '<div class="sigdate">วันที่ ......../......../............</div>'+
       '</div>';
     }).join('')+
-    '</div></div>'+
+    '</div>'+
 
-    // === FOOTER ===
+    // FOOTER
     '<div class="foot">'+
-      '<div class="foot-logo">TMS v2.0</div>'+
-      '<div>'+esc(emp.name+' '+emp.surname)+' &nbsp;·&nbsp; '+d.thM[d.month-1]+' '+(d.year+543)+' &nbsp;·&nbsp; คะแนน '+d.totScore+'/'+d.totMax+' = '+d.totPct+'%</div>'+
-      '<div class="foot-logo">'+new Date().getDate()+'/'+String(new Date().getMonth()+1).padStart(2,'0')+'/'+(new Date().getFullYear()+543)+'</div>'+
+      '<span>TMS v2.0</span>'+
+      '<span>'+esc(emp.name+' '+emp.surname)+' · '+d.thM[d.month-1]+' '+(d.year+543)+' · คะแนน '+d.totScore+'/'+d.totMax+' = '+d.totPct+'%</span>'+
+      '<span>พิมพ์: '+new Date().getDate()+'/'+(new Date().getMonth()+1)+'/'+(new Date().getFullYear()+543)+'</span>'+
     '</div>'+
     '<script>window.onload=function(){window.print();}<\/script></body></html>');
   w.document.close();
 }
+
 
 
 function kpPrintDash(useDark){
