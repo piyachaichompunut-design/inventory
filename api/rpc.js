@@ -1258,28 +1258,39 @@ async function handleTelegramCommand(text) {
 }
 
 // ============================================================================
-//  CRON: สรุปงานรับ/ส่งประจำวัน (7:00 น.)
+//  CRON: สรุปงานรับ/ส่งประจำวัน (07:45 น.)
 // ============================================================================
 async function dailyReceiveSend() {
   const today = todayStr();
-  // ดึงครบทุก field รวมไฟล์แนบ
-  const { data } = await db.from('tasks').select('*')
-    .eq('action_date', today).order('done', { ascending: true }).order('seq', { ascending: true });
-  const list = data || [];
-  const rap   = list.filter(t => t.duration === 'รับ');
-  const send  = list.filter(t => t.duration === 'ส่ง');
-  const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
 
-  if (!rap.length && !send.length && !other.length) return { success: true, count: 0 };
+  // ── ดึงงานวันนี้ (ทุก field รวมไฟล์แนบ) ────────────────────────────────
+  const { data: todayData } = await db.from('tasks').select('*')
+    .eq('action_date', today)
+    .order('done', { ascending: true })
+    .order('seq',  { ascending: true });
+  const list = todayData || [];
 
-  // helper แสดงรายละเอียด 1 งาน พร้อมสถานะ + ไฟล์แนบ
-  const fmtTask = (t, i) => {
+  // ── ดึงงานค้างจากวันก่อน (ยังไม่ done, action_date < today) ────────────
+  const { data: overdueData } = await db.from('tasks').select('*')
+    .eq('done', false)
+    .lt('action_date', today)
+    .order('action_date', { ascending: true })
+    .order('seq',         { ascending: true });
+  const overdueList = overdueData || [];
+
+  // ไม่มีงานเลยทั้ง 2 ส่วน → ไม่ส่งข้อความ
+  if (!list.length && !overdueList.length) return { success: true, count: 0 };
+
+  // ── helper แสดงรายละเอียด 1 งาน พร้อมสถานะ + วันที่ + ไฟล์แนบ ──────────
+  const fmtTask = (t, i, showDate = false) => {
     const statusIcon = t.done ? '✅' : t.task_status === 'Doing' ? '🟣' : '🔵';
     let s = (i + 1) + '. 📋 <b>' + tgEsc(t.task || '-') + '</b>\n';
     s += '   ' + statusIcon + ' ' + tgEsc(t.done ? 'Done' : (t.task_status || 'To Do')) + '\n';
+    if (showDate && t.action_date)
+      s += '   📅 กำหนด: ' + tgDate(t.action_date) + ' (' + tgEsc(calcDays(dstr(t.action_date))) + ')\n';
     if (t.categories) s += '   🏷️ ' + tgEsc(t.categories) + '\n';
-    if (t.sales_name)  s += '   👤 ' + tgEsc(t.sales_name) + '\n';
-    if (t.note)        s += '   📝 ' + tgEsc(t.note) + '\n';
+    if (t.sales_name) s += '   👤 ' + tgEsc(t.sales_name) + '\n';
+    if (t.note)       s += '   📝 ' + tgEsc(t.note) + '\n';
     try {
       const files = typeof t.attachments === 'string'
         ? JSON.parse(t.attachments || '[]')
@@ -1294,37 +1305,60 @@ async function dailyReceiveSend() {
     return s;
   };
 
-  let msg = '🌅 <b>งานรับ/ส่งประจำวัน</b>\n';
-  msg += '📅 ' + tgDate(today) + '\n';
-  msg += '📊 รวมทั้งหมด: ' + list.length + ' งาน';
-  if (rap.length)   msg += ' | 📦 รับ ' + rap.length;
-  if (send.length)  msg += ' | 🚚 ส่ง ' + send.length;
-  if (other.length) msg += ' | 📋 อื่นๆ ' + other.length;
-  msg += '\n';
+  // ── แยกประเภท รับ / ส่ง / อื่นๆ สำหรับงานวันนี้ ──────────────────────
+  const rap   = list.filter(t => t.duration === 'รับ');
+  const send  = list.filter(t => t.duration === 'ส่ง');
+  const other = list.filter(t => t.duration !== 'รับ' && t.duration !== 'ส่ง');
 
+  // ── สร้างข้อความ ──────────────────────────────────────────────────────
+  let msg = '🌅 <b>สรุปงานประจำวัน</b>\n';
+  msg += '📅 ' + tgDate(today) + '\n';
+
+  // สรุปตัวเลขงานวันนี้
+  if (list.length) {
+    msg += '\n📊 <b>งานวันนี้ทั้งหมด ' + list.length + ' งาน</b>';
+    if (rap.length)   msg += '  |  📦 รับ ' + rap.length;
+    if (send.length)  msg += '  |  🚚 ส่ง ' + send.length;
+    if (other.length) msg += '  |  📋 อื่นๆ ' + other.length;
+    msg += '\n';
+  } else {
+    msg += '\n📊 วันนี้ไม่มีงานใหม่\n';
+  }
+
+  // งานรับวันนี้
   if (rap.length) {
     msg += '\n━━━━━━━━━━━━━━━━\n';
-    msg += '📦 <b>งานรับ (' + rap.length + ')</b>\n';
+    msg += '📦 <b>งานรับวันนี้ (' + rap.length + ')</b>\n';
     msg += '━━━━━━━━━━━━━━━━\n';
     rap.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
   }
 
+  // งานส่งวันนี้
   if (send.length) {
     msg += '\n━━━━━━━━━━━━━━━━\n';
-    msg += '🚚 <b>งานส่ง (' + send.length + ')</b>\n';
+    msg += '🚚 <b>งานส่งวันนี้ (' + send.length + ')</b>\n';
     msg += '━━━━━━━━━━━━━━━━\n';
     send.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
   }
 
+  // งานอื่นๆ วันนี้
   if (other.length) {
     msg += '\n━━━━━━━━━━━━━━━━\n';
-    msg += '📋 <b>งานอื่นๆ (' + other.length + ')</b>\n';
+    msg += '📋 <b>งานอื่นๆ วันนี้ (' + other.length + ')</b>\n';
     msg += '━━━━━━━━━━━━━━━━\n';
     other.forEach((t, i) => { msg += fmtTask(t, i) + '\n'; });
   }
 
+  // งานค้างจากวันก่อน
+  if (overdueList.length) {
+    msg += '\n━━━━━━━━━━━━━━━━\n';
+    msg += '🔴 <b>งานค้างจากวันก่อน (' + overdueList.length + ')</b>\n';
+    msg += '━━━━━━━━━━━━━━━━\n';
+    overdueList.forEach((t, i) => { msg += fmtTask(t, i, true) + '\n'; });
+  }
+
   await notifyTelegram(msg);
-  return { success: true, count: list.length };
+  return { success: true, count: list.length + overdueList.length };
 }
 
 // ============================================================================
