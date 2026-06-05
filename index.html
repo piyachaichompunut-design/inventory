@@ -8096,7 +8096,7 @@ function drsPrint(){
   var rows = drsRows.map(function(r,i){
     var d = drsDateThai(r.recvDate);
     var even = i%2===0;
-    var bg = even ? '#f5f8ff' : '#ebf0fe';
+    var bg = '#ebf0fe';
     return '<tr style="background:'+bg+'">'
       +'<td style="text-align:center;color:#64748b;font-weight:600;font-size:.85em;border-right:1px solid #f5e0c0">'+(i+1)+'</td>'
       +'<td style="font-weight:600;color:#1e293b;border-right:1px solid #f5e0c0;padding:.45em .6em">'+esc(r.company)+'</td>'
@@ -8116,7 +8116,7 @@ function drsPrint(){
   var fillCount = Math.max(0, 22 - n);
   var emptyRows = '';
   for(var k=0;k<fillCount;k++){
-    var bg2 = (n+k)%2===0 ? '#f5f8ff' : '#ebf0fe';
+    var bg2 = '#ebf0fe';
     emptyRows += '<tr style="background:'+bg2+'">'
       +'<td style="text-align:center;color:#d1d5db;font-size:.85em;border-right:1px solid #f5e0c0">'+(n+k+1)+'</td>'
       +'<td style="border-right:1px solid #f5e0c0"></td>'
