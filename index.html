@@ -3371,7 +3371,7 @@ function printDashboard(theme){
   html+='</div>';
 
   html+='<div class="foot">TMS v2.0 &nbsp;·&nbsp; Dashboard Report &nbsp;·&nbsp; '+monLabel+' &nbsp;·&nbsp; พิมพ์: '+printDate+'</div>';
-  html+='<script>window.onload=function(){window.print();}<\/script></body></html>';
+  html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
   var w=window.open('','_blank','width=1200,height=820');
   w.document.write(html);
@@ -4128,7 +4128,7 @@ function kf2Print(){
 
   html+='<div class="foot">บริษัท อาคเนย์ทร้าฟฟิค จำกัด &nbsp;·&nbsp; KPI คลังสินค้าและจัดส่ง &nbsp;·&nbsp; '+esc(mon)+' '+yr+'</div>';
   html+='</div>';
-  html+='<script>window.onload=function(){window.print();}<\/script></body></html>';
+  html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
   var w=window.open('','_blank','width=1200,height=820');
   w.document.write(html);
@@ -4724,7 +4724,7 @@ function printTasks(docTitle){
     '<tbody>'+rows+'</tbody></table>'+
 
     '<div class="foot">TMS v2.0 · '+esc(docTitle)+' · พิมพ์: '+printDate+' · '+n+' รายการ</div>'+
-    '<script>window.onload=function(){window.print();}<\/script></body></html>');
+    '<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>');
   w.document.close();
 }
 
@@ -5402,7 +5402,7 @@ function printWJob() {
       '<td colspan="5" style="text-align:right">น้ำหนักรวมทั้งหมด</td>'+
       '<td style="text-align:right;font-size:16px">'+fmtKg(job.TotalWeight)+' KG</td>'+
     '</tr></tfoot></table>'+
-    '<script>window.onload=function(){window.print();}<\/script></body></html>');
+    '<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>');
   w.document.close();
 }
 
@@ -7285,7 +7285,7 @@ function kpPrintTable(){
       '<span>'+esc(emp.name+' '+emp.surname)+' · '+d.thM[d.month-1]+' '+(d.year+543)+' · คะแนน '+d.totScore+'/'+d.totMax+' = '+d.totPct+'%</span>'+
       '<span>พิมพ์: '+new Date().getDate()+'/'+(new Date().getMonth()+1)+'/'+(new Date().getFullYear()+543)+'</span>'+
     '</div>'+
-    '<script>window.onload=function(){window.print();}<\/script></body></html>');
+    '<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>');
   w.document.close();
 }
 
@@ -7497,7 +7497,7 @@ function kpPrintDash(useDark){
       '<span>'+esc((emp.name||'')+' '+(emp.surname||''))+' · '+d.thM[d.month-1]+' '+(d.year+543)+' · '+d.totScore+'/'+d.totMax+' = '+d.totPct+'%</span>'+
       '<span>พิมพ์: '+new Date().getDate()+'/'+(new Date().getMonth()+1)+'/'+(new Date().getFullYear()+543)+'</span>'+
     '</div>'+
-    '<script>window.onload=function(){window.print();}<\/script></body></html>');
+    '<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>');
   w.document.close();
 }
 
