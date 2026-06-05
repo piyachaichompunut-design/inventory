@@ -1435,21 +1435,14 @@ function appLogout(){
         <option>Done</option><option>Cancel</option>
       </select>
       <button class="dbd-reset-btn" onclick="resetDash()">🔄 รีเซ็ต</button>
-      <div style="position:relative;display:inline-block" id="dbd-print-wrap">
-        <button class="dbd-reset-btn" onclick="toggleDbdPrintDd()"
-          style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-color:#f97316;font-weight:700">
-          🖨️ ปริ้นซ์ ▾
-        </button>
-        <div id="dbd-print-dd" style="display:none;position:fixed;top:auto;bottom:auto;right:auto;background:#1e293b;border:1px solid #334155;border-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.6);min-width:220px;z-index:99999;overflow:hidden">
-          <div style="padding:6px 12px;font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #334155">เลือกธีมปริ้นซ์</div>
-          <div onclick="document.getElementById('dbd-print-dd').style.display='none';printDashboard('dark')" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-bottom:1px solid #334155;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
-            <span style="font-size:18px">🌙</span><div><div>Dark Mode</div><div style="font-size:10px;color:#64748b;font-weight:400">โทนมืด เหมือนหน้าจอ</div></div>
-          </div>
-          <div onclick="document.getElementById('dbd-print-dd').style.display='none';printDashboard('cream')" style="display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;color:#e2e8f0;font-size:13px;font-weight:600" onmouseover="this.style.background='#334155'" onmouseout="this.style.background=''">
-            <span style="font-size:18px">☀️</span><div><div>Cream Minimal</div><div style="font-size:10px;color:#64748b;font-weight:400">พื้นครีม สะอาด อ่านง่าย</div></div>
-          </div>
-        </div>
-      </div>
+      <button class="dbd-reset-btn" onclick="printDashboard('dark')"
+        style="background:linear-gradient(135deg,#1e293b,#334155);color:#e2e8f0;border-color:#475569;font-weight:700">
+        🌙 ปริ้นซ์ Dark
+      </button>
+      <button class="dbd-reset-btn" onclick="printDashboard('cream')"
+        style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-color:#f97316;font-weight:700">
+        ☀️ ปริ้นซ์ Cream
+      </button>
     </div>
   </div>
 
