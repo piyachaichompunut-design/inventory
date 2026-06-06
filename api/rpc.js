@@ -1008,7 +1008,7 @@ async function handleTelegramCommand(text) {
   };
   // ดึงส่วนวันที่ออกจากคำสั่ง รองรับทั้ง "วันที่ 4/6/2026" และ "4/6/2026"
   const extractDate = (str) => {
-    const cleaned2 = str.replace(/วันที่/g, ' ').trim();
+    const cleaned2 = str.split('วันที่').join(' ').trim();
     const tok = cleaned2.split(/\s+/).filter(Boolean);
     for (const t of tok) { const p = parseDate(t); if (p) return p; }
     return null;
@@ -1043,7 +1043,7 @@ async function handleTelegramCommand(text) {
     for (const { keys, val } of map) {
       for (const k of keys) {
         if (lower.includes(k)) {
-          const rest = s.replace(new RegExp(k, 'i'), '').trim();
+          const rest = s.split(k).join('').trim();
           return { status: val, rest };
         }
       }
@@ -1208,7 +1208,7 @@ async function handleTelegramCommand(text) {
 
   // /kpi [ชื่อ] หรือ /kpi [ชื่อ] เดือน5/2026
   if (lower.startsWith('/kpi') || cleaned.startsWith('/เคพีไอ')) {
-    let rest = cleaned.replace(/^\/kpi/i, '').replace(/^\/เคพีไอ/, '').trim();
+    let rest = cleaned.replace(/^\/kpi/i, '').replace('/เคพีไอ', '').trim();
     // ดึงเดือน/ปี ออกจากข้อความ รองรับ "เดือน5/2026", "5/2026", "เดือน 5/2569"
     let wantMonth = null, wantYear = null;
     const mMatch = rest.match(/(?:เดือน)?\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})/);
@@ -1217,7 +1217,7 @@ async function handleTelegramCommand(text) {
       wantYear = parseInt(mMatch[2]);
       if (wantYear < 100) wantYear += 2000;
       if (wantYear >= 2500) wantYear -= 543; // พ.ศ. → ค.ศ.
-      rest = rest.replace(mMatch[0], '').replace(/เดือน/g, '').trim();
+      rest = rest.replace(mMatch[0], '').split('เดือน').join('').trim();
     }
     const name = rest.trim();
     if (!name) return 'พิมพ์ชื่อพนักงานด้วยครับ เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026';
@@ -1298,7 +1298,7 @@ async function handleTelegramCommand(text) {
 
   // ── /ข้อมูล [ชื่อ] — ดูข้อมูลพนักงาน: วันลาคงเหลือ + รายการวันที่ลา ───────
   if (cleaned.startsWith('/ข้อมูล') || cleaned.startsWith('/พนักงาน') || lower.startsWith('/emp')) {
-    const nameQ = cleaned.replace(/^\\/ข้อมูล/, '').replace(/^\\/พนักงาน/, '').replace(/^\\/emp/i, '').trim();
+    const nameQ = cleaned.replace("/\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25", "").replace("/\u0e1e\u0e19\u0e31\u0e01\u0e07\u0e32\u0e19", "").replace("/emp", "").trim();
     if (!nameQ) return '👤 พิมพ์ชื่อพนักงานด้วยครับ เช่น\n/ข้อมูล สมชาย\n/ข้อมูล วรรณี';
 
     // ดึง staff ทั้งหมดแล้วค้นหาชื่อ
