@@ -928,7 +928,8 @@ async function handleTelegramCommand(text) {
       '👤 /งานของ [ชื่อ] — เช่น /งานของ สมชาย\n' +
       '🗓️ /งานวันที่ [วันที่] [สถานะ] — เช่น /งานวันที่ 5/6/2026 to do\n' + '🗓️ /งาน [วันที่] — รูปแบบสั้น เช่น /งาน 5/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
-      '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do'
+      '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
+      '👤 /ข้อมูล [ชื่อ] — วันลาคงเหลือ + รายการลาของพนักงาน เช่น /ข้อมูล สมชาย'
     );
   }
 
@@ -1293,6 +1294,76 @@ async function handleTelegramCommand(text) {
     const statusLabel = wantStatus ? ' [' + wantStatus + ']' : '';
     return fmtDetail('🔍 <b>ผลค้นหา "' + tgEsc(kw) + '"' + tgEsc(statusLabel) + ' ({n})</b>', list)
       || '🔍 ไม่พบงานที่มีคำว่า "' + tgEsc(kw) + '"' + (wantStatus ? ' สถานะ ' + wantStatus : '');
+  }
+
+  // ── /ข้อมูล [ชื่อ] — ดูข้อมูลพนักงาน: วันลาคงเหลือ + รายการวันที่ลา ───────
+  if (cleaned.startsWith('/ข้อมูล') || cleaned.startsWith('/พนักงาน') || lower.startsWith('/emp')) {
+    const nameQ = cleaned.replace(/^\\/ข้อมูล/, '').replace(/^\\/พนักงาน/, '').replace(/^\\/emp/i, '').trim();
+    if (!nameQ) return '👤 พิมพ์ชื่อพนักงานด้วยครับ เช่น\n/ข้อมูล สมชาย\n/ข้อมูล วรรณี';
+
+    // ดึง staff ทั้งหมดแล้วค้นหาชื่อ
+    const { data: staffData } = await db.from('emp_staff').select('*').eq('active', true);
+    const staff = (staffData || []).filter(s => {
+      const full = ((s.name || '') + ' ' + (s.surname || '') + ' ' + (s.nickname || '')).toLowerCase();
+      return full.includes(nameQ.toLowerCase());
+    });
+
+    if (!staff.length) return '❌ ไม่พบพนักงานชื่อ "' + tgEsc(nameQ) + '" ครับ\nลองพิมพ์ชื่อจริง ชื่อเล่น หรือนามสกุล';
+    if (staff.length > 3) return '🔍 พบพนักงาน ' + staff.length + ' คน กรุณาระบุชื่อให้ชัดเจนกว่านี้ครับ';
+
+    // ดึง attendance ปีนี้
+    const yr = new Date().getFullYear();
+    const yrStart = yr + '-01-01';
+    const yrEnd   = yr + '-12-31';
+    const { data: attData } = await db.from('emp_attendance').select('*')
+      .gte('date', yrStart).lte('date', yrEnd);
+
+    let msg = '';
+    for (const emp of staff) {
+      const fullName = tgEsc((emp.name || '') + ' ' + (emp.surname || ''));
+      const nick     = emp.nickname ? ' (' + tgEsc(emp.nickname) + ')' : '';
+      const pos      = emp.position ? tgEsc(emp.position) : '–';
+
+      // กรอง attendance ของพนักงานคนนี้
+      const myAtt = (attData || []).filter(a => String(a.emp_id) === String(emp.id));
+
+      // นับวันลาที่ใช้ไปแล้ว (ปีนี้)
+      let usedAL = 0, usedPL = 0, usedSL = 0;
+      const leaveList = [];
+      myAtt.forEach(a => {
+        const h = parseFloat(a.hours) || 8;
+        const days = h / 8;
+        const dateDisp = tgDate(a.date);
+        const note = a.note ? ' — ' + tgEsc(a.note) : '';
+        if (a.status === 'AL') { usedAL += days; leaveList.push('🌴 ' + dateDisp + ' ลาพักร้อน' + (days < 1 ? ' (' + h + 'ชม.)' : '') + note); }
+        if (a.status === 'PL') { usedPL += days; leaveList.push('📋 ' + dateDisp + ' ลากิจ'    + (days < 1 ? ' (' + h + 'ชม.)' : '') + note); }
+        if (a.status === 'SL') { usedSL += days; leaveList.push('🤒 ' + dateDisp + ' ลาป่วย'   + (days < 1 ? ' (' + h + 'ชม.)' : '') + note); }
+      });
+
+      // วันคงเหลือ
+      const totalAL = parseFloat(emp.annual_leave)   || 0;
+      const totalPL = parseFloat(emp.personal_leave) || 0;
+      const totalSL = parseFloat(emp.sick_leave)     || 0;
+      const remAL = Math.max(0, totalAL - usedAL);
+      const remPL = Math.max(0, totalPL - usedPL);
+      const remSL = Math.max(0, totalSL - usedSL);
+
+      msg += '👤 <b>' + fullName + nick + '</b>\n';
+      msg += '💼 ' + pos + '\n\n';
+      msg += '📊 <b>วันลาคงเหลือ (' + yr + ')</b>\n';
+      msg += '🌴 พักร้อน: <b>' + remAL.toFixed(1) + '</b> / ' + totalAL + ' วัน (ใช้ไป ' + usedAL.toFixed(1) + ')\n';
+      msg += '📋 ลากิจ:   <b>' + remPL.toFixed(1) + '</b> / ' + totalPL + ' วัน (ใช้ไป ' + usedPL.toFixed(1) + ')\n';
+      msg += '🤒 ลาป่วย:  <b>' + remSL.toFixed(1) + '</b> / ' + totalSL + ' วัน (ใช้ไป ' + usedSL.toFixed(1) + ')\n';
+
+      if (leaveList.length) {
+        msg += '\n📅 <b>รายการวันที่ลา (' + leaveList.length + ' ครั้ง)</b>\n';
+        leaveList.sort().forEach(l => { msg += l + '\n'; });
+      } else {
+        msg += '\n✅ ยังไม่มีการลาปีนี้ครับ\n';
+      }
+      msg += '\n';
+    }
+    return msg.trim();
   }
 
   // ไม่ใช่คำสั่งที่รู้จัก — เงียบไว้ (return null = ไม่ตอบ)
