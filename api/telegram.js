@@ -111,7 +111,7 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     task_status: 'To Do',
     notification: 'แจ้งล่วงหน้า',
     categories: taskData.categories || '',
-    note: 'บันทึกจาก Telegram',
+    note: '',
     doing: false,
     done: false,
     attachments
@@ -257,14 +257,17 @@ export default async function handler(req, res) {
         const botMentionText = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         const catKeyword = botMentionText.toLowerCase();
 
-        // ── ดึง file_id จากรูป/ไฟล์ที่แนบมาพร้อม Reply ──────────────────
+        // ── ดึง file_id จากรูป/ไฟล์ — ดูทั้งจาก msg ปัจจุบัน และ replyMsg ──
         let fileUrl = null;
         let fileName = null;
         const tgToken = process.env.TELEGRAM_BOT_TOKEN || '';
 
+        // หาไฟล์จาก msg ปัจจุบัน หรือ replyMsg (อันไหนมีก่อนใช้อันนั้น)
+        const fileSource = (msg.photo || msg.document) ? msg : replyMsg;
+
         // รูปภาพ
-        if (msg.photo && msg.photo.length > 0 && tgToken) {
-          const photo = msg.photo[msg.photo.length - 1]; // เอาขนาดใหญ่สุด
+        if (fileSource.photo && fileSource.photo.length > 0 && tgToken) {
+          const photo = fileSource.photo[fileSource.photo.length - 1];
           try {
             const infoRes = await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${photo.file_id}`);
             const info = await infoRes.json();
@@ -275,13 +278,13 @@ export default async function handler(req, res) {
           } catch(e) { console.error('photo fetch error:', e.message); }
         }
         // ไฟล์เอกสาร
-        else if (msg.document && tgToken) {
+        else if (fileSource.document && tgToken) {
           try {
-            const infoRes = await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${msg.document.file_id}`);
+            const infoRes = await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${fileSource.document.file_id}`);
             const info = await infoRes.json();
             if (info.ok) {
               fileUrl = `https://api.telegram.org/file/bot${tgToken}/${info.result.file_path}`;
-              fileName = msg.document.file_name || info.result.file_path.split('/').pop();
+              fileName = fileSource.document.file_name || info.result.file_path.split('/').pop();
             }
           } catch(e) { console.error('document fetch error:', e.message); }
         }
