@@ -1,4 +1,4 @@
-<!-- v3.9 -->
+<!-- v4.0 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -7863,7 +7863,7 @@ function drsLoadMonth(monthKey){
       drsRows = (rows||[]).map(function(r){
         return {
           company:r.company||'', recvDate:r.recvDate||'',
-          headSet:!!r.headSet, headMo:!!r.headMo, poNo:r.poNo||'',
+          headSet:!!r.headSet, headMo:!!r.headMo, headSep:!!r.headSep, poNo:r.poNo||'',
           docTaxOriginal:!!r.docTaxOriginal, docTemp:!!r.docTemp,
           docWeight:!!r.docWeight, docReport:!!r.docReport, docGoods:!!r.docGoods
         };
@@ -7886,7 +7886,7 @@ function drsRenderTable(){
   }
   dl.innerHTML = drsCompanies.map(function(c){ return '<option value="'+esc(c.name)+'">'; }).join('');
   if(!drsRows.length){
-    tb.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--muted)">📭 ยังไม่มีข้อมูล กด "➕ เพิ่มแถว" เพื่อเริ่มลงข้อมูล</td></tr>';
+    tb.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--muted)">📭 ยังไม่มีข้อมูล กด "➕ เพิ่มแถว" เพื่อเริ่มลงข้อมูล</td></tr>';
     return;
   }
   tb.innerHTML = drsRows.map(function(r,i){
@@ -7902,6 +7902,7 @@ function drsRenderTable(){
       '<td style="padding:6px 4px;text-align:center"><div style="position:relative;display:inline-block;width:100px"><input type="text" readonly value="'+drsDateThai(r.recvDate)+'" style="width:100%;padding:5px 22px 5px 6px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;background:var(--card);color:var(--txt);text-align:center;cursor:pointer" placeholder="วว/ดด/ปปปป" onclick="this.nextElementSibling.showPicker&&this.nextElementSibling.showPicker();this.nextElementSibling.click()"><input type="date" value="'+(r.recvDate||'')+'" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer" onchange="drsRowDate('+i+',this.value)"><span style="position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:11px;pointer-events:none">📅</span></div></td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headSet')+'</td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('headMo')+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+chk('headSep')+'</td>'+
       '<td style="padding:6px 4px"><input type="text" value="'+esc(r.poNo)+'" onchange="drsEdit('+i+',\'poNo\',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;background:var(--card);color:var(--txt)" placeholder="PO/PR"></td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('docTaxOriginal')+'</td>'+
       '<td style="padding:6px 4px;text-align:center">'+chk('docTemp')+'</td>'+
@@ -7929,7 +7930,7 @@ function drsRowDate(i, iso){
   drsRenderTable();
 }
 function drsAddRow(){
-  drsRows.push({company:'',recvDate:'',headSet:false,headMo:false,poNo:'',docTaxOriginal:false,docTemp:false,docWeight:false,docReport:false,docGoods:false});
+  drsRows.push({company:'',recvDate:'',headSet:false,headMo:false,headSep:false,poNo:'',docTaxOriginal:false,docTemp:false,docWeight:false,docReport:false,docGoods:false});
   drsRenderTable();
 }
 function drsDelRow(i){
@@ -8132,6 +8133,7 @@ function drsPrint(){
       +'<td style="text-align:center;color:#374151;font-weight:600;border-right:1px solid #f5e0c0">'+d+'</td>'
       +'<td style="text-align:center;border-right:1px solid #f5e0c0">'+ck(r.headSet)+'</td>'
       +'<td style="text-align:center;border-right:1px solid #f5e0c0">'+ck(r.headMo)+'</td>'
+      +'<td style="text-align:center;border-right:1px solid #f5e0c0">'+ck(r.headSep)+'</td>'
       +'<td style="text-align:center;font-weight:700;color:#1e3a8a;border-right:1px solid #f5e0c0">'+esc(r.poNo)+'</td>'
       +'<td style="text-align:center;border-right:1px solid #f5e0c0">'+ck(r.docTaxOriginal)+'</td>'
       +'<td style="text-align:center;border-right:1px solid #f5e0c0">'+ck(r.docTemp)+'</td>'
@@ -8148,6 +8150,7 @@ function drsPrint(){
     var bg2 = '#ebf0fe';
     emptyRows += '<tr style="background:'+bg2+'">'
       +'<td style="text-align:center;color:#d1d5db;font-size:.85em;border-right:1px solid #f5e0c0">'+(n+k+1)+'</td>'
+      +'<td style="border-right:1px solid #f5e0c0"></td>'
       +'<td style="border-right:1px solid #f5e0c0"></td>'
       +'<td style="border-right:1px solid #f5e0c0"></td>'
       +'<td style="border-right:1px solid #f5e0c0"></td>'
@@ -8266,17 +8269,18 @@ function drsPrint(){
       +'<th rowspan="2" style="width:28px">#</th>'
       +'<th rowspan="2" style="text-align:left;min-width:140px">บริษัท</th>'
       +'<th rowspan="2" style="width:72px">วันรับสินค้า</th>'
-      +'<th colspan="2" style="border-bottom:1px solid rgba(255,255,255,.2)">หัว</th>'
+      +'<th colspan="3" style="border-bottom:1px solid rgba(255,255,255,.2)">หัว</th>'
       +'<th rowspan="2" style="width:72px">PO/PR</th>'
       +'<th colspan="5" style="border-bottom:1px solid rgba(255,255,255,.2)">เอกสาร</th>'
     +'</tr>'
     +'<tr>'
       +'<th style="width:44px">SET</th>'
       +'<th style="width:44px">MD</th>'
+      +'<th style="width:44px">SEP</th>'
       +'<th style="width:72px">ใบกำกับภาษี/<br>ใบส่งของตัวจริง</th>'
       +'<th style="width:72px">ใบส่งของ<br>ชั่วคราว</th>'
       +'<th style="width:62px">ใบรับ<br>น้ำหนัก</th>'
-      +'<th style="width:62px">ใบ<br>รายงาน</th>'
+      +'<th style="width:62px">ใบ<br>วางบิล</th>'
       +'<th style="width:62px">ใบส่ง<br>สินค้า</th>'
     +'</tr>'
     +'</thead>'
@@ -8652,11 +8656,12 @@ document.addEventListener('DOMContentLoaded', function(){
                 <th style="padding:10px 8px;text-align:center;width:120px">วันรับสินค้า</th>
                 <th style="padding:10px 4px;text-align:center;width:70px">SET</th>
                 <th style="padding:10px 4px;text-align:center;width:70px">MD</th>
+                <th style="padding:10px 4px;text-align:center;width:70px">SEP</th>
                 <th style="padding:10px 8px;text-align:center;width:110px">PO/PR</th>
                 <th style="padding:10px 4px;text-align:center;width:64px">ใบกำกับภาษี/<br>ใบส่งของตัวจริง</th>
                 <th style="padding:10px 4px;text-align:center;width:64px">ใบส่งของ<br>ชั่วคราว</th>
                 <th style="padding:10px 4px;text-align:center;width:56px">ใบรับ<br>น้ำหนัก</th>
-                <th style="padding:10px 4px;text-align:center;width:56px">ใบ<br>รายงาน</th>
+                <th style="padding:10px 4px;text-align:center;width:56px">ใบ<br>วางบิล</th>
                 <th style="padding:10px 4px;text-align:center;width:56px">ใบส่ง<br>สินค้า</th>
                 <th style="padding:10px 8px;text-align:center;width:50px">ลบ</th>
               </tr>
