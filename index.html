@@ -1,4 +1,4 @@
-<!-- v4.0 -->
+<!-- v4.1 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -8245,6 +8245,7 @@ function drsPrint(){
       var total = drsRows.length;
       var setCount = drsRows.filter(function(r){return r.headSet;}).length;
       var mdCount  = drsRows.filter(function(r){return r.headMo;}).length;
+      var sepCount = drsRows.filter(function(r){return r.headSep;}).length;
       var docCount = drsRows.reduce(function(sum,r){
         return sum
           + (r.docTaxOriginal?1:0)
@@ -8257,6 +8258,7 @@ function drsPrint(){
         +'<div class="stat"><div class="sv">'+total+'</div><div class="sl">รายการทั้งหมด</div></div>'
         +'<div class="stat"><div class="sv">'+setCount+'</div><div class="sl">SET</div></div>'
         +'<div class="stat"><div class="sv">'+mdCount+'</div><div class="sl">MD</div></div>'
+        +'<div class="stat"><div class="sv">'+sepCount+'</div><div class="sl">SEP</div></div>'
         +'<div class="stat"><div class="sv">'+docCount+'</div><div class="sl">มีเอกสาร</div></div>'
         +'</div>';
     })()
