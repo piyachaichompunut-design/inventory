@@ -6409,7 +6409,8 @@ function renderEMPSummary(){
         });
         var yu=empYrUsed[e.id]||{AL:0,PL:0,SL:0,L:0,A:0,P:0};
         var alAlloc=e.annualLeave*8, plAlloc=e.personalLeave*8, slAlloc=e.sickLeave*8;
-        var alRemH=Math.max(0,alAlloc-yu.AL), plRemH=Math.max(0,plAlloc-yu.PL), slRemH=Math.max(0,slAlloc-yu.SL);
+        // คำนวณค่าจริง (ไม่ clamp) เพื่อให้เห็นค่าติดลบเมื่อใช้ลาเกินโควต้า
+        var alRemH=alAlloc-yu.AL, plRemH=plAlloc-yu.PL, slRemH=slAlloc-yu.SL;
         gt.p+=mp; gt.l+=ml; gt.w+=mw; gt.alh+=yu.AL; gt.plh+=yu.PL; gt.slh+=yu.SL; gt.a+=ma;
 
         // lbCell: shows "X วัน" used + "เหลือ X" (converts hours→days via _h2txt)
@@ -6421,8 +6422,14 @@ function renderEMPSummary(){
           '</div>';
         }
         function remCell(remH, allocH, txtColor){
-          var warn = remH<=0 && allocH>0;
-          return '<div style="font-weight:800;font-size:14px;color:'+(warn?'#ef4444':txtColor)+'">'+ _h2txt(remH) +'</div>';
+          var over = remH<0 && allocH>0;          // ใช้ลาเกินโควต้า → ติดลบ
+          var zero = remH===0 && allocH>0;        // ใช้ครบพอดี
+          var color = (over||zero) ? '#dc2626' : txtColor;
+          var bg = over ? 'background:#fee2e2;border-radius:6px;' : '';
+          var label = over
+            ? '⚠️ เกิน '+_h2txt(Math.abs(remH))   // แสดงค่าเกินเป็นบวกพร้อมป้าย
+            : _h2txt(remH);
+          return '<div style="font-weight:800;font-size:14px;color:'+color+';'+bg+'padding:2px 4px">'+ label +'</div>';
         }
         return '<tr>'+
           '<td class="la" style="color:var(--muted);font-size:11px">'+(i+1)+'</td>'+
