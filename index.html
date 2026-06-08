@@ -1,4 +1,4 @@
-<!-- v4.3 -->
+<!-- v4.5 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4729,6 +4729,7 @@ function openAdd(){
   document.getElementById('task-ov').classList.add('show');
 }
 function openEdit(id){
+  try{
   var t=allTasks.find(function(x){return x['ID']===id;});
   if(!t){toast('ไม่พบข้อมูล','error');return;}
   setText('m-ttl','✏️ แก้ไขงาน');
@@ -4761,6 +4762,7 @@ function openEdit(id){
     .withSuccessHandler(function(files){curAttach=files||[];renderFList();})
     .withFailureHandler(function(){})
     .getAttachments(id);
+  }catch(e){alert('openEdit error: '+e.message);}
 }
 function saveTask(){
   var task=document.getElementById('f-task').value.trim();
@@ -8503,6 +8505,28 @@ document.addEventListener('DOMContentLoaded', function(){
       toast('โหลดล้มเหลว: '+e.message,'error');
     })
     .getCategories();
+
+  // ── Auto refresh ทุก 30 วินาที (รับงานใหม่จาก Telegram อัตโนมัติ) ──
+  setInterval(function(){
+    // refresh เฉพาะเมื่อไม่มี modal เปิดอยู่ และอยู่ใน tab tasks หรือ dashboard
+    var modalOpen = document.querySelector('.ov.show');
+    if(modalOpen) return;
+    var activeTab = document.querySelector('.tab-btn.active');
+    var t = activeTab ? activeTab.dataset.tab : '';
+    if(t==='tasks'||t==='dashboard'||t===''||!t){
+      google.script.run
+        .withSuccessHandler(function(tasks){
+          if(!tasks) return;
+          allTasks = tasks;
+          filteredTasks = tasks.slice();
+          fillSaleSel(tasks);
+          applyF();
+          loadDash();
+        })
+        .withFailureHandler(function(){})
+        .getTasks(null);
+    }
+  }, 30000); // 30 วินาที
 });
 
 </script>
