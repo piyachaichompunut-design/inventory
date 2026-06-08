@@ -1,4 +1,4 @@
-<!-- v3.8 -->
+<!-- v3.9 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4734,7 +4734,13 @@ function openEdit(id){
   setText('m-ttl','✏️ แก้ไขงาน');
   document.getElementById('eid').value=t['ID'];
   document.getElementById('f-task').value=t['Task']||'';
-  document.getElementById('f-mcat').value=t['Categories']||'';
+  // เลือกหมวดหมู่ด้วยการ match text กันค่าเพี้ยน
+  var mcatEl=document.getElementById('f-mcat');
+  var wantCat=t['Categories']||'';
+  mcatEl.selectedIndex=0;
+  for(var ci=0;ci<mcatEl.options.length;ci++){
+    if(mcatEl.options[ci].text===wantCat){ mcatEl.selectedIndex=ci; break; }
+  }
   document.getElementById('f-nfm').value=t['Notification']||'แจ้งล่วงหน้า';
   document.getElementById('f-dt').value=(t['Action Date']||'').slice(0,10);
   document.getElementById('f-dr2').value=t['Duration']||'รับ';
@@ -4762,8 +4768,12 @@ function saveTask(){
   var id=document.getElementById('eid').value;
   var btn=document.getElementById('save-btn');
   btn.disabled=true; btn.textContent='กำลังบันทึก...';
+  // อ่านค่าหมวดหมู่จาก selectedIndex โดยตรง กันค่าเพี้ยนจาก value escaping
+  var catEl=document.getElementById('f-mcat');
+  var catVal=catEl.selectedIndex>=0 ? catEl.options[catEl.selectedIndex].text : catEl.value;
+  if(catVal==='-- เลือกหมวดหมู่ --') catVal='';
   var data={
-    'ID':id,'Task':task,'Categories':document.getElementById('f-mcat').value,
+    'ID':id,'Task':task,'Categories':catVal,
     'Notification':document.getElementById('f-nfm').value,'Action Date':document.getElementById('f-dt').value,
     'Duration':document.getElementById('f-dr2').value,'Task Status':document.getElementById('f-stm').value,
     'Sales Name':document.getElementById('f-sl2').value,'Note':document.getElementById('f-note').value,
