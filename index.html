@@ -1,4 +1,4 @@
-<!-- v3.7 -->
+<!-- v3.8 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -3075,8 +3075,8 @@ function resetDash(){
 
 
 function printDashboard(theme){
-  var isDark=(theme==='dark');
-  // ── รวบรวมข้อมูลจาก allTasks ──────────────────────────────────────────
+  var isDark=(theme!=='cream'); // default dark เหมือนหน้าจอจริง
+  // ── รวบรวมข้อมูล (ใช้ filter เดียวกับ dashboard จริง) ──────────────────
   var filtered=allTasks.slice();
   var mon=parseInt(document.getElementById('db-month').value)||0;
   var yr=parseInt(document.getElementById('db-year').value)||new Date().getFullYear();
@@ -3091,8 +3091,8 @@ function printDashboard(theme){
   if(st&&st!=='All')   filtered=filtered.filter(function(t){return t['Task Status']===st;});
 
   var total=filtered.length;
-  var sc={todo:0,doing:0,done:0,cancel:0,over:0};
   var now=new Date();
+  var sc={todo:0,doing:0,done:0,cancel:0,over:0};
   filtered.forEach(function(t){
     var s=t['Task Status']||'To Do';
     if(s==='To Do')sc.todo++; else if(s==='Doing')sc.doing++;
@@ -3101,8 +3101,9 @@ function printDashboard(theme){
     if(!isNaN(dt)&&dt<now&&s!=='Done'&&s!=='Cancel') sc.over++;
   });
   var donePct=total>0?Math.round(sc.done/total*100):0;
+  function pct(n){return total>0?Math.round(n/total*100):0;}
 
-  // monthly trend
+  // monthly trend (รับ/ส่ง ราย 12 เดือน)
   var mns=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   var recvArr=[],sendArr=[];
   for(var mm=1;mm<=12;mm++){
@@ -3119,253 +3120,220 @@ function printDashboard(theme){
   // category map
   var catMap={};
   filtered.forEach(function(t){var c=t['Categories']||'อื่นๆ';catMap[c]=(catMap[c]||0)+1;});
-  var catKeys=Object.keys(catMap).sort(function(a,b){return catMap[b]-catMap[a];}).slice(0,7);
+  var catKeys=Object.keys(catMap).sort(function(a,b){return catMap[b]-catMap[a];});
+  var catTop=catKeys.slice(0,7);
   var palette=['#3b82f6','#f97316','#10b981','#8b5cf6','#ef4444','#f59e0b','#06b6d4'];
 
-  // urgent tasks (top 10 not done)
+  // urgent/recent tasks (top 12 not done)
   var urgentList=filtered.filter(function(t){return t['Task Status']!=='Done'&&t['Task Status']!=='Cancel';})
     .sort(function(a,b){return (a['Action Date']||'').localeCompare(b['Action Date']||'');})
-    .slice(0,10);
+    .slice(0,12);
 
-  // ── theme colors ──────────────────────────────────────────────────────
-  var T=isDark?{
-    bg:'#0d1117',card:'#161b22',border:'#21262d',txt:'#e6edf3',sub:'#8b949e',
-    hdr:'linear-gradient(135deg,#161b22,#21262d)',accent:'#f97316',
-    gridLine:'rgba(255,255,255,.05)',axTxt:'#6b7280',tblHdr:'#21262d',tblHdrTxt:'#8b949e',
-    tblRow:'#161b22',tblAlt:'#0d1117',tblBrd:'#21262d',
-    statColors:['#f59e0b','#8b5cf6','#10b981','#374151']
-  }:{
-    bg:'#faf9f6',card:'#ffffff',border:'#e8e4da',txt:'#1e293b',sub:'#64748b',
-    hdr:'linear-gradient(135deg,#f5f0e8,#ede8dc)',accent:'#c2410c',
-    gridLine:'rgba(0,0,0,.06)',axTxt:'#94a3b8',tblHdr:'#f0ebe0',tblHdrTxt:'#78716c',
-    tblRow:'#ffffff',tblAlt:'#faf9f6',tblBrd:'#e8e4da',
-    statColors:['#d97706','#7c3aed','#059669','#9ca3af']
-  };
-
-  var thM=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  var thM=mns;
   var printDate=now.getDate()+' '+thM[now.getMonth()]+' '+(now.getFullYear()+543);
   var monLabel=mon>0?(thM[mon-1]+' '+yr):'ทุกเดือน';
 
-  // ── SVG sparklines ────────────────────────────────────────────────────
-  function sparklinePath(arr, w, h, color){
-    var max=Math.max.apply(null,arr)||1;
-    var pts=arr.map(function(v,i){ return [(i/(arr.length-1))*w, h-((v/max)*(h-4))+2]; });
-    var d=pts.map(function(p,i){ return (i===0?'M':'L')+p[0].toFixed(1)+' '+p[1].toFixed(1); }).join(' ');
-    return '<polyline points="'+pts.map(function(p){return p[0].toFixed(1)+','+p[1].toFixed(1);}).join(' ')+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+  // ── theme ──────────────────────────────────────────────────────────────
+  var T = isDark ? {
+    bg:'#0a0f1e', card:'#0d1525', cardBrd:'#1e2d45', txt:'#e2e8f0', sub:'#94a3b8',
+    grid:'rgba(255,255,255,.05)', ax:'#64748b', sidebar:'#0d1525',
+    tblHdrTxt:'#94a3b8', tblBrd:'#1e2d45', accent:'#f97316'
+  } : {
+    bg:'#f8f5ef', card:'#ffffff', cardBrd:'#e5dfd2', txt:'#1e293b', sub:'#64748b',
+    grid:'rgba(0,0,0,.05)', ax:'#94a3b8', sidebar:'#fffdf8',
+    tblHdrTxt:'#78716c', tblBrd:'#e5dfd2', accent:'#c2410c'
+  };
+  var ST={todo:'#f59e0b',doing:'#8b5cf6',done:'#10b981',cancel:'#64748b'};
+
+  // ── SVG: trend area chart (โค้งใหญ่เหมือนรูป 2) ─────────────────────────
+  var tW=820,tH=300,pad=36;
+  function tx(i){return pad+(i/11)*(tW-pad*2);}
+  function ty(v){return tH-pad-((v/maxTrend)*(tH-pad*2));}
+  function smoothPath(arr){
+    var p='M'+tx(0).toFixed(1)+','+ty(arr[0]).toFixed(1);
+    for(var i=1;i<arr.length;i++){
+      var x0=tx(i-1),y0=ty(arr[i-1]),x1=tx(i),y1=ty(arr[i]);
+      var cx=(x0+x1)/2;
+      p+=' C'+cx.toFixed(1)+','+y0.toFixed(1)+' '+cx.toFixed(1)+','+y1.toFixed(1)+' '+x1.toFixed(1)+','+y1.toFixed(1);
+    }
+    return p;
   }
-  var trendW=340,trendH=80;
-  var trendSvg='<svg viewBox="0 0 '+trendW+' '+trendH+'" width="100%" height="'+trendH+'" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">';
-  // grid lines
-  for(var g=0;g<=4;g++){
-    var gy=(trendH/4*g).toFixed(1);
-    trendSvg+='<line x1="0" y1="'+gy+'" x2="'+trendW+'" y2="'+gy+'" stroke="'+T.gridLine+'" stroke-width="1"/>';
+  function areaPath(arr){ return smoothPath(arr)+' L'+tx(11).toFixed(1)+','+(tH-pad)+' L'+tx(0).toFixed(1)+','+(tH-pad)+' Z'; }
+  var trendSvg='<svg viewBox="0 0 '+tW+' '+tH+'" width="100%" xmlns="http://www.w3.org/2000/svg">';
+  // y grid + labels
+  for(var g=0;g<=5;g++){
+    var gv=Math.round(maxTrend/5*(5-g));
+    var gy=(pad+(tH-pad*2)/5*g).toFixed(1);
+    trendSvg+='<line x1="'+pad+'" y1="'+gy+'" x2="'+(tW-pad)+'" y2="'+gy+'" stroke="'+T.grid+'" stroke-width="1"/>';
+    trendSvg+='<text x="'+(pad-6)+'" y="'+(parseFloat(gy)+3)+'" text-anchor="end" fill="'+T.ax+'" font-size="10" font-family="Sarabun">'+gv+'</text>';
   }
-  // area fill
-  var recvPts=recvArr.map(function(v,i){return [(i/11)*trendW,(trendH-((v/maxTrend)*(trendH-8))+4)];});
-  var sendPts=sendArr.map(function(v,i){return [(i/11)*trendW,(trendH-((v/maxTrend)*(trendH-8))+4)];});
-  var recvArea='M'+recvPts[0][0].toFixed(1)+','+trendH+' '+recvPts.map(function(p){return 'L'+p[0].toFixed(1)+','+p[1].toFixed(1);}).join(' ')+' L'+recvPts[11][0].toFixed(1)+','+trendH+' Z';
-  var sendArea='M'+sendPts[0][0].toFixed(1)+','+trendH+' '+sendPts.map(function(p){return 'L'+p[0].toFixed(1)+','+p[1].toFixed(1);}).join(' ')+' L'+sendPts[11][0].toFixed(1)+','+trendH+' Z';
-  trendSvg+='<path d="'+recvArea+'" fill="rgba(59,130,246,.15)"/>';
-  trendSvg+='<path d="'+sendArea+'" fill="rgba(249,115,22,.1)"/>';
-  trendSvg+=sparklinePath(recvArr,trendW,trendH,'#3b82f6');
-  trendSvg+=sparklinePath(sendArr,trendW,trendH,'#f97316');
-  // month labels
-  [0,2,4,6,8,10,11].forEach(function(i){
-    var x=(i/11*trendW).toFixed(1);
-    trendSvg+='<text x="'+x+'" y="'+(trendH+2)+'" text-anchor="middle" fill="'+T.axTxt+'" font-size="7" font-family="Sarabun,sans-serif">'+mns[i]+'</text>';
-  });
+  trendSvg+='<defs><linearGradient id="gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(59,130,246,.35)"/><stop offset="100%" stop-color="rgba(59,130,246,0)"/></linearGradient>'
+    +'<linearGradient id="gs" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(249,115,22,.3)"/><stop offset="100%" stop-color="rgba(249,115,22,0)"/></linearGradient></defs>';
+  trendSvg+='<path d="'+areaPath(recvArr)+'" fill="url(#gr)"/>';
+  trendSvg+='<path d="'+areaPath(sendArr)+'" fill="url(#gs)"/>';
+  trendSvg+='<path d="'+smoothPath(recvArr)+'" fill="none" stroke="#3b82f6" stroke-width="2.5"/>';
+  trendSvg+='<path d="'+smoothPath(sendArr)+'" fill="none" stroke="#f97316" stroke-width="2.5"/>';
+  for(var i=0;i<12;i++){
+    trendSvg+='<circle cx="'+tx(i).toFixed(1)+'" cy="'+ty(recvArr[i]).toFixed(1)+'" r="3" fill="#3b82f6"/>';
+    trendSvg+='<text x="'+tx(i).toFixed(1)+'" y="'+(tH-pad+16)+'" text-anchor="middle" fill="'+T.ax+'" font-size="9" font-family="Sarabun">'+mns[i]+'</text>';
+  }
   trendSvg+='</svg>';
 
-  // ── donut SVG (category) ───────────────────────────────────────────────
-  function donutSvg(slices, r, size){
-    var cx=size/2,cy=size/2,total=slices.reduce(function(a,b){return a+b.v;},0)||1;
+  // ── donut helper ───────────────────────────────────────────────────────
+  function donut(slices,size,cut){
+    var cx=size/2,cy=size/2,r=size/2-2,inner=r*cut;
+    var tot=slices.reduce(function(a,b){return a+b.v;},0)||1;
     var svg='<svg viewBox="0 0 '+size+' '+size+'" width="'+size+'" height="'+size+'" xmlns="http://www.w3.org/2000/svg">';
-    var angle=-Math.PI/2;
+    var ang=-Math.PI/2;
     slices.forEach(function(sl){
-      var sweep=2*Math.PI*sl.v/total;
-      var x1=cx+r*Math.cos(angle), y1=cy+r*Math.sin(angle);
-      angle+=sweep;
-      var x2=cx+r*Math.cos(angle), y2=cy+r*Math.sin(angle);
-      var large=sweep>Math.PI?1:0;
-      var inner=r*0.55;
-      var ix1=cx+inner*Math.cos(angle-sweep), iy1=cy+inner*Math.sin(angle-sweep);
-      var ix2=cx+inner*Math.cos(angle), iy2=cy+inner*Math.sin(angle);
-      svg+='<path d="M'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+r+','+r+' 0 '+large+',1 '+x2.toFixed(2)+','+y2.toFixed(2)+' L'+ix2.toFixed(2)+','+iy2.toFixed(2)+' A'+inner+','+inner+' 0 '+large+',0 '+ix1.toFixed(2)+','+iy1.toFixed(2)+' Z" fill="'+sl.c+'"/>';
+      if(sl.v<=0) return;
+      var sw=2*Math.PI*sl.v/tot;
+      var x1=cx+r*Math.cos(ang),y1=cy+r*Math.sin(ang);
+      var x2=cx+r*Math.cos(ang+sw),y2=cy+r*Math.sin(ang+sw);
+      var ix2=cx+inner*Math.cos(ang+sw),iy2=cy+inner*Math.sin(ang+sw);
+      var ix1=cx+inner*Math.cos(ang),iy1=cy+inner*Math.sin(ang);
+      var lg=sw>Math.PI?1:0;
+      svg+='<path d="M'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+r+','+r+' 0 '+lg+',1 '+x2.toFixed(2)+','+y2.toFixed(2)+' L'+ix2.toFixed(2)+','+iy2.toFixed(2)+' A'+inner+','+inner+' 0 '+lg+',0 '+ix1.toFixed(2)+','+iy1.toFixed(2)+' Z" fill="'+sl.c+'"/>';
+      ang+=sw;
     });
     svg+='</svg>';
     return svg;
   }
-  var catSlices=catKeys.map(function(k,i){return {v:catMap[k],c:palette[i]||'#64748b'};});
-  var statusSlices=[
-    {v:sc.todo,c:'#f59e0b'},{v:sc.doing,c:'#8b5cf6'},{v:sc.done,c:'#10b981'},{v:sc.cancel,c:'#374151'}
-  ];
+  var healthSlices=[{v:sc.todo,c:ST.todo},{v:sc.doing,c:ST.doing},{v:sc.done,c:ST.done},{v:sc.cancel,c:ST.cancel}];
+  var catSlices=catTop.map(function(k,i){return {v:catMap[k],c:palette[i]||'#64748b'};});
 
-  // ── h-bar chart rows ──────────────────────────────────────────────────
-  var statRows=['To Do','Doing','Done','Cancel'].map(function(lbl,i){
-    var v=[sc.todo,sc.doing,sc.done,sc.cancel][i];
-    var pct=total>0?Math.round(v/total*100):0;
-    return '<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.35em">'+
-      '<div style="width:4em;font-size:.8em;font-weight:700;color:'+T.sub+';text-align:right;flex-shrink:0">'+lbl+'</div>'+
-      '<div style="flex:1;background:'+T.border+';border-radius:99px;height:.8em;overflow:hidden">'+
-        '<div style="width:'+pct+'%;height:100%;background:'+T.statColors[i]+';border-radius:99px"></div>'+
-      '</div>'+
-      '<div style="width:2.5em;font-size:.8em;font-weight:800;color:'+T.statColors[i]+'">'+v+'</div>'+
-    '</div>';
+  // ── status bar (แนวนอน) ────────────────────────────────────────────────
+  var maxStat=Math.max(sc.todo,sc.doing,sc.done,sc.cancel)||1;
+  function statBar(lbl,n,c){
+    var w=Math.round(n/maxStat*100);
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">'
+      +'<span style="width:48px;font-size:11px;color:'+T.sub+'">'+lbl+'</span>'
+      +'<div style="flex:1;height:14px;background:'+T.grid+';border-radius:7px;overflow:hidden"><div style="width:'+w+'%;height:100%;background:'+c+';border-radius:7px"></div></div>'
+      +'<span style="width:28px;text-align:right;font-size:12px;font-weight:800;color:'+T.txt+'">'+n+'</span></div>';
+  }
+
+  // ── Top category bars ──────────────────────────────────────────────────
+  var maxCat=catTop.length?catMap[catTop[0]]:1;
+  var topCatHtml=catTop.slice(0,5).map(function(k,i){
+    var w=Math.round(catMap[k]/maxCat*100);
+    return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+      +'<span style="width:90px;font-size:10px;color:'+T.sub+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(k)+'</span>'
+      +'<div style="flex:1;height:12px;background:'+T.grid+';border-radius:6px;overflow:hidden"><div style="width:'+w+'%;height:100%;background:'+(palette[i]||'#64748b')+';border-radius:6px"></div></div>'
+      +'<span style="width:20px;text-align:right;font-size:11px;font-weight:700;color:'+T.txt+'">'+catMap[k]+'</span></div>';
   }).join('');
 
-  // ── urgent task rows ──────────────────────────────────────────────────
-  var urgentRows=urgentList.map(function(t,i){
-    var sc2={'To Do':'#f59e0b','Doing':'#8b5cf6','Done':'#10b981','Cancel':'#94a3b8'};
-    var st2=t['Task Status']||'To Do';
-    var adParts=(t['Action Date']||'').split('-');
-    var adDisp=adParts.length===3?(+adParts[2]+'/'+(+adParts[1])+'/'+(+adParts[0]+543)):(t['Action Date']||'–');
-    var rowBg=i%2===0?T.tblRow:T.tblAlt;
-    return '<tr style="background:'+rowBg+'">'+
-      '<td style="padding:.35em .5em;text-align:center;font-size:.8em;color:'+T.sub+'">'+
-        '<div style="width:1.4em;height:1.4em;border-radius:50%;background:'+(sc2[st2]||'#64748b')+';color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.8em;font-weight:900">'+(i+1)+'</div>'+
-      '</td>'+
-      '<td style="padding:.35em .5em;font-weight:600;color:'+T.txt+'">'+esc(t['Task']||'–')+'</td>'+
-      '<td style="padding:.35em .5em;text-align:center;font-size:.85em;font-weight:700;color:'+T.sub+'">'+adDisp+'</td>'+
-      '<td style="padding:.35em .5em;text-align:center">'+
-        '<span style="background:'+(sc2[st2]||'#64748b')+'22;color:'+(sc2[st2]||'#64748b')+';border:1px solid '+(sc2[st2]||'#64748b')+'44;padding:.1em .5em;border-radius:8px;font-size:.78em;font-weight:800">'+st2+'</span>'+
-      '</td>'+
-      '<td style="padding:.35em .5em;font-size:.8em;color:#f97316;font-weight:700">'+esc(t['Categories']||'–')+'</td>'+
-      '<td style="padding:.35em .5em;font-size:.8em;color:'+T.sub+'">'+esc(t['Sales Name']||'–')+'</td>'+
-    '</tr>';
+  // ── top 5 metric cards ─────────────────────────────────────────────────
+  function metricCard(icon,val,lbl,col){
+    return '<div style="flex:1;background:'+T.card+';border:1px solid '+T.cardBrd+';border-top:3px solid '+col+';border-radius:12px;padding:12px 14px">'
+      +'<div style="font-size:18px">'+icon+'</div>'
+      +'<div style="font-size:28px;font-weight:900;color:'+col+';line-height:1.1;margin-top:4px">'+val+'</div>'
+      +'<div style="font-size:11px;color:'+T.sub+';font-weight:600">'+lbl+'</div></div>';
+  }
+
+  // ── table rows ─────────────────────────────────────────────────────────
+  var tableRows=urgentList.map(function(t,i){
+    var d=t['Action Date']?(function(){var p=String(t['Action Date']).slice(0,10).split('-');return p.length===3?(+p[2]+'/'+(+p[1])+'/'+(+p[0]+543)):t['Action Date'];})():'';
+    var stColor=t['Task Status']==='Done'?ST.done:t['Task Status']==='Doing'?ST.doing:ST.todo;
+    return '<tr style="border-bottom:1px solid '+T.tblBrd+'">'
+      +'<td style="padding:6px 8px;color:'+T.sub+';font-size:11px">'+(i+1)+'</td>'
+      +'<td style="padding:6px 8px;color:'+T.txt+';font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(t['Task']||'')+'</td>'
+      +'<td style="padding:6px 8px;color:'+T.accent+';font-size:11px;white-space:nowrap">'+esc(t['Categories']||'-')+'</td>'
+      +'<td style="padding:6px 8px;color:'+T.sub+';font-size:11px;white-space:nowrap">'+d+'</td>'
+      +'<td style="padding:6px 8px;font-size:11px">'+esc(t['Duration']||'-')+'</td>'
+      +'<td style="padding:6px 8px"><span style="background:'+stColor+'22;color:'+stColor+';padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800">'+esc(t['Task Status']||'To Do')+'</span></td>'
+      +'</tr>';
   }).join('');
 
-  // ── HTML ──────────────────────────────────────────────────────────────
-  var basePx=13;
-  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>TMS Dashboard</title><style>';
-  html+='*{margin:0;padding:0;box-sizing:border-box}';
-  html+='html,body{font-family:"Sarabun","Segoe UI",Arial,sans-serif;background:'+T.bg+';color:'+T.txt+';font-size:'+basePx+'px}';
-  // header
-  html+='.hdr{background:'+T.hdr+';border-bottom:2px solid '+T.border+';padding:.6em 1em;display:flex;align-items:center;justify-content:space-between;margin-bottom:.5em}';
-  html+='.hdr-brand{display:flex;align-items:center;gap:.6em}';
-  html+='.hdr-ico{width:2.2em;height:2.2em;border-radius:8px;background:'+T.accent+';display:flex;align-items:center;justify-content:center;font-size:1.2em;flex-shrink:0}';
-  html+='.hdr-title{font-size:1.2em;font-weight:900;color:'+T.txt+'}';
-  html+='.hdr-sub{font-size:.72em;color:'+T.sub+';margin-top:.1em}';
-  // stat cards
-  html+='.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:.4em;margin-bottom:.5em}';
-  html+='.card{background:'+T.card+';border:1px solid '+T.border+';border-radius:8px;padding:.5em .7em;position:relative;overflow:hidden}';
-  html+='.card-ico{font-size:1.4em;margin-bottom:.2em}';
-  html+='.card-val{font-size:1.8em;font-weight:900;line-height:1}';
-  html+='.card-lbl{font-size:.7em;color:'+T.sub+';margin-top:.15em;font-weight:600}';
-  html+='.card-accent{position:absolute;top:0;right:0;width:3px;height:100%;border-radius:0 8px 8px 0}';
-  // grid
-  html+='.grid2{display:grid;grid-template-columns:1fr 1fr;gap:.5em;margin-bottom:.5em}';
-  html+='.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5em;margin-bottom:.5em}';
-  html+='.box{background:'+T.card+';border:1px solid '+T.border+';border-radius:8px;padding:.5em .7em}';
-  html+='.box-title{font-size:.72em;font-weight:800;color:'+T.sub+';text-transform:uppercase;letter-spacing:.4px;margin-bottom:.4em;display:flex;align-items:center;gap:.3em}';
-  // table
-  html+='table{width:100%;border-collapse:collapse}';
-  html+='thead th{background:'+T.tblHdr+';color:'+T.tblHdrTxt+';padding:.3em .5em;font-size:.68em;font-weight:800;text-transform:uppercase;letter-spacing:.3px;text-align:left}';
-  html+='tbody tr td{border-bottom:1px solid '+T.tblBrd+';font-size:.9em;vertical-align:middle}';
-  // donut
-  html+='.leg-row{display:flex;align-items:center;justify-content:space-between;padding:.2em 0;font-size:.78em}';
-  html+='.leg-dot{width:.65em;height:.65em;border-radius:50%;flex-shrink:0;margin-right:.4em}';
-  // footer
-  html+='.foot{text-align:center;font-size:.6em;color:'+T.sub+';border-top:1px solid '+T.border+';padding:.4em;margin-top:.4em}';
-  // progress bar
-  html+='.prog-bg{background:'+T.border+';border-radius:99px;height:.7em;overflow:hidden;margin-top:.3em}';
-  html+='.prog-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#10b981,#34d399)}';
-  // PRINT
-  html+='@media print{';
-  html+='@page{size:A4 landscape;margin:5mm 6mm}';
-  html+='html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;background:'+T.bg+'}';
-  html+='tr{page-break-inside:avoid}';
-  html+='}';
-  html+='</style></head><body>';
+  // ── compose HTML ───────────────────────────────────────────────────────
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>TMS Dashboard '+monLabel+'</title>'
+    +'<style>'
+    +'@import url("https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800;900&display=swap");'
+    +'*{margin:0;padding:0;box-sizing:border-box}'
+    +'html,body{font-family:"Sarabun",sans-serif;background:'+T.bg+';color:'+T.txt+'}'
+    +'.wrap{padding:14px 16px}'
+    +'.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}'
+    +'.brand{display:flex;align-items:center;gap:10px}'
+    +'.brand .ic{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#6366f1);display:flex;align-items:center;justify-content:center;font-size:20px}'
+    +'.brand .tt{font-size:18px;font-weight:900;color:'+T.txt+'}'
+    +'.brand .ss{font-size:11px;color:'+T.sub+'}'
+    +'.pill{background:'+T.card+';border:1px solid '+T.cardBrd+';border-radius:9px;padding:6px 12px;text-align:center;margin-left:6px}'
+    +'.pill .n{font-size:16px;font-weight:900;color:'+T.txt+'}'
+    +'.pill .l{font-size:9px;color:'+T.sub+'}'
+    +'.layout{display:flex;gap:12px}'
+    +'.side{width:210px;flex-shrink:0}'
+    +'.main{flex:1}'
+    +'.box{background:'+T.card+';border:1px solid '+T.cardBrd+';border-radius:12px;padding:14px;margin-bottom:12px}'
+    +'.box-t{font-size:12px;font-weight:800;color:'+T.sub+';margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}'
+    +'.metrics{display:flex;gap:10px;margin-bottom:12px}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'thead th{text-align:left;padding:7px 8px;font-size:10px;font-weight:800;color:'+T.tblHdrTxt+';text-transform:uppercase;border-bottom:2px solid '+T.tblBrd+'}'
+    +'@media print{@page{size:A4 landscape;margin:6mm}html,body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}'
+    +'</style></head><body><div class="wrap">'
 
-  // HEADER
-  html+='<div class="hdr">';
-  html+='<div class="hdr-brand">';
-  html+='<div class="hdr-ico">📊</div>';
-  html+='<div><div class="hdr-title">TMS Dashboard</div><div class="hdr-sub">ภาพรวมระบบการจัดการงานทั้งหมด</div></div>';
-  html+='</div>';
-  html+='<div style="text-align:center"><div style="font-size:.85em;font-weight:800;color:'+T.accent+'">'+monLabel+'</div><div style="font-size:.65em;color:'+T.sub+'">พิมพ์: '+printDate+'</div></div>';
-  html+='<div style="display:flex;gap:.5em">';
-  html+='<div style="text-align:center;padding:.3em .8em;background:'+T.card+';border:1px solid '+T.border+';border-radius:7px"><div style="font-size:1.4em;font-weight:900">'+total+'</div><div style="font-size:.65em;color:'+T.sub+'">ทั้งหมด</div></div>';
-  html+='<div style="text-align:center;padding:.3em .8em;background:'+T.card+';border:1px solid '+T.border+';border-radius:7px"><div style="font-size:1.4em;font-weight:900;color:#10b981">'+donePct+'%</div><div style="font-size:.65em;color:'+T.sub+'">สำเร็จ</div></div>';
-  html+='</div>';
-  html+='</div>';
+    // topbar
+    +'<div class="topbar"><div class="brand"><div class="ic">📊</div>'
+    +'<div><div class="tt">TMS Dashboard</div><div class="ss">ภาพรวมระบบการจัดการงานทั้งหมด · พิมพ์ '+printDate+'</div></div></div>'
+    +'<div style="display:flex"><div class="pill"><div class="n">'+total+'</div><div class="l">งานทั้งหมด</div></div>'
+    +'<div class="pill"><div class="n" style="color:#10b981">'+donePct+'%</div><div class="l">สำเร็จ</div></div>'
+    +'<div class="pill"><div class="n" style="font-size:13px">'+monLabel+'</div><div class="l">ช่วงเวลา</div></div></div></div>'
 
-  // STAT CARDS
-  html+='<div class="cards">';
-  var cardDefs=[
-    {ico:'📋',val:total,lbl:'งานทั้งหมด',c:'#3b82f6'},
-    {ico:'🔵',val:sc.todo,lbl:'To Do',c:'#f59e0b'},
-    {ico:'🟣',val:sc.doing,lbl:'Doing',c:'#8b5cf6'},
-    {ico:'✅',val:sc.done,lbl:'Done',c:'#10b981'},
-    {ico:'⚠️',val:sc.over,lbl:'เลยกำหนด',c:'#ef4444'}
-  ];
-  cardDefs.forEach(function(cd){
-    html+='<div class="card"><div class="card-accent" style="background:'+cd.c+'"></div>';
-    html+='<div class="card-ico">'+cd.ico+'</div>';
-    html+='<div class="card-val" style="color:'+cd.c+'">'+cd.val+'</div>';
-    html+='<div class="card-lbl">'+cd.lbl+'</div>';
-    html+='</div>';
-  });
-  html+='</div>';
+    +'<div class="layout">'
+    // ───── SIDEBAR ─────
+    +'<div class="side">'
+    +'<div class="box"><div class="box-t">Task Health</div>'
+    +'<div style="position:relative;text-align:center">'+donut(healthSlices,150,0.72)
+    +'<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center"><div style="font-size:30px;font-weight:900;color:'+T.txt+'">'+total+'</div><div style="font-size:10px;color:'+T.sub+'">งาน</div></div></div>'
+    +'<div style="margin-top:14px">'
+    +'<div style="margin-bottom:8px"><span style="font-size:13px;font-weight:700;color:'+T.txt+'">To Do</span> <span style="font-size:15px;font-weight:900;color:'+ST.todo+'">'+sc.todo+'</span> <span style="font-size:10px;color:'+T.sub+'">('+pct(sc.todo)+'%)</span></div>'
+    +'<div style="margin-bottom:8px"><span style="font-size:13px;font-weight:700;color:'+T.txt+'">Doing</span> <span style="font-size:15px;font-weight:900;color:'+ST.doing+'">'+sc.doing+'</span> <span style="font-size:10px;color:'+T.sub+'">('+pct(sc.doing)+'%)</span></div>'
+    +'<div style="margin-bottom:8px"><span style="font-size:13px;font-weight:700;color:'+T.txt+'">Done</span> <span style="font-size:15px;font-weight:900;color:'+ST.done+'">'+sc.done+'</span> <span style="font-size:10px;color:'+T.sub+'">('+pct(sc.done)+'%)</span></div>'
+    +'<div style="margin-bottom:10px"><span style="font-size:13px;font-weight:700;color:'+T.txt+'">Cancel</span> <span style="font-size:15px;font-weight:900;color:'+ST.cancel+'">'+sc.cancel+'</span> <span style="font-size:10px;color:'+T.sub+'">('+pct(sc.cancel)+'%)</span></div>'
+    +'<div style="font-size:10px;color:'+T.sub+';margin-bottom:3px">งานสำเร็จ</div>'
+    +'<div style="height:8px;background:'+T.grid+';border-radius:4px;overflow:hidden"><div style="width:'+donePct+'%;height:100%;background:#10b981"></div></div>'
+    +'<div style="font-size:12px;font-weight:800;color:#10b981;margin-top:3px">'+donePct+'%</div>'
+    +'</div></div>'
+    // KPI box
+    +'<div class="box"><div class="box-t">KPI เดือนนี้</div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:12px;color:'+T.sub+';margin-bottom:6px"><span>ประเมินแล้ว</span><span style="color:'+T.txt+';font-weight:700">'+sc.done+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:12px;color:'+T.sub+';margin-bottom:6px"><span>ผ่านเกณฑ์</span><span style="color:'+T.txt+';font-weight:700">'+donePct+'%</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:12px;color:'+T.sub+'"><span>เลยกำหนด</span><span style="color:#ef4444;font-weight:700">'+sc.over+'</span></div>'
+    +'</div></div>'
 
-  // ROW 2: trend + donut + status
-  html+='<div class="grid3">';
+    // ───── MAIN ─────
+    +'<div class="main">'
+    // 5 metric cards
+    +'<div class="metrics">'
+    +metricCard('📋',total,'งานทั้งหมด','#3b82f6')
+    +metricCard('📌',sc.todo,'To Do',ST.todo)
+    +metricCard('⚡',sc.doing,'Doing',ST.doing)
+    +metricCard('✅',sc.done,'Done',ST.done)
+    +metricCard('⚠️',sc.over,'เลยกำหนด','#ef4444')
+    +'</div>'
+    // trend + donut + status
+    +'<div style="display:flex;gap:12px;margin-bottom:12px">'
+    +'<div class="box" style="flex:2;margin-bottom:0"><div class="box-t">งานตามเดือน — Monthly Trend <span style="float:right;font-weight:600;text-transform:none"><span style="color:#3b82f6">● งานรับ</span> &nbsp;<span style="color:#f97316">● งานส่ง</span></span></div>'+trendSvg+'</div>'
+    +'<div class="box" style="flex:1;margin-bottom:0"><div class="box-t">งานตามหมวดหมู่</div>'
+    +'<div style="text-align:center">'+donut(catSlices,150,0.6)+'</div>'
+    +'<div style="margin-top:10px">'+catTop.map(function(k,i){return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:10px"><span style="width:9px;height:9px;border-radius:2px;background:'+(palette[i]||'#64748b')+'"></span><span style="flex:1;color:'+T.sub+'">'+esc(k)+'</span><span style="font-weight:700;color:'+T.txt+'">'+catMap[k]+'</span></div>';}).join('')+'</div>'
+    +'</div></div>'
+    // status bars + table
+    +'<div style="display:flex;gap:12px">'
+    +'<div class="box" style="flex:1;margin-bottom:0"><div class="box-t">สัดส่วนสถานะ</div>'
+    +statBar('To Do',sc.todo,ST.todo)+statBar('Doing',sc.doing,ST.doing)+statBar('Done',sc.done,ST.done)+statBar('Cancel',sc.cancel,ST.cancel)
+    +'<div class="box-t" style="margin-top:14px">Top หมวดหมู่</div>'+topCatHtml
+    +'</div>'
+    +'<div class="box" style="flex:2;margin-bottom:0"><div class="box-t">รายการงานล่าสุด / เร่งด่วน ('+urgentList.length+' รายการ)</div>'
+    +'<table><thead><tr><th>#</th><th>หัวข้องาน</th><th>หมวดหมู่</th><th>วันที่</th><th>ประเภท</th><th>สถานะ</th></tr></thead><tbody>'+tableRows+'</tbody></table>'
+    +'</div></div>'
+    +'</div>' // main
+    +'</div>' // layout
+    +'</div>'
 
-  // Trend
-  html+='<div class="box">';
-  html+='<div class="box-title">📈 งานตามเดือน — '+yr+'</div>';
-  html+=trendSvg;
-  html+='<div style="display:flex;gap:1em;margin-top:.3em">';
-  html+='<div style="display:flex;align-items:center;gap:.3em;font-size:.72em;color:'+T.sub+'"><div style="width:1.2em;height:.2em;background:#3b82f6;border-radius:2px"></div>งานรับ</div>';
-  html+='<div style="display:flex;align-items:center;gap:.3em;font-size:.72em;color:'+T.sub+'"><div style="width:1.2em;height:.2em;background:#f97316;border-radius:2px"></div>งานส่ง</div>';
-  html+='</div></div>';
+    +'<scr'+'ipt>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
 
-  // Category donut
-  html+='<div class="box" style="display:flex;flex-direction:column">';
-  html+='<div class="box-title">🏷️ งานตามหมวดหมู่</div>';
-  html+='<div style="display:flex;gap:.5em;align-items:center;flex:1">';
-  html+=donutSvg(catSlices.length?catSlices:[{v:1,c:'#e2e8f0'}],52,120);
-  html+='<div style="flex:1">';
-  catKeys.forEach(function(k,i){
-    var pct=Math.round(catMap[k]/total*100);
-    html+='<div class="leg-row"><div style="display:flex;align-items:center"><div class="leg-dot" style="background:'+(palette[i]||'#64748b')+'"></div><span>'+esc(k)+'</span></div><strong>'+catMap[k]+'</strong></div>';
-  });
-  html+='</div></div></div>';
-
-  // Status bar
-  html+='<div class="box">';
-  html+='<div class="box-title">📊 สัดส่วนสถานะ</div>';
-  html+=statRows;
-  html+='<div style="margin-top:.5em">';
-  html+='<div style="font-size:.72em;color:'+T.sub+';margin-bottom:.2em">งานสำเร็จ</div>';
-  html+='<div class="prog-bg"><div class="prog-fill" style="width:'+donePct+'%"></div></div>';
-  html+='<div style="font-size:.85em;font-weight:800;color:#10b981;margin-top:.2em">'+donePct+'%</div>';
-  html+='</div></div>';
-
-  html+='</div>'; // end grid3
-
-  // TASK TABLE
-  html+='<div class="box" style="margin-bottom:.4em">';
-  html+='<div class="box-title">⚡ รายการงานล่าสุด / เร่งด่วน <span style="margin-left:.5em;font-size:.9em;font-weight:400;color:'+T.sub+'">('+urgentList.length+' รายการที่ยังไม่เสร็จ)</span></div>';
-  html+='<table><thead><tr>';
-  html+='<th style="width:30px;text-align:center">#</th>';
-  html+='<th>หัวข้องาน</th>';
-  html+='<th style="text-align:center;width:90px">วันที่</th>';
-  html+='<th style="text-align:center;width:80px">สถานะ</th>';
-  html+='<th style="width:110px">หมวดหมู่</th>';
-  html+='<th style="width:110px">ผู้รับผิดชอบ</th>';
-  html+='</tr></thead><tbody>'+urgentRows+'</tbody></table>';
-  html+='</div>';
-
-  html+='<div class="foot">TMS v2.0 &nbsp;·&nbsp; Dashboard Report &nbsp;·&nbsp; '+monLabel+' &nbsp;·&nbsp; พิมพ์: '+printDate+'</div>';
-  html+='<script>window.onload=function(){window.print();}</scr'+'ipt></body></html>';
-
-  // เปิดในหน้าต่างใหม่แล้วเขียน HTML โดยตรง
   var w=window.open('','_blank');
-  if(!w){ alert('กรุณาอนุญาต Popup สำหรับเว็บนี้ก่อนครับ\n(คลิกที่ไอคอน popup blocked ในแถบ address)'); return; }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  if(!w){ alert('กรุณาอนุญาต Popup สำหรับเว็บนี้ก่อนครับ'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 
