@@ -49,35 +49,56 @@ function parseDate(s) {
 
 // ── parse ข้อความ reply → งานใหม่ ──────────────────────────────────────────
 // รองรับ: "ส่งของ บริษัท ABC วันที่ 10/6" / "รับสินค้า XYZ 10/6/2026 @สมชาย"
-function parseTaskFromText(text) {
-  const t = text.trim();
-  let duration = t.includes('ส่ง') ? 'ส่ง' : 'รับ';
+// keyword → ชื่อหมวดหมู่เต็ม
+const CAT_MAP = {
+  'so':         'ใบสั่งซื้อ( so )',
+  'ป้าย':       'งานป้าย',
+  'ป้ายเฟรม':   'งานป้าย+เฟรม',
+  'เฟรม':       'งานเฟรม',
+  'mast':       'งาน mast arm',
+  'ผลิต':       'วัถุดิบเพื่อการผลิต',
+  'สิ้นเปลือง': 'วัถุดิบสิ้นเปลือง',
+  'ชุบ':        'บริการชุบกัลวาไนซ์',
+  'เสา':        'งานเสาไฟฟ้า',
+  'เสาอุปกรณ์': 'งานเสาไฟฟ้าและอุปกรณ์',
+  'ไฟฟ้า':      'งานอุปกรณ์ไฟฟ้า',
+  'ฐาน':        'งานรากฐาน',
+  'พัสดุ':      'งานส่งพัสดุ',
+  'ซ่อม':       'ซ่อมบำรุง',
+  'แผง':        'แผนกไฟฟ้า',
+  'ชิลิ':       'ซิลิกัล',
+  'การ์ดเรล':   'งานการ์ดเรล',
+  'อื่น':       'งานอื่นๆ',
+};
 
-  // ดึงวันที่
+function parseTaskFromText(text, catKeyword) {
+  const t = text.trim();
+
+  // วันที่ — ดึงจากข้อความ เช่น 9/6, 9/6/2569, 09-06-2026
   const dateMatch = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
   const actionDate = dateMatch ? (parseDate(dateMatch[1]) || todayStr()) : todayStr();
 
-  // ดึง @ชื่อ
-  const atMatch = t.match(/@([^\s@]+)/);
-  const salesName = atMatch ? atMatch[1] : '';
+  // ชื่องาน = ข้อความทั้งหมด
+  const taskText = t.slice(0, 300);
 
-  // ดึงชื่องาน (ลบ keyword ออก)
-  let taskText = t
-    .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/g, '')
-    .replace(/@\S+/g, '')
-    .replace(/รับ[:\s]?|ส่ง[:\s]?/g, '')
-    .replace(/\s+/g, ' ').trim();
+  // หาหมวดหมู่จาก keyword ที่พิมพ์ต่อจาก @บอท
+  const kw = (catKeyword || '').trim().toLowerCase();
+  const categories = CAT_MAP[kw] || (kw ? 'งานอื่นๆ' : 'งานอื่นๆ');
 
-  if (!taskText) taskText = t.slice(0, 50);
-
-  return { task: taskText, duration, actionDate, salesName };
+  return {
+    task: taskText,
+    duration: 'รับ',
+    actionDate,
+    salesName: '',
+    categories
+  };
 }
 
 // ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
-async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null) {
+async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '') {
   if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
 
-  const taskData = parseTaskFromText(text);
+  const taskData = parseTaskFromText(text, catKeyword);
   const id = rid();
   const attachments = attachmentObj ? [attachmentObj] : [];
 
@@ -89,8 +110,8 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null) {
     sales_name: taskData.salesName || fromUser || '',
     task_status: 'To Do',
     notification: 'แจ้งล่วงหน้า',
-    categories: '',
-    note: 'บันทึกจาก Telegram กลุ่มย่อย',
+    categories: taskData.categories || '',
+    note: 'บันทึกจาก Telegram',
     doing: false,
     done: false,
     attachments
@@ -232,6 +253,9 @@ export default async function handler(req, res) {
         const fromUser = msg.from
           ? (msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')
           : '';
+        // ดึง keyword หมวดหมู่จากข้อความที่พิมพ์ต่อจาก @บอท เช่น "@บอท so" → catKeyword = "so"
+        const botMentionText = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
+        const catKeyword = botMentionText.toLowerCase();
 
         // ── ดึง file_id จากรูป/ไฟล์ที่แนบมาพร้อม Reply ──────────────────
         let fileUrl = null;
@@ -282,7 +306,7 @@ export default async function handler(req, res) {
         }
 
         // ── บันทึกงานพร้อมไฟล์แนบ ────────────────────────────────────────
-        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj);
+        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword);
 
         if (result.ok) {
           const fileNote = attachmentObj ? '\n📎 แนบไฟล์: ' + attachmentObj.name : '';
@@ -290,6 +314,22 @@ export default async function handler(req, res) {
           await notifyMainChat(result.mainMsg + (attachmentObj ? '\n📎 มีไฟล์แนบ: ' + attachmentObj.name : ''));
         } else {
           await sendTelegramReply(chatId, `❌ บันทึกไม่สำเร็จครับ: ${result.error}`);
+        }
+        res.status(200).json({ ok: true });
+        return;
+      }
+
+      // ── @บอท โดยไม่ได้ Reply → ถาม Groq AI (ค้นหางาน / คุยทั่วไป) ──────
+      if (mentioned) {
+        const userMsg = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
+        if (userMsg) {
+          const history = getHistory(chatId);
+          let webContext = null;
+          if (needsWebSearch(userMsg) && TAVILY_KEY) webContext = await searchWeb(userMsg);
+          const reply = await askGroq(userMsg, history, webContext);
+          addHistory(chatId, 'user', userMsg);
+          addHistory(chatId, 'assistant', reply);
+          await sendTelegramReply(chatId, reply);
         }
         res.status(200).json({ ok: true });
         return;
