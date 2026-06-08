@@ -1,4 +1,4 @@
-<!-- v4.1 -->
+<!-- v4.2 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4756,11 +4756,11 @@ function openEdit(id){
   document.getElementById('a-hint').style.display='none';
   renderFList();
   document.getElementById('task-ov').classList.add('show');
-  // Also refresh from server
-  google.script.run
-    .withSuccessHandler(function(files){curAttach=files||[];renderFList();})
-    .withFailureHandler(function(){})
-    .getAttachments(id);
+  // โหลดไฟล์แนบจาก Supabase
+  rpc('getAttachments',[id]).then(function(files){
+    curAttach = files || [];
+    renderFList();
+  }).catch(function(){});
 }
 function saveTask(){
   var task=document.getElementById('f-task').value.trim();
