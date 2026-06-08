@@ -1,4 +1,4 @@
-<!-- v4.5 -->
+<!-- v4.6 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -5072,7 +5072,7 @@ function renderFList(){
   var taskId=document.getElementById('eid').value;
   var html='';
   curAttach.forEach(function(f){
-    var fid=safe(f.fileId), fn=safe(f.name), mt=safe(f.mimeType), wl=safe(f.webViewLink||'');
+    var fid=safe(f.fileId||f.wl||''), fn=safe(f.name), mt=safe(f.mimeType||f.type||''), wl=safe(f.webViewLink||f.wl||'');
     html+='<div class="fi">'+
       '<div class="fi-ic">'+fileIco(f.mimeType)+'</div>'+
       '<div class="fi-in">'+
@@ -5125,8 +5125,13 @@ function viewFile(fileId,mimeType,name,webViewLink){
   document.getElementById('vw-op').href=webViewLink||('#');
   document.getElementById('view-ov').classList.add('show');
   var body=document.getElementById('vbody');
+  // ถ้ามี URL (ไฟล์จาก Supabase/Telegram) → เปิดลิงก์ตรงๆ
+  if(!mimeType && webViewLink){
+    body.innerHTML='<div style="text-align:center;padding:20px"><a href="'+webViewLink+'" target="_blank" style="color:#3b82f6;font-size:15px;font-weight:700">🔗 คลิกเพื่อเปิดไฟล์</a></div>';
+    return;
+  }
   body.innerHTML='<div style="color:#aaa;display:flex;flex-direction:column;align-items:center;gap:10px"><div class="sp" style="border-top-color:#fff"></div><span>กำลังโหลด...</span></div>';
-  if(mimeType.startsWith('image/')){
+  if((mimeType||'').startsWith('image/')){
     google.script.run
       .withSuccessHandler(function(r){
         if(r.success) body.innerHTML='<img src="data:'+r.mimeType+';base64,'+r.base64+'" style="max-width:100%;max-height:80vh;object-fit:contain">';
