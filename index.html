@@ -1,4 +1,4 @@
-<!-- v4.6 -->
+<!-- v4.7 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4729,7 +4729,6 @@ function openAdd(){
   document.getElementById('task-ov').classList.add('show');
 }
 function openEdit(id){
-  try{
   var t=allTasks.find(function(x){return x['ID']===id;});
   if(!t){toast('ไม่พบข้อมูล','error');return;}
   setText('m-ttl','✏️ แก้ไขงาน');
@@ -4762,7 +4761,6 @@ function openEdit(id){
     .withSuccessHandler(function(files){curAttach=files||[];renderFList();})
     .withFailureHandler(function(){})
     .getAttachments(id);
-  }catch(e){alert('openEdit error: '+e.message);}
 }
 function saveTask(){
   var task=document.getElementById('f-task').value.trim();
@@ -5026,7 +5024,7 @@ function delCat(id,name){
 var MAX_SIZE = 10*1024*1024;
 var OK_TYPES = ['application/pdf','image/jpeg','image/jpg','image/png','image/gif','image/webp'];
 
-function fileIco(m){ return m==='application/pdf'?'📄':m.startsWith('image/')? '🖼️':'📎'; }
+function fileIco(m){ m=m||''; return m==='application/pdf'?'📄':m.startsWith('image/')? '🖼️':'📎'; }
 function fmtSz(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
 
 function dzOver(e){e.preventDefault();document.getElementById('dz').classList.add('over');}
