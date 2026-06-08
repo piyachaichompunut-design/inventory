@@ -1,4 +1,4 @@
-<!-- v3.6 -->
+<!-- v3.7 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4753,10 +4753,10 @@ function openAdd(){
   document.getElementById('f-note').value='';
   document.getElementById('f-doing').checked=false;
   document.getElementById('f-done').checked=false;
-  // File attach: disable for new task
+  // File attach: เปิดให้แนบได้เลยตั้งแต่เพิ่มงานใหม่
   pendingFiles=[]; curAttach=[];
-  document.getElementById('dz').style.display='none';
-  document.getElementById('a-hint').style.display='inline';
+  document.getElementById('dz').style.display='block';
+  document.getElementById('a-hint').style.display='none';
   document.getElementById('flist').innerHTML='';
   document.getElementById('task-ov').classList.add('show');
 }
@@ -4801,12 +4801,51 @@ function saveTask(){
     'Sales Name':document.getElementById('f-sl2').value,'Note':document.getElementById('f-note').value,
     'Doing':document.getElementById('f-doing').checked,'Done':document.getElementById('f-done').checked
   };
+  // ถ้าเป็นงานใหม่ + มีไฟล์ค้างรอแนบ → บอก backend ให้ยังไม่แจ้ง Telegram (รอแนบไฟล์ก่อน)
+  var hasPendingFiles = !id && pendingFiles.filter(function(p){return p.status==='pending';}).length>0;
+  if(hasPendingFiles) data['__skipNotify']=true;
   google.script.run
     .withSuccessHandler(function(r){
       btn.disabled=false; btn.textContent='💾 บันทึก';
       if(r.success){
         var savedId=id||r.id;
         toast(id?'แก้ไขงานสำเร็จ ✅':'เพิ่มงานใหม่สำเร็จ ✅','success');
+        // ── ถ้าเป็นงานใหม่ + มีไฟล์ค้างรอ → อัปโหลดทั้งหมดก่อนปิด ──
+        var waitingFiles = pendingFiles.filter(function(p){return p.status==='pending';});
+        if(!id && savedId && waitingFiles.length>0){
+          document.getElementById('eid').value=savedId;
+          var remaining = waitingFiles.length;
+          waitingFiles.forEach(function(entry){
+            entry.status='uploading'; renderFList();
+            var reader=new FileReader();
+            reader.onload=function(){
+              var b64=reader.result.split(',')[1];
+              google.script.run
+                .withSuccessHandler(function(rr){
+                  if(rr.success){
+                    pendingFiles=pendingFiles.filter(function(p){return p.tid!==entry.tid;});
+                    curAttach.push(rr.file); renderFList();
+                  }
+                  remaining--;
+                  if(remaining<=0){
+                    // อัปโหลดครบแล้ว → แจ้ง Telegram พร้อมไฟล์ → refresh + ปิด
+                    google.script.run.withSuccessHandler(function(){
+                      google.script.run.withSuccessHandler(function(tasks){
+                        allTasks=tasks; filteredTasks=tasks.slice(); fillSaleSel(tasks); applyF(); loadDash(); renderCal();
+                        closeOv('task-ov');
+                        toast('บันทึกงาน + แนบไฟล์ครบแล้ว ✅','success');
+                      }).getTasks(null);
+                    }).notifyNewTask(savedId);
+                  }
+                })
+                .withFailureHandler(function(e){ remaining--; toast('ไฟล์ล้มเหลว: '+e.message,'error'); if(remaining<=0) closeOv('task-ov'); })
+                .saveAttachment(savedId,entry.file.name,entry.file.type,b64);
+            };
+            reader.readAsDataURL(entry.file);
+          });
+          return; // รอ async upload เสร็จก่อน
+        }
+        // ── ปกติ (ไม่มีไฟล์ค้าง) ──
         google.script.run.withSuccessHandler(function(tasks){
           allTasks=tasks; filteredTasks=tasks.slice(); fillSaleSel(tasks); applyF(); loadDash(); renderCal();
           if(!id&&savedId){
@@ -4815,7 +4854,6 @@ function saveTask(){
             document.getElementById('dz').style.display='block';
             document.getElementById('a-hint').style.display='none';
             setText('m-ttl','✏️ แก้ไขงาน (เพิ่มไฟล์แนบได้เลย 📎)');
-            // Update allTasks reference
             var found=tasks.find(function(t){return t['ID']===savedId;});
             if(found) curAttach=Array.isArray(found['Attachments'])?found['Attachments'].slice():[];
             renderFList();
