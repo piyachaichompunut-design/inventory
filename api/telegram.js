@@ -314,7 +314,8 @@ export default async function handler(req, res) {
         if (result.ok) {
           const fileNote = attachmentObj ? '\n📎 แนบไฟล์: ' + attachmentObj.name : '';
           await sendTelegramReply(chatId, '✅ บันทึกเรียบร้อยครับ' + fileNote);
-          await notifyMainChat(result.mainMsg + (attachmentObj ? '\n📎 มีไฟล์แนบ: ' + attachmentObj.name : ''));
+          const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
+          await notifyMainChat(result.mainMsg + fileLink);
         } else {
           await sendTelegramReply(chatId, `❌ บันทึกไม่สำเร็จครับ: ${result.error}`);
         }
