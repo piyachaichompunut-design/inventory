@@ -1,4 +1,4 @@
-<!-- v3.4 -->
+<!-- v3.5 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4466,14 +4466,14 @@ function renderTable(){
       var stClr={'To Do':'#2563eb','Doing':'#d97706','Done':'#16a34a','Cancel':'#6b7280'};
       var stBg={'To Do':'linear-gradient(135deg,#1d4ed8,#3b82f6)','Doing':'linear-gradient(135deg,#b45309,#f59e0b)','Done':'linear-gradient(135deg,#15803d,#22c55e)','Cancel':'linear-gradient(135deg,#475569,#94a3b8)'};
       var stBadge='<span style="background:'+(stBg[s]||stBg['To Do'])+';color:#fff;padding:4px 14px;border-radius:20px;font-size:12px;font-weight:800;white-space:nowrap;box-shadow:0 2px 8px '+(stClr[s]||'#2563eb')+'44">'+s+'</span>';
-      // Category + tags row — ใช้สีทึบ + ตัวอักษรเข้ม เห็นชัดทั้ง light/dark mode
-      var catStyle='background:#dbe7ff;color:#1e40af;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800;margin-right:4px';
-      var nfStyle={'แจ้งล่วงหน้า':'background:#bbf7d0;color:#166534','ไม่แจ้งล่วงหน้า':'background:#e2e8f0;color:#475569','งานด่วน':'background:#fecaca;color:#b91c1c'};
-      var drStyle={'ส่ง':'background:#ddd6fe;color:#6d28d9','รับ':'background:#fde68a;color:#92400e','อื่นๆ':'background:#e2e8f0;color:#475569'};
+      // Category + tags row — พื้นอ่อน + ตัวอักษรเข้มจัด ตัดกันชัดเจน
+      var catStyle='background:#c7d9fb;color:#0a2472;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800;margin-right:4px';
+      var nfStyle={'แจ้งล่วงหน้า':'background:#a7f3c4;color:#064e2b','ไม่แจ้งล่วงหน้า':'background:#d1d9e0;color:#1e293b','งานด่วน':'background:#fca5a5;color:#7f1d1d'};
+      var drStyle={'ส่ง':'background:#c4b5fd;color:#4c1d95','รับ':'background:#fcd34d;color:#713f12','อื่นๆ':'background:#d1d9e0;color:#1e293b'};
       var tags='';
       if(t['Categories']) tags+='<span style="'+catStyle+'">'+esc(t['Categories'])+'</span>';
-      if(t['Notification']&&t['Notification']!=='-') tags+='<span style="'+(nfStyle[t['Notification']]||'background:#e2e8f0;color:#475569')+';padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800;margin-right:4px">'+esc(t['Notification'])+'</span>';
-      if(t['Duration']&&t['Duration']!=='-') tags+='<span style="'+(drStyle[t['Duration']]||'background:#e2e8f0;color:#475569')+';padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800">'+esc(t['Duration'])+'</span>';
+      if(t['Notification']&&t['Notification']!=='-') tags+='<span style="'+(nfStyle[t['Notification']]||'background:#d1d9e0;color:#1e293b')+';padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800;margin-right:4px">'+esc(t['Notification'])+'</span>';
+      if(t['Duration']&&t['Duration']!=='-') tags+='<span style="'+(drStyle[t['Duration']]||'background:#d1d9e0;color:#1e293b')+';padding:2px 9px;border-radius:8px;font-size:11px;font-weight:800">'+esc(t['Duration'])+'</span>';
       // Doing / Done checkboxes
       var doing=t['Doing']===true||t['Doing']==='TRUE';
       var done2=t['Done']===true||t['Done']==='TRUE';
