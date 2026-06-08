@@ -76,8 +76,9 @@ const tgDate = (v) => {
 
 // ── Telegram แจ้งเตือน ───────────────────────────────────────────────────────
 // ตั้งค่าใน Environment Variables: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const TG_CHAT  = process.env.TELEGRAM_CHAT_ID || '';
+const TG_TOKEN  = process.env.TELEGRAM_BOT_TOKEN || '';
+const TG_CHAT   = process.env.TELEGRAM_CHAT_ID || '';    // กลุ่มหลัก
+const TG_CHAT2  = process.env.TELEGRAM_CHAT_ID_2 || '';  // กลุ่มใหม่ (สำหรับ reply บันทึกงาน)
 
 async function notifyTelegram(text) {
   // ถ้ายังไม่ตั้งค่า → ข้ามเงียบๆ ไม่ให้กระทบการทำงานหลัก
@@ -166,6 +167,11 @@ async function addTask(td) {
   });
   if (error) return { success: false, error: error.message };
 
+  // ถ้า frontend จะแนบไฟล์ทีหลัง → ข้ามการแจ้งตอนนี้ (จะเรียก notifyNewTask แทน)
+  if (td['__skipNotify'] === true) {
+    return { success: true, id };
+  }
+
   // 🔔 แจ้งเตือน: มีงานใหม่ (พร้อมรายละเอียดครบ)
   const dur = td['Duration'] || '';
   const durIcon = dur === 'รับ' ? '📦 รับ' : dur === 'ส่ง' ? '🚚 ส่ง' : '';
@@ -190,6 +196,34 @@ async function addTask(td) {
   } catch (e) {}
   await notifyTelegram(newMsg);
   return { success: true, id };
+}
+
+// แจ้งเตือนงานใหม่พร้อมไฟล์แนบ (เรียกหลังอัปโหลดไฟล์เสร็จ)
+async function notifyNewTask(taskId) {
+  const { data: t } = await db.from('tasks').select('*').eq('id', taskId).maybeSingle();
+  if (!t) return { success: false };
+  const dur = t.duration || '';
+  const durIcon = dur === 'รับ' ? '📦 รับ' : dur === 'ส่ง' ? '🚚 ส่ง' : '';
+  let newMsg = '🆕 <b>มีงานใหม่</b>';
+  if (durIcon) newMsg += ' — ' + durIcon;
+  newMsg += '\n\n';
+  newMsg += '📋 <b>' + tgEsc(t.task || '-') + '</b>\n';
+  if (t.categories) newMsg += '🏷️ ' + tgEsc(t.categories) + '\n';
+  newMsg += '📅 ' + tgEsc(tgDate(t.action_date || todayStr())) + '\n';
+  if (t.sales_name) newMsg += '👤 ' + tgEsc(t.sales_name) + '\n';
+  if (t.note)       newMsg += '📝 ' + tgEsc(t.note) + '\n';
+  try {
+    const files = Array.isArray(t.attachments) ? t.attachments
+      : (typeof t.attachments === 'string' ? JSON.parse(t.attachments || '[]') : []);
+    files.forEach(f => {
+      const fname = tgEsc(f.name || 'ไฟล์');
+      const url = f.webViewLink || f.wl || '';
+      if (url) newMsg += '📎 <a href="' + url + '">' + fname + '</a>\n';
+      else if (fname) newMsg += '📎 ' + fname + '\n';
+    });
+  } catch (e) {}
+  await notifyTelegram(newMsg);
+  return { success: true };
 }
 
 async function updateTask(td) {
@@ -1751,7 +1785,8 @@ const HANDLERS = {
   getWHDashData, saveWHDashData, getWHYearData,
   getKPIForm, saveKPIForm,
   getDocRSMonths, getDocRSByMonth, saveDocRSBatch, deleteDocRSMonth,
-  getDocRSCompanies, addDocRSCompany, deleteDocRSCompany
+  getDocRSCompanies, addDocRSCompany, deleteDocRSCompany,
+  notifyNewTask
 };
 
 export const __handlers = HANDLERS;
@@ -1771,7 +1806,30 @@ export async function sendTelegramReply(chatId, text) {
 // ให้ webhook เช็คว่า chat ที่ส่งมา ตรงกับกลุ่มที่ตั้งไว้ไหม
 export function isAllowedChat(chatId) {
   if (!TG_CHAT) return true; // ยังไม่ตั้ง → ไม่จำกัด
-  return String(chatId) === String(TG_CHAT);
+  const id = String(chatId);
+  if (id === String(TG_CHAT)) return true;
+  if (TG_CHAT2 && id === String(TG_CHAT2)) return true;
+  return false;
+}
+
+// เช็คว่าเป็นกลุ่มหลักหรือกลุ่มใหม่
+export function getChatType(chatId) {
+  const id = String(chatId);
+  if (id === String(TG_CHAT)) return 'main';
+  if (TG_CHAT2 && id === String(TG_CHAT2)) return 'sub';
+  return null;
+}
+
+// ส่งข้อความไปกลุ่มหลัก (ใช้แจ้งเตือนเมื่อมีงานใหม่จากกลุ่มย่อย)
+export async function notifyMainChat(text) {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  try {
+    await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true })
+    });
+  } catch(e) { console.error('notify main failed:', e.message); }
 }
 
 export default async function handler(req, res) {
