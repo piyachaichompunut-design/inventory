@@ -132,7 +132,7 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     `\n🔗 ดูในระบบ: inventory-rho-hazel.vercel.app`;
 
   const mainMsg =
-    `🔔 <b>งานใหม่จากกลุ่มย่อย!</b>\n\n` +
+    `🔔 <b>งานใหม่จาก Telegram</b>\n\n` +
     `📋 ${taskData.task}\n` +
     `${dur} · 📅 ${dateDisplay}\n` +
     (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
