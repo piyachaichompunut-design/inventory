@@ -226,8 +226,8 @@ export default async function handler(req, res) {
 
     if (!isAllowedChat(chatId)) { res.status(200).json({ ok: true }); return; }
 
-    // ── เส้นทางที่ 1: คำสั่ง / (ใช้ได้ทั้ง 2 กลุ่ม) ─────────────────────────
-    if (trimmed.startsWith('/')) {
+    // ── เส้นทางที่ 1: คำสั่ง / (เฉพาะกลุ่มหลักเท่านั้น) ─────────────────────
+    if (trimmed.startsWith('/') && chatType !== 'sub') {
       const reply = await handleTelegramCommand(trimmed);
       if (reply) await sendTelegramReply(chatId, reply);
       res.status(200).json({ ok: true });
@@ -323,10 +323,20 @@ export default async function handler(req, res) {
         return;
       }
 
-      // ── @บอท โดยไม่ได้ Reply → ถาม Groq AI (ค้นหางาน / คุยทั่วไป) ──────
+      // ── @บอท โดยไม่ได้ Reply → ค้นหางาน / ถาม AI ──────
       if (mentioned) {
         const userMsg = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         if (userMsg) {
+          // ค้นหางานในระบบ ถ้าขึ้นต้นด้วย "ค้นหา"
+          const lc = userMsg.toLowerCase();
+          if (userMsg.startsWith('ค้นหา') || userMsg.startsWith('/ค้นหา') || lc.startsWith('search')) {
+            const kw = userMsg.replace(/^\/?(ค้นหา|search)\s*/i, '').trim();
+            const reply = await handleTelegramCommand('/ค้นหา ' + kw);
+            if (reply) await sendTelegramReply(chatId, reply);
+            res.status(200).json({ ok: true });
+            return;
+          }
+          // ไม่งั้นถาม AI
           const history = getHistory(chatId);
           let webContext = null;
           if (needsWebSearch(userMsg) && TAVILY_KEY) webContext = await searchWeb(userMsg);
