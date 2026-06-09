@@ -1,4 +1,4 @@
-<!-- v4.7 -->
+<!-- v4.8 -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -4969,7 +4969,7 @@ function renderCal(){
         var sc=t['Task Status']==='To Do'?'todo':t['Task Status']==='Doing'?'doing':t['Task Status']==='Done'?'done':'cancel';
         var tid=safe(t['ID']);
         return '<div class="ct '+sc+'" onclick="openEdit(\''+tid+'\')" title="'+esc(t['Task'])+'">'+
-          (t['Duration']==='ส่ง'?'📤':'📥')+' '+esc((t['Task']||'').substring(0,28))+(t['Task']&&t['Task'].length>28?'…':'')+'</div>';
+          (t['Duration']==='ส่ง'?'🚚':'📥')+' '+esc((t['Task']||'').substring(0,28))+(t['Task']&&t['Task'].length>28?'…':'')+'</div>';
       }).join('')+
       (more>0?'<div class="cm">+'+more+' เพิ่มเติม</div>':'')+
     '</div>';
