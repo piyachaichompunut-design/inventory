@@ -107,7 +107,7 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     task: taskData.task,
     duration: taskData.duration,
     action_date: taskData.actionDate,
-    sales_name: taskData.salesName || fromUser || '',
+    sales_name: '',
     task_status: 'To Do',
     notification: 'แจ้งล่วงหน้า',
     categories: taskData.categories || '',
