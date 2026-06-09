@@ -240,7 +240,15 @@ export default async function handler(req, res) {
 
     // ── เส้นทางที่ 1: คำสั่ง / (เฉพาะกลุ่มหลักเท่านั้น) ─────────────────────
     if (trimmed.startsWith('/') && chatType !== 'sub') {
-      const reply = await handleTelegramCommand(trimmed);
+      // ตัด @botname ที่ Telegram เติมท้ายคำสั่งในกลุ่ม เช่น /สรุป@OdooBot → /สรุป
+      var cmdText = trimmed;
+      if (BOT_USERNAME) {
+        cmdText = cmdText.replace(new RegExp('@' + BOT_USERNAME, 'gi'), '');
+      } else {
+        cmdText = cmdText.replace(/@\w+/g, '');
+      }
+      cmdText = cmdText.trim();
+      const reply = await handleTelegramCommand(cmdText);
       if (reply) await sendTelegramReply(chatId, reply);
       res.status(200).json({ ok: true });
       return;
