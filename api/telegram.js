@@ -155,6 +155,9 @@ async function updateTaskDateByMessage(messageId, newDate) {
   const dateDisplay = `${+d}/${+m}/${+y+543}`;
   return { ok: true, task, dateDisplay };
 }
+
+// ── needsWebSearch ────────────────────────────────────────────────────────────
+function needsWebSearch(text) {
   const t = text.toLowerCase();
   return ['วันนี้','ตอนนี้','ล่าสุด','ปัจจุบัน','ราคา','หุ้น','ค่าเงิน',
     'สภาพอากาศ','ฝน','น้ำท่วม','รถติด','ข่าว','เหตุการณ์',
