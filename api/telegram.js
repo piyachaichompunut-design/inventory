@@ -95,7 +95,7 @@ function parseTaskFromText(text, catKeyword) {
 }
 
 // ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
-async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '') {
+async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null) {
   if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
 
   const taskData = parseTaskFromText(text, catKeyword);
@@ -114,7 +114,8 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     note: '',
     doing: false,
     done: false,
-    attachments
+    attachments,
+    tg_message_id: messageId ? String(messageId) : null
   });
 
   if (error) return { ok: false, error: error.message };
@@ -141,8 +142,19 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
   return { ok: true, confirmMsg, mainMsg };
 }
 
-// ── needsWebSearch ────────────────────────────────────────────────────────────
-function needsWebSearch(text) {
+// ── แก้วันที่ของงานที่ผูกกับ message_id ──────────────────────────────────────
+async function updateTaskDateByMessage(messageId, newDate) {
+  if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
+  // หางานที่ผูกกับ message_id นี้
+  const { data: rows } = await db.from('tasks').select('*').eq('tg_message_id', String(messageId)).limit(1);
+  if (!rows || !rows.length) return { ok: false, notFound: true };
+  const task = rows[0];
+  const { error } = await db.from('tasks').update({ action_date: newDate }).eq('id', task.id);
+  if (error) return { ok: false, error: error.message };
+  const [y, m, d] = newDate.split('-');
+  const dateDisplay = `${+d}/${+m}/${+y+543}`;
+  return { ok: true, task, dateDisplay };
+}
   const t = text.toLowerCase();
   return ['วันนี้','ตอนนี้','ล่าสุด','ปัจจุบัน','ราคา','หุ้น','ค่าเงิน',
     'สภาพอากาศ','ฝน','น้ำท่วม','รถติด','ข่าว','เหตุการณ์',
@@ -257,6 +269,27 @@ export default async function handler(req, res) {
         const botMentionText = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         const catKeyword = botMentionText.toLowerCase();
 
+        // ── ตรวจว่าเป็นการ "แก้วันที่" หรือไม่ ──
+        var hasEditWord = botMentionText.indexOf('แก้')>=0 || botMentionText.indexOf('เปลี่ยน')>=0 || botMentionText.indexOf('เลื่อน')>=0;
+        var dmEdit = botMentionText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+        if (hasEditWord && dmEdit) {
+          const newDate = parseDate(dmEdit[1]);
+          if (!newDate) {
+            await sendTelegramReply(chatId, '❌ ไม่เข้าใจวันที่ครับ ลองพิมพ์ เช่น "แก้เป็น 15/6"');
+            res.status(200).json({ ok: true }); return;
+          }
+          const upd = await updateTaskDateByMessage(replyMsg.message_id, newDate);
+          if (upd.ok) {
+            await sendTelegramReply(chatId, '✅ แก้ไขเรียบร้อยครับ\n📅 เปลี่ยนเป็น ' + upd.dateDisplay);
+            await notifyMainChat('✏️ <b>แก้ไขวันที่งาน</b>\n\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (fromUser ? '\n✍️ โดย: ' + fromUser : ''));
+          } else if (upd.notFound) {
+            await sendTelegramReply(chatId, '❌ ไม่พบงานเดิมที่ผูกกับข้อความนี้ครับ\n(งานอาจถูกบันทึกก่อนเปิดระบบแก้ไข)');
+          } else {
+            await sendTelegramReply(chatId, '❌ แก้ไขไม่สำเร็จ: ' + (upd.error || ''));
+          }
+          res.status(200).json({ ok: true }); return;
+        }
+
         // ── ดึง file_id จากรูป/ไฟล์ — ดูทั้งจาก msg ปัจจุบัน และ replyMsg ──
         let fileUrl = null;
         let fileName = null;
@@ -309,7 +342,7 @@ export default async function handler(req, res) {
         }
 
         // ── บันทึกงานพร้อมไฟล์แนบ ────────────────────────────────────────
-        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword);
+        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword, replyMsg.message_id);
 
         if (result.ok) {
           const fileNote = attachmentObj ? '\n📎 แนบไฟล์: ' + attachmentObj.name : '';
