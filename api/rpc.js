@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -1429,10 +1429,14 @@ async function handleTelegramCommand(text) {
 
       if (!stockKw) return 'พิมพ์ชื่อสินค้าด้วยครับ เช่น /สต็อก แผ่น 3.2 ชุบ';
       if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+      // แยกตัวย่อบริษัทท้ายคำ (md/cg/sep) — ไม่ใส่ = อาคเนย์
+      const { keyword: stKw2, company: stCo } = parseCompany(stockKw);
+      stockKw = stKw2;
+      if (!stockKw) return 'พิมพ์ชื่อสินค้าด้วยครับ เช่น /สต็อก แผ่น 3.2 ชุบ';
       try {
-        const products = await odooStock(stockKw);
-        if (!products.length) return '🔍 ไม่พบสินค้าที่มีคำว่า "' + tgEsc(stockKw) + '" ใน Odoo';
-        let msg = '📦 <b>สต็อก "' + tgEsc(stockKw) + '" (' + products.length + ' รายการ)</b>\n\n';
+        const products = await odooStock(stockKw, stCo.id);
+        if (!products.length) return '🔍 ไม่พบสินค้า "' + tgEsc(stockKw) + '" (บริษัท ' + stCo.name + ') ใน Odoo';
+        let msg = '📦 <b>สต็อก "' + tgEsc(stockKw) + '" — ' + stCo.name + ' (' + products.length + ' รายการ)</b>\n\n';
         products.forEach((p, i) => {
           const code = p.default_code ? '[' + tgEsc(p.default_code) + '] ' : '';
           const uom  = Array.isArray(p.uom_id) ? p.uom_id[1] : '';
@@ -1449,12 +1453,13 @@ async function handleTelegramCommand(text) {
 
   // ── /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo ────────────────────────────────
   if (lower.startsWith('/po') || cleaned.startsWith('/พีโอ')) {
-    const kw = cleaned.replace(/^\/po/i, '').replace(/^\/พีโอ/, '').trim();
-    if (!kw) return 'พิมพ์เลข PO ด้วยครับ เช่น /po PO2603068';
+    const kwRaw = cleaned.replace(/^\/po/i, '').replace(/^\/พีโอ/, '').trim();
+    if (!kwRaw) return 'พิมพ์เลข PO ด้วยครับ เช่น /po PO2603068';
     if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    const { keyword: kw, company: poCo } = parseCompany(kwRaw);
     try {
-      const orders = await odooPO(kw);
-      if (!orders.length) return '🔍 ไม่พบ PO "' + tgEsc(kw) + '" ใน Odoo';
+      const orders = await odooPO(kw, poCo.id);
+      if (!orders.length) return '🔍 ไม่พบ PO "' + tgEsc(kw) + '" (บริษัท ' + poCo.name + ') ใน Odoo';
       const stateMap = {
         draft: '📝 ร่าง', sent: '📤 ส่งแล้ว', 'to approve': '⏳ รออนุมัติ',
         purchase: '✅ ยืนยันแล้ว', done: '✔️ เสร็จสิ้น', cancel: '❌ ยกเลิก'
@@ -1486,12 +1491,13 @@ async function handleTelegramCommand(text) {
 
   // ── /so [เลข SO] — ดูใบสั่งขายจาก Odoo ─────────────────────────────────
   if (lower.startsWith('/so') || cleaned.startsWith('/ขาย')) {
-    const kw = cleaned.replace(/^\/so/i, '').replace(/^\/ขาย/, '').trim();
-    if (!kw) return 'พิมพ์เลข SO ด้วยครับ เช่น /so 2606007';
+    const kwRaw = cleaned.replace(/^\/so/i, '').replace(/^\/ขาย/, '').trim();
+    if (!kwRaw) return 'พิมพ์เลข SO ด้วยครับ เช่น /so 2606007';
     if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    const { keyword: kw, company: soCo } = parseCompany(kwRaw);
     try {
-      const orders = await odooSO(kw);
-      if (!orders.length) return '🔍 ไม่พบ SO "' + tgEsc(kw) + '" ใน Odoo';
+      const orders = await odooSO(kw, soCo.id);
+      if (!orders.length) return '🔍 ไม่พบ SO "' + tgEsc(kw) + '" (บริษัท ' + soCo.name + ') ใน Odoo';
       const stateMap = {
         draft: '📝 ใบเสนอราคา', sent: '📤 ส่งใบเสนอราคาแล้ว',
         sale: '✅ ยืนยันแล้ว', done: '✔️ ปิดงานแล้ว', cancel: '❌ ยกเลิก'
@@ -1524,12 +1530,13 @@ async function handleTelegramCommand(text) {
 
   // ── /pr [เลข PR] — ดูใบขอซื้อจาก Odoo ──────────────────────────────────
   if (lower.startsWith('/pr') || cleaned.startsWith('/ขอซื้อ')) {
-    const kw = cleaned.replace(/^\/pr/i, '').replace(/^\/ขอซื้อ/, '').trim();
-    if (!kw) return 'พิมพ์เลข PR ด้วยครับ เช่น /pr PR01881';
+    const kwRaw = cleaned.replace(/^\/pr/i, '').replace(/^\/ขอซื้อ/, '').trim();
+    if (!kwRaw) return 'พิมพ์เลข PR ด้วยครับ เช่น /pr PR01881';
     if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    const { keyword: kw, company: prCo } = parseCompany(kwRaw);
     try {
-      const reqs = await odooPR(kw);
-      if (!reqs.length) return '🔍 ไม่พบ PR "' + tgEsc(kw) + '" ใน Odoo';
+      const reqs = await odooPR(kw, prCo.id);
+      if (!reqs.length) return '🔍 ไม่พบ PR "' + tgEsc(kw) + '" (บริษัท ' + prCo.name + ') ใน Odoo';
       const stateMap = {
         draft: '📝 ร่าง', to_approve: '⏳ รออนุมัติ', approved: '✅ อนุมัติแล้ว',
         rejected: '❌ ไม่อนุมัติ', done: '✔️ เสร็จสิ้น'
@@ -1995,9 +2002,10 @@ export async function sendDeliveryPDF(chatId, keyword) {
     return { ok: false };
   }
   try {
-    const picks = await odooDelivery(keyword);
+    const { keyword: dkw, company: dCo } = parseCompany(keyword);
+    const picks = await odooDelivery(dkw, dCo.id);
     if (!picks.length) {
-      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของที่มีคำว่า "' + keyword + '" ใน Odoo');
+      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + dkw + '" (บริษัท ' + dCo.name + ') ใน Odoo');
       return { ok: false };
     }
     const stateMap = {
@@ -2028,7 +2036,7 @@ export async function sendDeliveryPDF(chatId, keyword) {
       };
     });
     const data = {
-      title: 'ใบส่งของ — ' + keyword,
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
       summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
       picks: picksData
     };
