@@ -179,12 +179,14 @@ export async function odooPR(prNumber) {
 export async function odooDelivery(keyword) {
   const words = smartWords(keyword);
 
-  // แต่ละคำ → ต้องเจอใน (name หรือ origin หรือชื่อลูกค้า) = OR 3 ช่อง
+  // แต่ละคำ → ต้องเจอใน (name/origin/ลูกค้า/ปลายทาง) = OR 4 ช่อง
+  // หมายเหตุ: ชื่อโครงการเต็ม (เช่น กม.4+570) อยู่ใน location_dest_id (ปลายทาง)
   // แล้วทุกคำต้องเจอ = AND
-  const oneWord = (w) => ['|', '|',
+  const oneWord = (w) => ['|', '|', '|',
     ['name', 'ilike', w],
     ['origin', 'ilike', w],
-    ['partner_id.name', 'ilike', w]
+    ['partner_id.name', 'ilike', w],
+    ['location_dest_id.complete_name', 'ilike', w]
   ];
 
   let domain;
