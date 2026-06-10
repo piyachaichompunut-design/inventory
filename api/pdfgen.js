@@ -74,7 +74,18 @@ export async function buildDeliveryPDF(data) {
 
   // หัวเอกสาร
   line(data.title || 'ใบส่งของ', { size: 20, bold: true, color: orange, gap: 4 });
-  line('Task Management System — ดึงข้อมูลจาก Odoo', { size: 10, color: gray, gap: 12 });
+  line('Task Management System — ดึงข้อมูลจาก Odoo', { size: 10, color: gray, gap: 6 });
+  // สรุปจำนวน
+  if (data.summary) {
+    const s = data.summary;
+    let sumText = 'รวม ' + s.total + ' ใบ';
+    if (s.done)    sumText += '  |  ส่งแล้ว ' + s.done;
+    if (s.pending) sumText += '  |  รอส่ง ' + s.pending;
+    if (s.cancel)  sumText += '  |  ยกเลิก ' + s.cancel;
+    line(sumText, { size: 11, bold: true, color: black, gap: 10 });
+  } else {
+    y -= 6;
+  }
   hr();
 
   const red = rgb(0.86, 0.15, 0.15);
