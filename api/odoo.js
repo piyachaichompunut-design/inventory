@@ -59,11 +59,26 @@ async function searchRead(model, domain, fields, limit = 20) {
 }
 
 // ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
+// รองรับหลายคำ: "แผ่น 3.2 ชุบ" → หาสินค้าที่ชื่อมีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooStock(keyword) {
-  // ค้นทั้งชื่อสินค้า และรหัสสินค้า (default_code)
+  const words = String(keyword).trim().split(/\s+/).filter(Boolean);
+
+  let domain;
+  if (words.length <= 1) {
+    // คำเดียว: ค้นทั้งชื่อ และรหัสสินค้า
+    const kw = words[0] || '';
+    domain = ['|', ['name', 'ilike', kw], ['default_code', 'ilike', kw]];
+  } else {
+    // หลายคำ: ชื่อต้องมีทุกคำ (AND) — Odoo domain ใช้ '&' นำหน้าเชื่อม 2 เงื่อนไข
+    // เช่น 3 คำ → ['&','&', cond1, cond2, cond3]
+    domain = [];
+    for (let i = 0; i < words.length - 1; i++) domain.push('&');
+    words.forEach(w => domain.push(['name', 'ilike', w]));
+  }
+
   return await searchRead(
     'product.product',
-    ['|', ['name', 'ilike', keyword], ['default_code', 'ilike', keyword]],
+    domain,
     ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'],
     15
   );
