@@ -82,14 +82,15 @@ export async function buildDeliveryPDF(data) {
 
   // วนแต่ละใบส่งของ
   (data.picks || []).forEach((p, idx) => {
-    line((idx + 1) + '. ' + (p.name || '-'), { size: 14, bold: true, gap: 8 });
+    // เลขใบ + สถานะ (สี) อยู่บนสุด เด่นๆ
+    line((idx + 1) + '. ' + (p.name || '-'), { size: 14, bold: true, gap: 4 });
+    if (p.statusText) {
+      const colorMap = { red: red, green: green, gray: gray };
+      const stColor = colorMap[p.statusColor] || (p.shipped ? red : green);
+      line('สถานะ: ' + p.statusText, { size: 13, bold: true, indent: 14, color: stColor, gap: 8 });
+    }
     if (p.origin)  line('โครงการ: ' + p.origin, { size: 11, indent: 14, color: gray });
     if (p.partner) line('ปลายทาง: ' + p.partner, { size: 11, indent: 14, color: gray });
-    // สถานะ: ส่งแล้ว = แดง, รอส่ง = เขียว
-    if (p.statusText) {
-      const stColor = p.shipped ? red : green;
-      line('สถานะ: ' + p.statusText, { size: 12, bold: true, indent: 14, color: stColor });
-    }
     if (p.date)    line('วันที่: ' + p.date, { size: 11, indent: 14, color: gray, gap: 8 });
 
     if (p.lines && p.lines.length) {
