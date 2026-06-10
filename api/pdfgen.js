@@ -77,12 +77,19 @@ export async function buildDeliveryPDF(data) {
   line('Task Management System — ดึงข้อมูลจาก Odoo', { size: 10, color: gray, gap: 12 });
   hr();
 
+  const red = rgb(0.86, 0.15, 0.15);
+  const green = rgb(0.13, 0.6, 0.23);
+
   // วนแต่ละใบส่งของ
   (data.picks || []).forEach((p, idx) => {
     line((idx + 1) + '. ' + (p.name || '-'), { size: 14, bold: true, gap: 8 });
     if (p.origin)  line('โครงการ: ' + p.origin, { size: 11, indent: 14, color: gray });
     if (p.partner) line('ปลายทาง: ' + p.partner, { size: 11, indent: 14, color: gray });
-    if (p.state)   line('สถานะ: ' + p.state, { size: 11, indent: 14, color: gray });
+    // สถานะ: ส่งแล้ว = แดง, รอส่ง = เขียว
+    if (p.statusText) {
+      const stColor = p.shipped ? red : green;
+      line('สถานะ: ' + p.statusText, { size: 12, bold: true, indent: 14, color: stColor });
+    }
     if (p.date)    line('วันที่: ' + p.date, { size: 11, indent: 14, color: gray, gap: 8 });
 
     if (p.lines && p.lines.length) {
