@@ -2005,29 +2005,32 @@ export async function sendDeliveryPDF(chatId, keyword) {
       assigned: 'พร้อมส่ง', done: 'ส่งแล้ว', cancel: 'ยกเลิก'
     };
     // เตรียมข้อมูลสำหรับ PDF
+    let cntDone = 0, cntPending = 0, cntCancel = 0;
+    const picksData = picks.map(p => {
+      // Done = ส่งแล้ว(แดง), Cancel = ยกเลิก(เทา), ที่เหลือ = รอส่ง(เขียว)
+      let statusText, statusColor;
+      if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red';  cntDone++; }
+      else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; cntCancel++; }
+      else                           { statusText = 'รอส่ง';   statusColor = 'green'; cntPending++; }
+      return {
+        name: p.name || '-',
+        origin: p.origin || '',
+        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+        statusText,
+        statusColor,
+        shipped: p.state === 'done',
+        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
+        lines: (p.lines || []).map(l => ({
+          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+        }))
+      };
+    });
     const data = {
       title: 'ใบส่งของ — ' + keyword,
-      picks: picks.map(p => {
-        // Done = ส่งแล้ว(แดง), Cancel = ยกเลิก(เทา), ที่เหลือ = รอส่ง(เขียว)
-        let statusText, statusColor;
-        if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red'; }
-        else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; }
-        else                           { statusText = 'รอส่ง';   statusColor = 'green'; }
-        return {
-          name: p.name || '-',
-          origin: p.origin || '',
-          partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-          statusText,
-          statusColor,
-          shipped: p.state === 'done',
-          date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
-          lines: (p.lines || []).map(l => ({
-            name: Array.isArray(l.product_id) ? l.product_id[1] : '',
-            qty: l.quantity || l.product_uom_qty || 0,
-            uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-          }))
-        };
-      })
+      summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
+      picks: picksData
     };
     const pdfBytes = await buildDeliveryPDF(data);
 
