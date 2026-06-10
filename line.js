@@ -19,11 +19,15 @@ if (db) { try { __setDb(db); } catch (e) {} }
 
 // ── ส่งข้อความกลับไลน์ ───────────────────────────────────────────────────────
 async function replyLine(replyToken, text) {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
+  const r = await fetch('https://api.line.me/v2/bot/message/reply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LINE_TOKEN}` },
     body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] })
   });
+  if (!r.ok) {
+    const errText = await r.text();
+    console.error('LINE reply failed:', r.status, errText, '| token length:', LINE_TOKEN.length);
+  }
 }
 
 // ── push ข้อความเข้าไลน์ (ใช้ตอนสร้าง PDF เสร็จทีหลัง) ────────────────────────
