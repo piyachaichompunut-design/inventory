@@ -1,7 +1,7 @@
 // LINE Webhook — รับข้อความจากกลุ่มไลน์ แล้วสร้างงานใน TMS + คำสั่ง Odoo
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { handleTelegramCommand, __setDb } from './rpc.js';
+import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
 import { odooConfigured, odooDelivery, parseCompany } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
@@ -169,8 +169,8 @@ async function parseTaskSmart(text, dbClient) {
 
   // เดาประเภท ส่ง/รับ จากคำในข้อความ
   let duration = 'รับ';
-  const sendWords = /(ส่งของ|นัดส่ง|ส่งที่|จัดส่ง|ขอส่ง|จะส่ง|ส่งงาน|ออกของ|นำส่ง)/;
-  const recvWords = /(รับของ|รับเข้า|มารับ|ขอรับ|จะรับ|รับงาน|เข้ารับ|รับสินค้า)/;
+  const sendWords = /(ส่งของ|นัดส่ง|ส่งที่|จัดส่ง|ขอส่ง|จะส่ง|ส่งงาน|ออกของ|นำส่ง|แจ้งส่ง)/;
+  const recvWords = /(รับของ|รับเข้า|มารับ|ขอรับ|จะรับ|รับงาน|เข้ารับ|รับสินค้า|แจ้งรับ)/;
   if (sendWords.test(t)) duration = 'ส่ง';
   else if (recvWords.test(t)) duration = 'รับ';
 
@@ -361,11 +361,22 @@ export default async function handler(req, res) {
       // เช่น reply งาน "แจ้งส่งของ อบจ..." แล้วพิมพ์ "ชุบ พี่เต้ย"
       // → ข้อความรวม = "แจ้งส่งของ อบจ... ชุบ พี่เต้ย"
       if (!taskData && botMentioned) {
-        // เอา mention (@TMS Bot) ออกจากข้อความที่พิมพ์ใหม่ก่อน
         const typedClean = text.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+        // กรณี reply: ต้องมีข้อความต้นฉบับ ถ้าหาไม่เจอ → เตือน (ไม่สร้างงานมั่ว)
+        if (quotedId && !quotedText) {
+          await replyLine(replyToken,
+            '⚠️ ขออภัยครับ บอทยังไม่มีข้อความที่คุณ Reply ในระบบ\n' +
+            '(ข้อความเก่าก่อนติดตั้งฟีเจอร์นี้ หรือเป็นรูป/ไฟล์)\n\n' +
+            'ลองพิมพ์งานใหม่แบบเต็มแทนครับ เช่น:\n' +
+            '@TMS Bot แจ้งส่งของ งานอบจ.อำนาจเจริญ ป้าย 20 ชุด วันที่11มิถุนายน [หมวด] [ชื่อ]'
+          );
+          continue;
+        }
+
         const combined = quotedText
-          ? (quotedText + ' ' + typedClean).trim()  // reply: ต้นฉบับ + ที่พิมพ์
-          : typedClean;                              // ไม่ reply: ใช้ที่พิมพ์อย่างเดียว
+          ? (quotedText + ' ' + typedClean).trim()
+          : typedClean;
         taskData = await parseTaskSmart(combined, db);
       }
       if (taskData) {
@@ -399,8 +410,19 @@ export default async function handler(req, res) {
             `${dur}\n` +
             `📅 ${dateDisplay}\n` +
             (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
+            (taskData.categories ? `🏷️ ${taskData.categories}\n` : '') +
             `\n🔗 ดูในระบบ: inventory-rho-hazel.vercel.app`
           );
+          // แจ้งเข้ากลุ่ม Telegram หลักด้วย (chat id 1)
+          try {
+            await notifyMainChat(
+              `🆕 <b>งานใหม่จากไลน์</b>\n` +
+              `📋 ${taskData.task}\n` +
+              `${dur}  📅 ${dateDisplay}\n` +
+              (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
+              (taskData.categories ? `🏷️ ${taskData.categories}` : '')
+            );
+          } catch (e) {}
         }
         continue;
       }
