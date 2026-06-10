@@ -107,3 +107,86 @@ export async function odooPO(poNumber) {
   }
   return orders;
 }
+
+// ── search_read แบบปลอดภัย: ถ้า field/model ไม่มี จะไม่พังทั้งหมด ──────────────
+async function safeSearchRead(model, domain, fields, limit) {
+  try {
+    return await searchRead(model, domain, fields, limit);
+  } catch (e) {
+    // ถ้า field บางตัวไม่มีในระบบนี้ ลองใหม่ด้วย field พื้นฐานสุด
+    try {
+      return await searchRead(model, domain, ['name'], limit);
+    } catch (e2) {
+      throw e; // โยน error เดิมกลับไป
+    }
+  }
+}
+
+// ── ดูใบสั่งขาย (SO) พร้อมรายการสินค้า ───────────────────────────────────────
+export async function odooSO(soNumber) {
+  const orders = await safeSearchRead(
+    'sale.order',
+    ['|', ['name', 'ilike', soNumber], ['client_order_ref', 'ilike', soNumber]],
+    ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'client_order_ref'],
+    5
+  );
+  for (const o of orders) {
+    try {
+      o.lines = await searchRead(
+        'sale.order.line',
+        [['order_id', '=', o.id]],
+        ['product_id', 'product_uom_qty', 'qty_delivered', 'price_unit', 'price_subtotal'],
+        50
+      );
+    } catch (e) { o.lines = []; }
+  }
+  return orders;
+}
+
+// ── ดูใบขอซื้อ (PR — Purchase Request, โมดูล OCA: purchase.request) ───────────
+export async function odooPR(prNumber) {
+  const reqs = await safeSearchRead(
+    'purchase.request',
+    [['name', 'ilike', prNumber]],
+    ['name', 'state', 'requested_by', 'date_start', 'description'],
+    5
+  );
+  for (const r of reqs) {
+    try {
+      r.lines = await searchRead(
+        'purchase.request.line',
+        [['request_id', '=', r.id]],
+        ['product_id', 'name', 'product_qty', 'product_uom_id'],
+        50
+      );
+    } catch (e) { r.lines = []; }
+  }
+  return reqs;
+}
+
+// ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
+// ค้นจากชื่อโครงการ (origin) หรือเลขใบ (name) หรือที่อยู่ปลายทาง
+export async function odooDelivery(keyword) {
+  // ค้นใบส่งของที่: เลขใบ หรือ ที่มา(โครงการ) มีคำค้น
+  const pickings = await safeSearchRead(
+    'stock.picking',
+    ['|', '|',
+      ['name', 'ilike', keyword],
+      ['origin', 'ilike', keyword],
+      ['partner_id.name', 'ilike', keyword]
+    ],
+    ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
+    8
+  );
+  for (const p of pickings) {
+    try {
+      p.lines = await searchRead(
+        'stock.move',
+        [['picking_id', '=', p.id]],
+        ['product_id', 'product_uom_qty', 'quantity', 'product_uom'],
+        50
+      );
+    } catch (e) { p.lines = []; }
+  }
+  return pickings;
+}
