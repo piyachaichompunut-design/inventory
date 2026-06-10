@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery } from './odoo.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -966,6 +966,9 @@ async function handleTelegramCommand(text) {
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
       '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก แผ่น 3.2 ชุบ\n' +
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
+      '🧾 /so [เลข SO] — ดูใบสั่งขายจาก Odoo เช่น /so 2606007\n' +
+      '📄 /pr [เลข PR] — ดูใบขอซื้อจาก Odoo เช่น /pr PR01881\n' +
+      '🚚 /ส่งของ [ชื่อโครงการ] — ดูใบส่งของจาก Odoo เช่น /ส่งของ อุตรดิตถ์\n' +
       '👤 /ข้อมูล [ชื่อ] — วันลาคงเหลือ + รายการลาของพนักงาน เช่น /ข้อมูล สมชาย'
     );
   }
@@ -1470,6 +1473,117 @@ async function handleTelegramCommand(text) {
             const remain = (l.product_qty || 0) - (l.qty_received || 0);
             msg += '   • ' + tgEsc(pname) + '\n';
             msg += '      สั่ง ' + l.product_qty + ' | รับแล้ว ' + l.qty_received + ' | ค้าง ' + remain + '\n';
+          });
+        }
+        msg += '\n';
+      });
+      return msg.trim();
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
+  }
+
+  // ── /so [เลข SO] — ดูใบสั่งขายจาก Odoo ─────────────────────────────────
+  if (lower.startsWith('/so') || cleaned.startsWith('/ขาย')) {
+    const kw = cleaned.replace(/^\/so/i, '').replace(/^\/ขาย/, '').trim();
+    if (!kw) return 'พิมพ์เลข SO ด้วยครับ เช่น /so 2606007';
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    try {
+      const orders = await odooSO(kw);
+      if (!orders.length) return '🔍 ไม่พบ SO "' + tgEsc(kw) + '" ใน Odoo';
+      const stateMap = {
+        draft: '📝 ใบเสนอราคา', sent: '📤 ส่งใบเสนอราคาแล้ว',
+        sale: '✅ ยืนยันแล้ว', done: '✔️ ปิดงานแล้ว', cancel: '❌ ยกเลิก'
+      };
+      let msg = '';
+      orders.forEach(o => {
+        const partner = Array.isArray(o.partner_id) ? o.partner_id[1] : '';
+        msg += '🧾 <b>' + tgEsc(o.name) + '</b>\n';
+        if (partner) msg += '   🏢 ' + tgEsc(partner) + '\n';
+        if (o.state) msg += '   📌 ' + (stateMap[o.state] || tgEsc(o.state)) + '\n';
+        if (o.date_order) msg += '   📅 ' + tgEsc(String(o.date_order).slice(0, 10)) + '\n';
+        if (o.amount_total !== undefined) msg += '   💰 รวม: ' + Number(o.amount_total || 0).toLocaleString() + ' บาท\n';
+        if (o.lines && o.lines.length) {
+          msg += '   ━━━━━━━━━━\n';
+          o.lines.forEach(l => {
+            const pname = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            const qty = l.product_uom_qty || 0;
+            const deliv = l.qty_delivered || 0;
+            msg += '   • ' + tgEsc(pname) + '\n';
+            msg += '      สั่ง ' + qty + ' | ส่งแล้ว ' + deliv + ' | ค้าง ' + (qty - deliv) + '\n';
+          });
+        }
+        msg += '\n';
+      });
+      return msg.trim();
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
+  }
+
+  // ── /pr [เลข PR] — ดูใบขอซื้อจาก Odoo ──────────────────────────────────
+  if (lower.startsWith('/pr') || cleaned.startsWith('/ขอซื้อ')) {
+    const kw = cleaned.replace(/^\/pr/i, '').replace(/^\/ขอซื้อ/, '').trim();
+    if (!kw) return 'พิมพ์เลข PR ด้วยครับ เช่น /pr PR01881';
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    try {
+      const reqs = await odooPR(kw);
+      if (!reqs.length) return '🔍 ไม่พบ PR "' + tgEsc(kw) + '" ใน Odoo';
+      const stateMap = {
+        draft: '📝 ร่าง', to_approve: '⏳ รออนุมัติ', approved: '✅ อนุมัติแล้ว',
+        rejected: '❌ ไม่อนุมัติ', done: '✔️ เสร็จสิ้น'
+      };
+      let msg = '';
+      reqs.forEach(r => {
+        const reqBy = Array.isArray(r.requested_by) ? r.requested_by[1] : '';
+        msg += '📄 <b>' + tgEsc(r.name) + '</b>\n';
+        if (r.state) msg += '   📌 ' + (stateMap[r.state] || tgEsc(r.state)) + '\n';
+        if (reqBy) msg += '   👤 ขอโดย: ' + tgEsc(reqBy) + '\n';
+        if (r.date_start) msg += '   📅 ' + tgEsc(String(r.date_start).slice(0, 10)) + '\n';
+        if (r.description) msg += '   📝 ' + tgEsc(r.description) + '\n';
+        if (r.lines && r.lines.length) {
+          msg += '   ━━━━━━━━━━\n';
+          r.lines.forEach(l => {
+            const pname = Array.isArray(l.product_id) ? l.product_id[1] : (l.name || '');
+            const uom = Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : '';
+            msg += '   • ' + tgEsc(pname) + ' — ' + (l.product_qty || 0) + ' ' + tgEsc(uom) + '\n';
+          });
+        }
+        msg += '\n';
+      });
+      return msg.trim();
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
+  }
+
+  // ── /ส่งของ [ชื่อโครงการ/เลขใบ] — ดูใบส่งของจาก Odoo ──────────────────
+  if (cleaned.startsWith('/ส่งของ') || cleaned.startsWith('/จัดส่ง') || lower.startsWith('/delivery')) {
+    const kw = cleaned.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+    if (!kw) return 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์';
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    try {
+      const picks = await odooDelivery(kw);
+      if (!picks.length) return '🔍 ไม่พบใบส่งของที่มีคำว่า "' + tgEsc(kw) + '" ใน Odoo';
+      const stateMap = {
+        draft: '📝 ร่าง', waiting: '⏳ รอ', confirmed: '⏳ รอของ',
+        assigned: '📦 พร้อมส่ง', done: '✅ ส่งแล้ว', cancel: '❌ ยกเลิก'
+      };
+      let msg = '🚚 <b>ใบส่งของ "' + tgEsc(kw) + '" (' + picks.length + ' ใบ)</b>\n\n';
+      picks.forEach((p, idx) => {
+        const partner = Array.isArray(p.partner_id) ? p.partner_id[1] : '';
+        msg += (idx + 1) + '. 🧾 <b>' + tgEsc(p.name) + '</b>\n';
+        if (p.origin) msg += '   📋 ' + tgEsc(p.origin) + '\n';
+        if (partner) msg += '   🏢 ' + tgEsc(partner) + '\n';
+        if (p.state) msg += '   📌 ' + (stateMap[p.state] || tgEsc(p.state)) + '\n';
+        const d = p.date_done || p.scheduled_date;
+        if (d) msg += '   📅 ' + tgEsc(String(d).slice(0, 10)) + '\n';
+        if (p.lines && p.lines.length) {
+          p.lines.forEach(l => {
+            const pname = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            const qty = l.quantity || l.product_uom_qty || 0;
+            const uom = Array.isArray(l.product_uom) ? l.product_uom[1] : '';
+            msg += '      • ' + tgEsc(pname) + ' — ' + qty + ' ' + tgEsc(uom) + '\n';
           });
         }
         msg += '\n';
