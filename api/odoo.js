@@ -58,11 +58,21 @@ async function searchRead(model, domain, fields, limit = 20) {
   ]);
 }
 
+// ── แยกคำอัตโนมัติ: "ภูเก็ต4+570" → ["ภูเก็ต","4+570"] ──────────────────────
+// ตัดตรงรอยต่อ ไทย↔ตัวเลข ทั้งสองทาง + รองรับเว้นวรรคปกติ
+function smartWords(keyword) {
+  let s = String(keyword).trim();
+  // แทรกช่องว่างตรงรอยต่อ ตัวอักษรไทย→ตัวเลข และ ตัวเลข→ตัวอักษรไทย
+  s = s.replace(/([\u0E00-\u0E7F])(\d)/g, '$1 $2');
+  s = s.replace(/(\d)([\u0E00-\u0E7F])/g, '$1 $2');
+  return s.split(/\s+/).filter(Boolean);
+}
+
 // ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
 // รองรับหลายคำ: "15FG แผ่น 3.2 ชุบ" → หาสินค้าที่ทุกคำอยู่ในชื่อหรือรหัส
 // (ไม่ต้องเรียงติดกัน — แต่ละคำหาได้ทั้งใน name และ default_code)
 export async function odooStock(keyword) {
-  const words = String(keyword).trim().split(/\s+/).filter(Boolean);
+  const words = smartWords(keyword);
 
   let domain;
   if (words.length <= 1) {
@@ -165,16 +175,30 @@ export async function odooPR(prNumber) {
 }
 
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
-// ค้นจากชื่อโครงการ (origin) หรือเลขใบ (name) หรือที่อยู่ปลายทาง
+// ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooDelivery(keyword) {
-  // ค้นใบส่งของที่: เลขใบ หรือ ที่มา(โครงการ) มีคำค้น
+  const words = smartWords(keyword);
+
+  // แต่ละคำ → ต้องเจอใน (name หรือ origin หรือชื่อลูกค้า) = OR 3 ช่อง
+  // แล้วทุกคำต้องเจอ = AND
+  const oneWord = (w) => ['|', '|',
+    ['name', 'ilike', w],
+    ['origin', 'ilike', w],
+    ['partner_id.name', 'ilike', w]
+  ];
+
+  let domain;
+  if (words.length <= 1) {
+    domain = oneWord(words[0] || '');
+  } else {
+    domain = [];
+    for (let i = 0; i < words.length - 1; i++) domain.push('&');
+    words.forEach(w => { domain.push(...oneWord(w)); });
+  }
+
   const pickings = await safeSearchRead(
     'stock.picking',
-    ['|', '|',
-      ['name', 'ilike', keyword],
-      ['origin', 'ilike', keyword],
-      ['partner_id.name', 'ilike', keyword]
-    ],
+    domain,
     ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
     8
   );
