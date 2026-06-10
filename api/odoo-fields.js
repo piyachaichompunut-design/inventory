@@ -1,6 +1,6 @@
 // ============================================================================
-//  api/odoo-fields.js — ตรวจว่าข้อมูลโครงการ (เช่น 4+570) เก็บใน field ไหน
-//  เปิด: https://inventory-rho-hazel.vercel.app/api/odoo-fields?q=ภูเก็ต
+//  api/odoo-fields.js — ทดสอบ query ค้นใบส่งของ (ชั่วคราว)
+//  เปิด: https://inventory-rho-hazel.vercel.app/api/odoo-fields?q=ภูเก็ต 4+570
 //  ⚠️ ใช้เสร็จลบทิ้ง
 // ============================================================================
 const ODOO_URL  = (process.env.ODOO_URL || '').replace(/\/+$/, '');
@@ -18,49 +18,41 @@ async function jsonRpc(service, method, args) {
   if (d.error) throw new Error(d.error.data?.message || d.error.message);
   return d.result;
 }
-async function auth() {
-  if (_uid) return _uid;
-  _uid = await jsonRpc('common','authenticate',[ODOO_DB, ODOO_USER, ODOO_KEY, {}]);
-  return _uid;
+async function auth() { if (_uid) return _uid; _uid = await jsonRpc('common','authenticate',[ODOO_DB, ODOO_USER, ODOO_KEY, {}]); return _uid; }
+
+function smartWords(keyword) {
+  let s = String(keyword).trim();
+  s = s.replace(/([\u0E00-\u0E7F])(\d)/g, '$1 $2');
+  s = s.replace(/(\d)([\u0E00-\u0E7F])/g, '$1 $2');
+  return s.split(/\s+/).filter(Boolean);
 }
 
 export default async function handler(req, res) {
   try {
-    const q = (req.query && req.query.q) ? String(req.query.q) : 'ภูเก็ต';
+    const q = (req.query && req.query.q) ? String(req.query.q) : 'ภูเก็ต 4+570';
     const uid = await auth();
+    const words = smartWords(q);
 
-    // หาใบส่งของที่ origin/name มีคำค้น เอามา 1 ใบ ดูทุก field
-    const ids = await jsonRpc('object','execute_kw',[
-      ODOO_DB, uid, ODOO_KEY,
-      'stock.picking', 'search',
-      [['|', ['name','ilike',q], ['origin','ilike',q]]],
-      { limit: 3 }
+    const oneWord = (w) => ['|', '|', '|',
+      ['name','ilike',w], ['origin','ilike',w],
+      ['partner_id.name','ilike',w], ['location_dest_id.complete_name','ilike',w]
+    ];
+    let domain = [];
+    if (words.length <= 1) domain = oneWord(words[0]||'');
+    else { for (let i=0;i<words.length-1;i++) domain.push('&'); words.forEach(w=>domain.push(...oneWord(w))); }
+
+    const recs = await jsonRpc('object','execute_kw',[
+      ODOO_DB, uid, ODOO_KEY, 'stock.picking', 'search_read',
+      [domain], { fields:['name','origin','state','location_dest_id'], limit: 50 }
     ]);
 
-    if (!ids.length) {
-      res.status(200).json({ found: false, msg: 'ไม่เจอใบที่ name/origin มี "' + q + '"' });
-      return;
-    }
-
-    // อ่าน "ทุก field" ของใบแรก
-    const full = await jsonRpc('object','execute_kw',[
-      ODOO_DB, uid, ODOO_KEY,
-      'stock.picking', 'read',
-      [ids],
-      {} // ไม่ระบุ fields = เอาทุก field
-    ]);
-
-    // คัดเฉพาะ field ที่เป็นข้อความ + มีค่า เพื่อดูง่าย
-    const simplified = full.map(rec => {
-      const out = {};
-      for (const [k, v] of Object.entries(rec)) {
-        if (typeof v === 'string' && v.trim()) out[k] = v;
-        else if (Array.isArray(v) && v.length === 2 && typeof v[1] === 'string') out[k] = v[1];
-      }
-      return out;
+    res.status(200).json({
+      query: q, words, matched: recs.length,
+      results: recs.map(r => ({
+        name: r.name, state: r.state,
+        dest: Array.isArray(r.location_dest_id) ? r.location_dest_id[1] : ''
+      }))
     });
-
-    res.status(200).json({ found: true, count: ids.length, records: simplified });
   } catch (e) {
     res.status(200).json({ error: e.message });
   }
