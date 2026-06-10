@@ -14,6 +14,29 @@ const ODOO_KEY  = process.env.ODOO_API_KEY  || '';
 
 let _uid = null; // cache uid ไว้ใช้ซ้ำใน request เดียว
 
+// ── แผนที่ตัวย่อบริษัท → company_id ──────────────────────────────────────────
+//   ไม่ใส่ตัวย่อ = อาคเนย์ทร้าฟฟิค (id 1) เป็นค่าเริ่มต้น
+//   md = เมิร์ค (2) | cg = ซิลิกัล (4) | sep = ศรีอาคเนย์ (5)
+const COMPANY_ALIAS = {
+  md:  { id: 2, name: 'เมิร์ค' },
+  cg:  { id: 4, name: 'ซิลิกัล' },
+  sep: { id: 5, name: 'ศรีอาคเนย์' },
+  akn: { id: 1, name: 'อาคเนย์' },  // เผื่ออยากระบุอาคเนย์ชัดๆ
+  set: { id: 1, name: 'อาคเนย์' },
+};
+const DEFAULT_COMPANY = { id: 1, name: 'อาคเนย์' };
+
+// แยกตัวย่อบริษัทออกจากคำค้น เช่น "ภูเก็ต 4+570 md" → { keyword:'ภูเก็ต 4+570', company:{id:2} }
+export function parseCompany(text) {
+  const parts = String(text).trim().split(/\s+/);
+  const last = (parts[parts.length - 1] || '').toLowerCase();
+  if (COMPANY_ALIAS[last]) {
+    parts.pop(); // เอาตัวย่อออก
+    return { keyword: parts.join(' ').trim(), company: COMPANY_ALIAS[last] };
+  }
+  return { keyword: String(text).trim(), company: DEFAULT_COMPANY };
+}
+
 // ── ตรวจว่าตั้งค่าครบหรือยัง ─────────────────────────────────────────────────
 export function odooConfigured() {
   return !!(ODOO_URL && ODOO_DB && ODOO_USER && ODOO_KEY);
@@ -58,6 +81,13 @@ async function searchRead(model, domain, fields, limit = 20) {
   ]);
 }
 
+// ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
+// ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
+function withCompany(domain, companyId) {
+  if (!companyId) return domain;
+  return ['&', ['company_id', '=', companyId], ...domain];
+}
+
 // ── แยกคำอัตโนมัติ: "ภูเก็ต4+570" → ["ภูเก็ต","4+570"] ──────────────────────
 // ตัดตรงรอยต่อ ไทย↔ตัวเลข ทั้งสองทาง + รองรับเว้นวรรคปกติ
 function smartWords(keyword) {
@@ -71,7 +101,7 @@ function smartWords(keyword) {
 // ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
 // รองรับหลายคำ: "15FG แผ่น 3.2 ชุบ" → หาสินค้าที่ทุกคำอยู่ในชื่อหรือรหัส
 // (ไม่ต้องเรียงติดกัน — แต่ละคำหาได้ทั้งใน name และ default_code)
-export async function odooStock(keyword) {
+export async function odooStock(keyword, companyId) {
   const words = smartWords(keyword);
 
   let domain;
@@ -92,17 +122,17 @@ export async function odooStock(keyword) {
 
   return await searchRead(
     'product.product',
-    domain,
+    withCompany(domain, companyId),
     ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'],
     15
   );
 }
 
 // ── ดูใบสั่งซื้อ (PO) พร้อมรายการสินค้า ──────────────────────────────────────
-export async function odooPO(poNumber) {
+export async function odooPO(poNumber, companyId) {
   const orders = await searchRead(
     'purchase.order',
-    ['|', ['name', 'ilike', poNumber], ['partner_ref', 'ilike', poNumber]],
+    withCompany(['|', ['name', 'ilike', poNumber], ['partner_ref', 'ilike', poNumber]], companyId),
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'partner_ref'],
     5
   );
@@ -133,10 +163,10 @@ async function safeSearchRead(model, domain, fields, limit) {
 }
 
 // ── ดูใบสั่งขาย (SO) พร้อมรายการสินค้า ───────────────────────────────────────
-export async function odooSO(soNumber) {
+export async function odooSO(soNumber, companyId) {
   const orders = await safeSearchRead(
     'sale.order',
-    ['|', ['name', 'ilike', soNumber], ['client_order_ref', 'ilike', soNumber]],
+    withCompany(['|', ['name', 'ilike', soNumber], ['client_order_ref', 'ilike', soNumber]], companyId),
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'client_order_ref'],
     5
   );
@@ -154,10 +184,10 @@ export async function odooSO(soNumber) {
 }
 
 // ── ดูใบขอซื้อ (PR — Purchase Request, โมดูล OCA: purchase.request) ───────────
-export async function odooPR(prNumber) {
+export async function odooPR(prNumber, companyId) {
   const reqs = await safeSearchRead(
     'purchase.request',
-    [['name', 'ilike', prNumber]],
+    withCompany([['name', 'ilike', prNumber]], companyId),
     ['name', 'state', 'requested_by', 'date_start', 'description'],
     5
   );
@@ -176,7 +206,7 @@ export async function odooPR(prNumber) {
 
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
 // ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
-export async function odooDelivery(keyword) {
+export async function odooDelivery(keyword, companyId) {
   const words = smartWords(keyword);
 
   // แต่ละคำ → ต้องเจอใน (name/origin/ลูกค้า/ปลายทาง) = OR 4 ช่อง
@@ -197,6 +227,7 @@ export async function odooDelivery(keyword) {
     for (let i = 0; i < words.length - 1; i++) domain.push('&');
     words.forEach(w => { domain.push(...oneWord(w)); });
   }
+  domain = withCompany(domain, companyId);
 
   const pickings = await safeSearchRead(
     'stock.picking',
