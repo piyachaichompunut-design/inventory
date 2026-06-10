@@ -2008,13 +2008,18 @@ export async function sendDeliveryPDF(chatId, keyword) {
     const data = {
       title: 'ใบส่งของ — ' + keyword,
       picks: picks.map(p => {
-        const shipped = p.state === 'done'; // ส่งแล้ว = done
+        // Done = ส่งแล้ว(แดง), Cancel = ยกเลิก(เทา), ที่เหลือ = รอส่ง(เขียว)
+        let statusText, statusColor;
+        if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red'; }
+        else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; }
+        else                           { statusText = 'รอส่ง';   statusColor = 'green'; }
         return {
           name: p.name || '-',
           origin: p.origin || '',
           partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-          statusText: shipped ? 'ส่งแล้ว' : 'รอส่ง',
-          shipped,
+          statusText,
+          statusColor,
+          shipped: p.state === 'done',
           date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
           lines: (p.lines || []).map(l => ({
             name: Array.isArray(l.product_id) ? l.product_id[1] : '',
