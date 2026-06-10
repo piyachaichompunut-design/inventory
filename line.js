@@ -1,6 +1,9 @@
-// LINE Webhook — รับข้อความจากกลุ่มไลน์ แล้วสร้างงานใน TMS
+// LINE Webhook — รับข้อความจากกลุ่มไลน์ แล้วสร้างงานใน TMS + คำสั่ง Odoo
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import { handleTelegramCommand, __setDb } from './rpc.js';
+import { odooConfigured, odooDelivery, parseCompany } from './odoo.js';
+import { buildDeliveryPDF } from './pdfgen.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -11,6 +14,9 @@ const db = (SUPABASE_URL && SERVICE_KEY)
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
   : null;
 
+// ให้ rpc.js ใช้ db ตัวเดียวกัน (สำหรับคำสั่งที่ต้องเข้าฐานข้อมูล)
+if (db) { try { __setDb(db); } catch (e) {} }
+
 // ── ส่งข้อความกลับไลน์ ───────────────────────────────────────────────────────
 async function replyLine(replyToken, text) {
   await fetch('https://api.line.me/v2/bot/message/reply', {
@@ -18,6 +24,78 @@ async function replyLine(replyToken, text) {
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LINE_TOKEN}` },
     body: JSON.stringify({ replyToken, messages: [{ type: 'text', text }] })
   });
+}
+
+// ── push ข้อความเข้าไลน์ (ใช้ตอนสร้าง PDF เสร็จทีหลัง) ────────────────────────
+async function pushLine(to, messages) {
+  await fetch('https://api.line.me/v2/bot/message/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LINE_TOKEN}` },
+    body: JSON.stringify({ to, messages })
+  });
+}
+
+// ── สร้าง PDF ใบส่งของ → อัปขึ้น Supabase Storage → ส่งลิงก์เข้าไลน์ ──────────
+async function sendDeliveryPDFtoLine(to, keyword) {
+  if (!odooConfigured()) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้ตั้งค่า Odoo ครับ' }]); return; }
+  if (!db) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้เชื่อมต่อ Storage ครับ' }]); return; }
+  try {
+    const { keyword: dkw, company: dCo } = parseCompany(keyword);
+    const picks = await odooDelivery(dkw, dCo.id);
+    if (!picks.length) {
+      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของ "' + dkw + '" (บริษัท ' + dCo.name + ') ใน Odoo' }]);
+      return;
+    }
+    // นับสถานะ + เตรียมข้อมูล PDF
+    let cntDone = 0, cntPending = 0, cntCancel = 0;
+    const picksData = picks.map(p => {
+      let statusText, statusColor;
+      if (p.state === 'done')        { statusText='ส่งแล้ว'; statusColor='red';  cntDone++; }
+      else if (p.state === 'cancel') { statusText='ยกเลิก';  statusColor='gray'; cntCancel++; }
+      else                           { statusText='รอส่ง';   statusColor='green'; cntPending++; }
+      return {
+        name: p.name || '-',
+        origin: p.origin || '',
+        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+        statusText, statusColor, shipped: p.state === 'done',
+        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
+        lines: (p.lines || []).map(l => ({
+          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+        }))
+      };
+    });
+    const data = {
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
+      summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
+      picks: picksData
+    };
+    const pdfBytes = await buildDeliveryPDF(data);
+
+    // อัปขึ้น Supabase Storage (bucket: attachments) → ได้ public URL
+    const fname = 'delivery/' + Date.now() + '.pdf';
+    const { error: upErr } = await db.storage.from('attachments')
+      .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
+    if (upErr) {
+      await pushLine(to, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]);
+      return;
+    }
+    const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
+    const url = pub.publicUrl;
+
+    // ส่งสรุป + ลิงก์ PDF เข้าไลน์
+    const sumLine = 'รวม ' + picks.length + ' ใบ'
+      + (cntDone ? ' | ส่งแล้ว ' + cntDone : '')
+      + (cntPending ? ' | รอส่ง ' + cntPending : '')
+      + (cntCancel ? ' | ยกเลิก ' + cntCancel : '');
+    await pushLine(to, [{
+      type: 'text',
+      text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + '\n' + sumLine + '\n\n📎 เปิดไฟล์ PDF:\n' + url
+    }]);
+  } catch (e) {
+    await pushLine(to, [{ type:'text', text:'❌ สร้าง PDF ไม่สำเร็จ: ' + e.message }]);
+  }
 }
 
 // ── helper ───────────────────────────────────────────────────────────────────
@@ -107,18 +185,53 @@ export default async function handler(req, res) {
       const text = event.message.text || '';
       const replyToken = event.replyToken;
       const senderName = event.source?.userId || '';
+      // ปลายทางสำหรับ push (กลุ่ม/ห้อง/คนเดี่ยว)
+      const pushTarget = event.source?.groupId || event.source?.roomId || event.source?.userId || '';
+
+      const tt = text.trim();
+      const lc = tt.toLowerCase();
+
+      // ── /ส่งของ → สร้าง PDF อัป Storage แล้วส่งลิงก์ ─────────────────────
+      if (tt.startsWith('/ส่งของ') || tt.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
+        const kw = tt.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+        if (!kw) {
+          await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์');
+        } else {
+          await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ PDF ของ "' + kw + '" ครับ...');
+          // สร้าง PDF + อัป + ส่งลิงก์ (ใช้ push เพราะ replyToken ใช้ได้ครั้งเดียว)
+          if (pushTarget) await sendDeliveryPDFtoLine(pushTarget, kw);
+        }
+        continue;
+      }
+
+      // ── คำสั่ง Odoo อื่นๆ (/สต็อก /po /so /pr /help) → เรียก rpc.js ──────
+      if (tt.startsWith('/สต็อก') || tt.startsWith('/stock') ||
+          lc.startsWith('/po') || tt.startsWith('/พีโอ') ||
+          lc.startsWith('/so') || tt.startsWith('/ขาย') ||
+          lc.startsWith('/pr') || tt.startsWith('/ขอซื้อ')) {
+        try {
+          const reply = await handleTelegramCommand(tt);
+          await replyLine(replyToken, reply || '🔍 ไม่พบข้อมูลครับ');
+        } catch (e) {
+          await replyLine(replyToken, '❌ ดึงข้อมูลไม่สำเร็จ: ' + e.message);
+        }
+        continue;
+      }
 
       // ── คำสั่ง /help ─────────────────────────────────────────────────────
       if (text.trim() === '/help' || text.trim() === '/ช่วยเหลือ') {
         await replyLine(replyToken,
           '🤖 TMS Bot — คำสั่งที่ใช้ได้\n\n' +
-          '📦 สร้างงานรับ:\n' +
-          'รับ: ชื่องาน วันที่ 5/6/2026 @ผู้รับผิดชอบ\n\n' +
-          '🚚 สร้างงานส่ง:\n' +
-          'ส่ง: ชื่องาน วันที่ 5/6/2026 @ผู้รับผิดชอบ\n\n' +
-          '📋 หรือใช้รูปแบบ:\n' +
-          '/งานใหม่ รับ ชื่องาน 5/6/2026\n\n' +
-          '📊 /สรุป — ดูสรุปงานทั้งหมด'
+          '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อก\n' +
+          '🧾 /po [เลขที่] — ใบสั่งซื้อ\n' +
+          '🧾 /so [เลขที่] — ใบสั่งขาย\n' +
+          '📄 /pr [เลขที่] — ใบขอซื้อ\n' +
+          '🚚 /ส่งของ [ชื่อโครงการ] — ใบส่งของ (PDF)\n\n' +
+          '🏢 เลือกบริษัท: เติม md/cg/sep ท้ายคำ\n' +
+          'เช่น /สต็อก เหล็ก cg\n\n' +
+          '━━━━━━━━━━\n' +
+          '📋 สร้างงาน: รับ: ชื่องาน 5/6/2026 @ผู้รับผิดชอบ\n' +
+          '📊 /สรุป — ดูสรุปงาน'
         );
         continue;
       }
