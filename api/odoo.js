@@ -120,9 +120,11 @@ export async function odooStock(keyword, companyId) {
     });
   }
 
+  // หมายเหตุ: สินค้า (product.product) ใช้ร่วมกันทุกบริษัท ไม่กรอง company_id
+  // (ถ้ากรองจะไม่เจอ เพราะสินค้าไม่ได้ผูกบริษัทตรงๆ)
   return await searchRead(
     'product.product',
-    withCompany(domain, companyId),
+    domain,
     ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'],
     15
   );
