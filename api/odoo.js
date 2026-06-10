@@ -200,7 +200,7 @@ export async function odooDelivery(keyword) {
     'stock.picking',
     domain,
     ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
-    8
+    40
   );
   for (const p of pickings) {
     try {
