@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
 import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery } from './odoo.js';
+import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -1984,6 +1985,65 @@ const HANDLERS = {
   getDocRSCompanies, addDocRSCompany, deleteDocRSCompany,
   notifyNewTask
 };
+
+// ── สร้าง PDF ใบส่งของจาก Odoo แล้วส่งเข้า Telegram ─────────────────────────
+// คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ส่งของpdf
+export async function sendDeliveryPDF(chatId, keyword) {
+  if (!TG_TOKEN) return { ok: false, error: 'ยังไม่ได้ตั้ง TELEGRAM_BOT_TOKEN' };
+  if (!odooConfigured()) {
+    await sendTelegramReply(chatId, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ');
+    return { ok: false };
+  }
+  try {
+    const picks = await odooDelivery(keyword);
+    if (!picks.length) {
+      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของที่มีคำว่า "' + keyword + '" ใน Odoo');
+      return { ok: false };
+    }
+    const stateMap = {
+      draft: 'ร่าง', waiting: 'รอ', confirmed: 'รอของ',
+      assigned: 'พร้อมส่ง', done: 'ส่งแล้ว', cancel: 'ยกเลิก'
+    };
+    // เตรียมข้อมูลสำหรับ PDF
+    const data = {
+      title: 'ใบส่งของ — ' + keyword,
+      picks: picks.map(p => ({
+        name: p.name || '-',
+        origin: p.origin || '',
+        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+        state: stateMap[p.state] || p.state || '',
+        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
+        lines: (p.lines || []).map(l => ({
+          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+        }))
+      }))
+    };
+    const pdfBytes = await buildDeliveryPDF(data);
+
+    // ส่งไฟล์เข้า Telegram ผ่าน sendDocument (multipart/form-data)
+    const fd = new FormData();
+    fd.append('chat_id', String(chatId));
+    fd.append('caption', '📄 ใบส่งของ "' + keyword + '" (' + picks.length + ' ใบ)');
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const fname = 'delivery_' + Date.now() + '.pdf';
+    fd.append('document', blob, fname);
+
+    const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendDocument`, {
+      method: 'POST', body: fd
+    });
+    const out = await res.json();
+    if (!out.ok) {
+      await sendTelegramReply(chatId, '❌ ส่งไฟล์ไม่สำเร็จ: ' + (out.description || ''));
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (e) {
+    await sendTelegramReply(chatId, '❌ สร้าง PDF ไม่สำเร็จ: ' + e.message);
+    return { ok: false, error: e.message };
+  }
+}
 
 export const __handlers = HANDLERS;
 export { checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport, handleTelegramCommand };
