@@ -2,7 +2,7 @@
 // - /คำสั่ง → คำสั่งสำเร็จรูป (ดูข้อมูลจาก Supabase)
 // - @botname → ถาม Groq AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
 // - กลุ่มใหม่: Reply ข้อความ แล้ว @บอท → บันทึกงานอัตโนมัติ
-import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat } from './rpc.js';
+import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat, sendDeliveryPDF } from './rpc.js';
 import { createClient } from '@supabase/supabase-js';
 
 const GROQ_KEY     = process.env.GROQ_API_KEY || '';
@@ -241,8 +241,8 @@ export default async function handler(req, res) {
 
     if (!isAllowedChat(chatId)) { res.status(200).json({ ok: true }); return; }
 
-    // ── เส้นทางที่ 1: คำสั่ง / (เฉพาะกลุ่มหลักเท่านั้น) ─────────────────────
-    if (trimmed.startsWith('/') && chatType !== 'sub') {
+    // ── เส้นทางที่ 1: คำสั่ง / (ใช้ได้ทุกกลุ่ม) ─────────────────────────────
+    if (trimmed.startsWith('/')) {
       // ตัด @botname ที่ Telegram เติมท้ายคำสั่งในกลุ่ม เช่น /สรุป@OdooBot → /สรุป
       var cmdText = trimmed;
       if (BOT_USERNAME) {
@@ -251,6 +251,21 @@ export default async function handler(req, res) {
         cmdText = cmdText.replace(/@\w+/g, '');
       }
       cmdText = cmdText.trim();
+
+      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
+      var lc = cmdText.toLowerCase();
+      if (cmdText.startsWith('/ส่งของ') || cmdText.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
+        var kw = cmdText.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+        if (!kw) {
+          await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์');
+        } else {
+          await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ PDF ของ "' + kw + '" ครับ...');
+          await sendDeliveryPDF(chatId, kw);
+        }
+        res.status(200).json({ ok: true });
+        return;
+      }
+
       const reply = await handleTelegramCommand(cmdText);
       if (reply) await sendTelegramReply(chatId, reply);
       res.status(200).json({ ok: true });
