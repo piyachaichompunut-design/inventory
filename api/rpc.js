@@ -7,6 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
+import { odooConfigured, odooStock, odooPO } from './odoo.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -963,6 +964,8 @@ async function handleTelegramCommand(text) {
       '🗓️ /งานวันที่ [วันที่] [สถานะ] — เช่น /งานวันที่ 5/6/2026 to do\n' + '🗓️ /งาน [วันที่] — รูปแบบสั้น เช่น /งาน 5/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
+      '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก เหล็ก\n' +
+      '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '👤 /ข้อมูล [ชื่อ] — วันลาคงเหลือ + รายการลาของพนักงาน เช่น /ข้อมูล สมชาย'
     );
   }
@@ -1398,6 +1401,65 @@ async function handleTelegramCommand(text) {
       msg += '\n';
     }
     return msg.trim();
+  }
+
+  // ── /สต็อก [คำค้น] — เช็คสต็อกสินค้าจาก Odoo ──────────────────────────
+  if (cleaned.startsWith('/สต็อก') || lower.startsWith('/stock')) {
+    const kw = cleaned.replace(/^\/สต็อก/, '').replace(/^\/stock/i, '').trim();
+    if (!kw) return 'พิมพ์ชื่อสินค้าด้วยครับ เช่น /สต็อก เหล็ก';
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    try {
+      const products = await odooStock(kw);
+      if (!products.length) return '🔍 ไม่พบสินค้าที่มีคำว่า "' + tgEsc(kw) + '" ใน Odoo';
+      let msg = '📦 <b>สต็อก "' + tgEsc(kw) + '" (' + products.length + ')</b>\n\n';
+      products.forEach((p, i) => {
+        const code = p.default_code ? '[' + tgEsc(p.default_code) + '] ' : '';
+        const uom  = Array.isArray(p.uom_id) ? p.uom_id[1] : '';
+        msg += (i + 1) + '. ' + code + tgEsc(p.name) + '\n';
+        msg += '   📊 คงเหลือ: <b>' + p.qty_available + '</b> ' + tgEsc(uom);
+        msg += '  |  คาดการณ์: ' + p.virtual_available + '\n\n';
+      });
+      return msg.trim();
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
+  }
+
+  // ── /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo ────────────────────────────────
+  if (lower.startsWith('/po') || cleaned.startsWith('/พีโอ')) {
+    const kw = cleaned.replace(/^\/po/i, '').replace(/^\/พีโอ/, '').trim();
+    if (!kw) return 'พิมพ์เลข PO ด้วยครับ เช่น /po PO2603068';
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    try {
+      const orders = await odooPO(kw);
+      if (!orders.length) return '🔍 ไม่พบ PO "' + tgEsc(kw) + '" ใน Odoo';
+      const stateMap = {
+        draft: '📝 ร่าง', sent: '📤 ส่งแล้ว', 'to approve': '⏳ รออนุมัติ',
+        purchase: '✅ ยืนยันแล้ว', done: '✔️ เสร็จสิ้น', cancel: '❌ ยกเลิก'
+      };
+      let msg = '';
+      orders.forEach(o => {
+        const partner = Array.isArray(o.partner_id) ? o.partner_id[1] : '';
+        msg += '🧾 <b>' + tgEsc(o.name) + '</b>\n';
+        if (partner) msg += '   🏢 ' + tgEsc(partner) + '\n';
+        msg += '   📌 ' + (stateMap[o.state] || tgEsc(o.state)) + '\n';
+        if (o.date_order) msg += '   📅 ' + tgEsc(String(o.date_order).slice(0, 10)) + '\n';
+        msg += '   💰 รวม: ' + Number(o.amount_total || 0).toLocaleString() + ' บาท\n';
+        if (o.lines && o.lines.length) {
+          msg += '   ━━━━━━━━━━\n';
+          o.lines.forEach(l => {
+            const pname = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            const remain = (l.product_qty || 0) - (l.qty_received || 0);
+            msg += '   • ' + tgEsc(pname) + '\n';
+            msg += '      สั่ง ' + l.product_qty + ' | รับแล้ว ' + l.qty_received + ' | ค้าง ' + remain + '\n';
+          });
+        }
+        msg += '\n';
+      });
+      return msg.trim();
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
   }
 
   // ไม่ใช่คำสั่งที่รู้จัก — เงียบไว้ (return null = ไม่ตอบ)
