@@ -2007,18 +2007,22 @@ export async function sendDeliveryPDF(chatId, keyword) {
     // เตรียมข้อมูลสำหรับ PDF
     const data = {
       title: 'ใบส่งของ — ' + keyword,
-      picks: picks.map(p => ({
-        name: p.name || '-',
-        origin: p.origin || '',
-        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-        state: stateMap[p.state] || p.state || '',
-        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
-        lines: (p.lines || []).map(l => ({
-          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
-          qty: l.quantity || l.product_uom_qty || 0,
-          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-        }))
-      }))
+      picks: picks.map(p => {
+        const shipped = p.state === 'done'; // ส่งแล้ว = done
+        return {
+          name: p.name || '-',
+          origin: p.origin || '',
+          partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+          statusText: shipped ? 'ส่งแล้ว' : 'รอส่ง',
+          shipped,
+          date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
+          lines: (p.lines || []).map(l => ({
+            name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+            qty: l.quantity || l.product_uom_qty || 0,
+            uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+          }))
+        };
+      })
     };
     const pdfBytes = await buildDeliveryPDF(data);
 
