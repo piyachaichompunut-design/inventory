@@ -8,6 +8,17 @@
 //     ถ้าต้องการ ให้อัปเป็น Pro Plan แล้วเปลี่ยน schedule เป็น */15 * * * *
 
 import { checkDueTasks, dailyReceiveSend, monthlyKPIReport } from './rpc.js';
+import { createClient } from '@supabase/supabase-js';
+
+// ลบ log ข้อความไลน์ที่เก่ากว่า 7 วัน (กันตารางโต)
+async function cleanupLineMessages() {
+  const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return { skipped: true };
+  const db = createClient(url, key, { auth: { persistSession: false } });
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await db.from('line_messages').delete().lt('created_at', cutoff);
+  return error ? { error: error.message } : { ok: true };
+}
 
 export default async function handler(req, res) {
   try {
@@ -22,6 +33,9 @@ export default async function handler(req, res) {
 
     // ทุกวัน — งานครบกำหนด/เลยกำหนด
     results.due = await checkDueTasks();
+
+    // ทุกวัน — ลบ log ข้อความไลน์เก่ากว่า 7 วัน
+    try { results.cleanup = await cleanupLineMessages(); } catch (e) { results.cleanup = { error: e.message }; }
 
     // วันที่ 1 ของเดือน — KPI รายเดือน
     if (thaiDate === 1) {
