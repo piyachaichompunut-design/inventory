@@ -131,8 +131,8 @@ function parseTask(text) {
 
   let task = '', duration = 'รับ', actionDate = todayStr(), salesName = '';
 
-  // ดึงประเภท รับ/ส่ง
-  if (t.includes('ส่ง')) duration = 'ส่ง';
+  // ดึงประเภท รับ/ส่ง — เช็คเฉพาะคำขึ้นต้น (กันชื่องานที่มีคำว่า ส่ง/รับ ปนอยู่)
+  if (/^\/?(งานใหม่|new)?\s*ส่ง[:\s]/.test(t) || /^ส่ง[:\s]/.test(t)) duration = 'ส่ง';
   else duration = 'รับ';
 
   // ดึงวันที่ (รองรับ วันที่ XX/XX/XXXX หรือตัวเลขโดด)
@@ -158,6 +158,73 @@ function parseTask(text) {
   task = taskText;
 
   return { task, duration, actionDate, salesName };
+}
+
+// ── เดางานจากข้อความธรรมชาติ (ใช้เมื่อแท็กบอท) ───────────────────────────────
+// รูปแบบ: @TMS Bot [ข้อความงาน] [ตัวย่อหมวด] [ชื่อผู้รับผิดชอบ]
+// เช่น: @TMS Bot ส่งของปราจีนบุรี วันที่10มิถุนายน ชุบ พี่เต้ย
+async function parseTaskSmart(text, dbClient) {
+  let t = text.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+
+  // เดาประเภท ส่ง/รับ จากคำในข้อความ
+  let duration = 'รับ';
+  const sendWords = /(ส่งของ|นัดส่ง|ส่งที่|จัดส่ง|ขอส่ง|จะส่ง|ส่งงาน|ออกของ|นำส่ง)/;
+  const recvWords = /(รับของ|รับเข้า|มารับ|ขอรับ|จะรับ|รับงาน|เข้ารับ|รับสินค้า)/;
+  if (sendWords.test(t)) duration = 'ส่ง';
+  else if (recvWords.test(t)) duration = 'รับ';
+
+  // ดึงวันที่ (ตัวเลข 10/6/2026 หรือไทย "วันที่10มิถุนายน")
+  let actionDate = todayStr();
+  const dateMatch = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+  if (dateMatch) {
+    const parsed = parseDate(dateMatch[1]);
+    if (parsed) actionDate = parsed;
+  } else {
+    const thMonth = { 'มกราคม':1,'กุมภาพันธ์':2,'มีนาคม':3,'เมษายน':4,'พฤษภาคม':5,'มิถุนายน':6,'กรกฎาคม':7,'สิงหาคม':8,'กันยายน':9,'ตุลาคม':10,'พฤศจิกายน':11,'ธันวาคม':12 };
+    const m = t.match(/วันที่?\s*(\d{1,2})\s*(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/);
+    if (m) {
+      const now = new Date();
+      actionDate = now.getFullYear() + '-' + String(thMonth[m[2]]).padStart(2,'0') + '-' + String(+m[1]).padStart(2,'0');
+    }
+  }
+
+  // ตัดวันที่ออกจากข้อความ
+  let body = t.replace(/วันที่?\s*\d{1,2}\s*(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/, '')
+              .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/, '')
+              .replace(/\s+/g, ' ').trim();
+
+  // ── จับหมวดหมู่ + ผู้รับผิดชอบ จาก 2 คำท้าย ──────────────────────────────
+  // ดึงรายชื่อหมวดจาก DB มาเทียบ
+  let categories = '', salesName = '';
+  let catList = [];
+  if (dbClient) {
+    try {
+      const { data } = await dbClient.from('categories').select('name');
+      catList = (data || []).map(c => String(c.name || ''));
+    } catch (e) {}
+  }
+
+  const words = body.split(' ');
+  // ลองดูคำท้ายๆ ว่ามีคำไหนตรง (หรือเป็นส่วนหนึ่งของ) ชื่อหมวด
+  // รูปแบบที่ตั้งใจ: ...งาน [หมวด] [ชื่อคน]  → คำรองท้าย = หมวด, คำท้าย = ชื่อ
+  if (words.length >= 2) {
+    const lastWord = words[words.length - 1];      // ชื่อคน
+    const secondLast = words[words.length - 2];    // ตัวย่อหมวด
+    // เช็คว่า secondLast ตรงกับหมวดไหนใน DB ไหม (เทียบแบบมีคำนั้นอยู่)
+    const matched = catList.find(c => c === secondLast || c.includes(secondLast) || secondLast.includes(c));
+    if (matched) {
+      categories = matched;          // ใช้ชื่อหมวดเต็มจาก DB
+      salesName = lastWord;          // คำท้าย = ผู้รับผิดชอบ
+      words.splice(words.length - 2, 2); // ตัด 2 คำท้ายออกจากชื่องาน
+    }
+  }
+
+  let task = words.join(' ').trim();
+  if (task.length > 200) task = task.slice(0, 200);
+  if (!task) return null;
+
+  return { task, duration, actionDate, salesName, categories };
 }
 
 // ── verify LINE signature ─────────────────────────────────────────────────────
@@ -191,6 +258,30 @@ export default async function handler(req, res) {
       const senderName = event.source?.userId || '';
       // ปลายทางสำหรับ push (กลุ่ม/ห้อง/คนเดี่ยว)
       const pushTarget = event.source?.groupId || event.source?.roomId || event.source?.userId || '';
+
+      // ── เก็บทุกข้อความ (text) ลง DB เพื่อให้ reply ย้อนหลังได้ (เก็บ 7 วัน) ──
+      const msgId = event.message?.id || '';
+      if (db && msgId) {
+        try {
+          await db.from('line_messages').upsert({
+            message_id: msgId,
+            group_id: pushTarget,
+            user_id: senderName,
+            text: text
+          }, { onConflict: 'message_id' });
+        } catch (e) { /* เก็บไม่ได้ก็ไม่เป็นไร */ }
+      }
+
+      // ── ถ้าเป็นการ reply ข้อความเก่า → ดึงข้อความต้นฉบับจาก DB ──────────────
+      const quotedId = event.message?.quotedMessageId || '';
+      let quotedText = '';
+      if (db && quotedId) {
+        try {
+          const { data } = await db.from('line_messages')
+            .select('text').eq('message_id', quotedId).maybeSingle();
+          if (data && data.text) quotedText = data.text;
+        } catch (e) {}
+      }
 
       const tt = text.trim();
       const lc = tt.toLowerCase();
@@ -259,7 +350,24 @@ export default async function handler(req, res) {
       }
 
       // ── สร้างงานใหม่ ──────────────────────────────────────────────────────
-      const taskData = parseTask(text);
+      // เช็คว่าบอทถูกแท็กไหม (mention.mentionees มี isSelf=true)
+      const mentionees = event.message?.mention?.mentionees || [];
+      const botMentioned = mentionees.some(m => m.isSelf === true);
+
+      // ลองแบบเดิมก่อน (รับ:/ส่ง:/งานใหม่)
+      let taskData = parseTask(text);
+
+      // ถ้าบอทถูกแท็ก และเป็นการ reply ข้อความงาน → รวมข้อความต้นฉบับ + ที่พิมพ์ใหม่
+      // เช่น reply งาน "แจ้งส่งของ อบจ..." แล้วพิมพ์ "ชุบ พี่เต้ย"
+      // → ข้อความรวม = "แจ้งส่งของ อบจ... ชุบ พี่เต้ย"
+      if (!taskData && botMentioned) {
+        // เอา mention (@TMS Bot) ออกจากข้อความที่พิมพ์ใหม่ก่อน
+        const typedClean = text.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const combined = quotedText
+          ? (quotedText + ' ' + typedClean).trim()  // reply: ต้นฉบับ + ที่พิมพ์
+          : typedClean;                              // ไม่ reply: ใช้ที่พิมพ์อย่างเดียว
+        taskData = await parseTaskSmart(combined, db);
+      }
       if (taskData) {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
 
@@ -272,7 +380,7 @@ export default async function handler(req, res) {
           sales_name: taskData.salesName,
           task_status: 'To Do',
           notification: 'แจ้งล่วงหน้า',
-          categories: '',
+          categories: taskData.categories || '',
           note: '',
           doing: false,
           done: false,
