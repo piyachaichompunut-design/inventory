@@ -964,7 +964,7 @@ async function handleTelegramCommand(text) {
       '🗓️ /งานวันที่ [วันที่] [สถานะ] — เช่น /งานวันที่ 5/6/2026 to do\n' + '🗓️ /งาน [วันที่] — รูปแบบสั้น เช่น /งาน 5/6/2026\n' +
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
-      '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก เหล็ก\n' +
+      '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก แผ่น 3.2 ชุบ\n' +
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '👤 /ข้อมูล [ชื่อ] — วันลาคงเหลือ + รายการลาของพนักงาน เช่น /ข้อมูล สมชาย'
     );
@@ -1404,24 +1404,42 @@ async function handleTelegramCommand(text) {
   }
 
   // ── /สต็อก [คำค้น] — เช็คสต็อกสินค้าจาก Odoo ──────────────────────────
-  if (cleaned.startsWith('/สต็อก') || lower.startsWith('/stock')) {
-    const kw = cleaned.replace(/^\/สต็อก/, '').replace(/^\/stock/i, '').trim();
-    if (!kw) return 'พิมพ์ชื่อสินค้าด้วยครับ เช่น /สต็อก เหล็ก';
-    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
-    try {
-      const products = await odooStock(kw);
-      if (!products.length) return '🔍 ไม่พบสินค้าที่มีคำว่า "' + tgEsc(kw) + '" ใน Odoo';
-      let msg = '📦 <b>สต็อก "' + tgEsc(kw) + '" (' + products.length + ')</b>\n\n';
-      products.forEach((p, i) => {
-        const code = p.default_code ? '[' + tgEsc(p.default_code) + '] ' : '';
-        const uom  = Array.isArray(p.uom_id) ? p.uom_id[1] : '';
-        msg += (i + 1) + '. ' + code + tgEsc(p.name) + '\n';
-        msg += '   📊 คงเหลือ: <b>' + p.qty_available + '</b> ' + tgEsc(uom);
-        msg += '  |  คาดการณ์: ' + p.virtual_available + '\n\n';
-      });
-      return msg.trim();
-    } catch (e) {
-      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+  // รองรับหลายแบบ:
+  //   /สต็อก แผ่น 3.2 ชุบ   |   /stock เหล็ก
+  //   แผ่น 3.2 ชุบ เหลือเท่าไร   (พิมพ์เปล่าๆ ไม่มี / ก็ได้ — ตัดคำถามท้ายออก)
+  {
+    let stockKw = null;
+    if (cleaned.startsWith('/สต็อก') || lower.startsWith('/stock')) {
+      stockKw = cleaned.replace(/^\/สต็อก/, '').replace(/^\/stock/i, '').trim();
+    } else if (!cleaned.startsWith('/')) {
+      // พิมพ์เปล่าๆ ไม่มี / — ถือเป็นการค้นสต็อก ถ้ามีคำบ่งชี้ว่าถามของ/จำนวน
+      const askStock = /(เหลือ|คงเหลือ|สต็อก|มีกี่|มีเท่าไร|กี่ชิ้น|กี่อัน|กี่แผ่น|stock)/i.test(cleaned);
+      if (askStock) stockKw = cleaned;
+    }
+
+    if (stockKw !== null) {
+      // ตัดคำถาม/คำพ่วงท้ายออก เหลือแต่ชื่อสินค้า
+      stockKw = stockKw
+        .replace(/(เหลือเท่าไร|เหลือเท่าไหร่|เหลือกี่|คงเหลือเท่าไร|คงเหลือ|เหลือ|มีกี่|มีเท่าไร|มีไหม|กี่ชิ้น|กี่อัน|กี่แผ่น|สต็อก|stock|เท่าไร|เท่าไหร่|\?|\？)/gi, '')
+        .replace(/\s+/g, ' ').trim();
+
+      if (!stockKw) return 'พิมพ์ชื่อสินค้าด้วยครับ เช่น /สต็อก แผ่น 3.2 ชุบ';
+      if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+      try {
+        const products = await odooStock(stockKw);
+        if (!products.length) return '🔍 ไม่พบสินค้าที่มีคำว่า "' + tgEsc(stockKw) + '" ใน Odoo';
+        let msg = '📦 <b>สต็อก "' + tgEsc(stockKw) + '" (' + products.length + ' รายการ)</b>\n\n';
+        products.forEach((p, i) => {
+          const code = p.default_code ? '[' + tgEsc(p.default_code) + '] ' : '';
+          const uom  = Array.isArray(p.uom_id) ? p.uom_id[1] : '';
+          msg += (i + 1) + '. ' + code + tgEsc(p.name) + '\n';
+          msg += '   📊 คงเหลือ: <b>' + p.qty_available + '</b> ' + tgEsc(uom) + '\n';
+          msg += '   🔮 คาดการณ์: ' + p.virtual_available + ' ' + tgEsc(uom) + '\n\n';
+        });
+        return msg.trim();
+      } catch (e) {
+        return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+      }
     }
   }
 
