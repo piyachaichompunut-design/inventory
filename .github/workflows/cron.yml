@@ -1,0 +1,21 @@
+name: Daily Morning Report
+on:
+  schedule:
+    - cron: '45 0 * * *'   # 07:45 น. ไทย (00:45 UTC)
+  workflow_dispatch:         # กดรันมือได้ด้วย (สำหรับทดสอบ)
+
+jobs:
+  morning-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: dailyReceiveSend
+        run: |
+          curl -s -X POST https://inventory-rho-hazel.vercel.app/api/rpc \
+            -H "Content-Type: application/json" \
+            -d '{"fn":"dailyReceiveSend","args":[]}'
+
+      - name: checkDueTasks
+        run: |
+          curl -s -X POST https://inventory-rho-hazel.vercel.app/api/rpc \
+            -H "Content-Type: application/json" \
+            -d '{"fn":"checkDueTasks","args":[]}'
