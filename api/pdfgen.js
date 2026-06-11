@@ -53,18 +53,41 @@ export async function buildDeliveryPDF(data) {
   const gray = rgb(0.45, 0.45, 0.45);
   const orange = rgb(0.92, 0.35, 0.05);
 
-  // ฟังก์ชันช่วยวาดข้อความ + ขึ้นหน้าใหม่อัตโนมัติ
+  const pageWidth = A4[0] - margin * 2; // ~495pt
+
+  // ── ตัดบรรทัดอัตโนมัติ (word-wrap) ──────────────────────────────────────────
+  const wrapText = (text, f, size, maxWidth) => {
+    const clean = String(text || '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2300}-\u{23FF}]/gu, '').replace(/\s+$/, '');
+    const lines = [];
+    // ตัดตาม --- และช่องว่าง
+    const words = clean.replace(/-{2,}/g, ' ').split(/(?<=[\u0E00-\u0E7Fa-zA-Z0-9])(?=[\u0E00-\u0E7F])|(?<=[\u0E00-\u0E7F])(?=[a-zA-Z0-9])|[-\s]+/g).filter(Boolean);
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w;
+      if (f.widthOfTextAtSize(test, size) > maxWidth && cur) {
+        lines.push(cur);
+        cur = w;
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines.length ? lines : [clean];
+  };
+
+  // ฟังก์ชันช่วยวาดข้อความ + ขึ้นหน้าใหม่อัตโนมัติ + word-wrap
   const newPageIfNeeded = (need = 20) => {
     if (y < margin + need) { page = pdf.addPage(A4); y = A4[1] - margin; }
   };
   const line = (text, { size = 12, bold = false, color = black, indent = 0, gap = 6 } = {}) => {
-    newPageIfNeeded(size + gap);
-    // เอาอิโมจิ/สัญลักษณ์ที่ฟอนต์ไทยไม่มีออก กันขึ้นเป็นช่อง □
-    const clean = String(text || '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2300}-\u{23FF}]/gu, '').replace(/\s+$/,'');
-    page.drawText(clean, {
-      x: margin + indent, y, size, font: bold ? fontB : font, color
-    });
-    y -= size + gap;
+    const f = bold ? fontB : font;
+    const maxW = pageWidth - indent;
+    const wrapped = wrapText(text, f, size, maxW);
+    for (let i = 0; i < wrapped.length; i++) {
+      newPageIfNeeded(size + gap);
+      page.drawText(wrapped[i], { x: margin + indent, y, size, font: f, color });
+      y -= size + (i < wrapped.length - 1 ? 3 : gap);
+    }
   };
   const hr = () => {
     newPageIfNeeded(10);
@@ -106,9 +129,24 @@ export async function buildDeliveryPDF(data) {
 
     if (p.lines && p.lines.length) {
       line('รายการสินค้า:', { size: 11, bold: true, indent: 14, gap: 6 });
-      p.lines.forEach(l => {
-        const txt = '• ' + (l.name || '') + '   ' + (l.qty || 0) + ' ' + (l.uom || '');
-        line(txt, { size: 11, indent: 24, gap: 5 });
+      p.lines.forEach((l, li) => {
+        // แยกรหัส [xxx] ออกจากชื่อสินค้า
+        const fullName = l.name || '';
+        const codeMatch = fullName.match(/^\[([^\]]+)\]\s*/);
+        const code = codeMatch ? codeMatch[1] : '';
+        const nameOnly = codeMatch ? fullName.slice(codeMatch[0].length) : fullName;
+        // ทำความสะอาดชื่อ: แทน --- ด้วยช่องว่าง
+        const cleanName = nameOnly.replace(/-{2,}/g, ' ').trim();
+        const qtyStr = String(l.qty || 0) + ' ' + (l.uom || '');
+
+        // บรรทัดที่ 1: รหัส (ถ้ามี)
+        if (code) {
+          line((li + 1) + '. รหัส: ' + code, { size: 10, bold: true, indent: 24, gap: 2, color: gray });
+        }
+        // บรรทัดที่ 2: ชื่อสินค้า (wrap อัตโนมัติ)
+        line((code ? '    ' : (li + 1) + '. ') + cleanName, { size: 10, indent: 24, gap: 2 });
+        // บรรทัดที่ 3: จำนวน
+        line('    จำนวน: ' + qtyStr, { size: 10, indent: 24, gap: 6, color: orange });
       });
     }
     y -= 8;
