@@ -120,10 +120,21 @@ const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().to
 // แปลงวันที่ จาก 5/6/2026 หรือ 5/6/69 → 2026-06-05
 function parseDate(s) {
   if (!s) return null;
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  // รองรับทั้งมีปีและไม่มีปี: 12/6, 12/6/69, 12-6-2569
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
   if (!m) return null;
   let [, d, mo, y] = m;
-  y = +y; if (y < 100) y += 2000; if (y >= 2500) y -= 543;
+  if (y === undefined) {
+    y = new Date().getFullYear(); // ไม่มีปี → ปีปัจจุบัน (ค.ศ.)
+  } else {
+    y = +y;
+    if (y < 100) {
+      // ปี 2 หลัก: >=50 = พ.ศ. (69→2569), <50 = ค.ศ. (26→2026)
+      if (y >= 50) y += 2500;
+      else y += 2000;
+    }
+    if (y >= 2400) y -= 543; // พ.ศ. → ค.ศ.
+  }
   if (+mo < 1 || +mo > 12 || +d < 1 || +d > 31) return null;
   return y + '-' + String(+mo).padStart(2,'0') + '-' + String(+d).padStart(2,'0');
 }
@@ -715,7 +726,7 @@ export default async function handler(req, res) {
 
           const { error: updErr } = await db.from('tasks')
             .update({ action_date: newDate }).eq('id', targetTaskId);
-          console.log('CHANGEDATE_RESULT:', JSON.stringify({ targetTaskId, newDate, quotedId, updErr: updErr?.message }));
+          console.log('CHANGEDATE_RESULT:', JSON.stringify({ dateStr, newDate, targetTaskId, quotedId, updErr: updErr?.message }));
           if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
