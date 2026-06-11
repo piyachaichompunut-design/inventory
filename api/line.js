@@ -447,10 +447,7 @@ export default async function handler(req, res) {
       if (/^\+\d+$/.test(tt)) {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         try {
-          if (!quotedId) {
-            await replyLine(replyToken, '⚠️ ต้อง Reply รูป/ไฟล์ก่อนแล้วพิมพ์ +1 ครับ');
-            continue;
-          }
+          if (!quotedId) continue;
           // ดึง message type จาก line_messages
           const { data: quotedMsg } = await db.from('line_messages')
             .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
@@ -470,7 +467,8 @@ export default async function handler(req, res) {
           const ext = fileMsgType === 'image' ? '.jpg' : (fname && fname.includes('.') ? '' : '.bin');
           const safeName = fname || (fileMsgType === 'image' ? 'image.jpg' : 'file' + ext);
           const ts = Date.now();
-          const storagePath = last.task_id + '/' + ts + '_' + safeName.replace(/[^\w.\-ก-๙]/g, '_');
+          const ext2 = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : '';
+          const storagePath = last.task_id + '/' + ts + ext2;
 
           const { error: upErr } = await db.storage.from('attachments')
             .upload(storagePath, buffer, { contentType, upsert: true });
