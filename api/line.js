@@ -458,6 +458,7 @@ export default async function handler(req, res) {
 
       const tt = text.trim();
       const lc = tt.toLowerCase();
+      if (botMentioned) console.log('RAW_TEXT:', JSON.stringify(text), 'HEX:', Buffer.from(text).toString('hex').slice(0,100));
 
       // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
       if (/^\+\d+$/.test(tt)) {
