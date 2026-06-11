@@ -42,8 +42,8 @@ async function pushLine(to, messages) {
 // ── สร้าง PDF ใบส่งของ → อัปขึ้น Supabase Storage → ส่งลิงก์เข้าไลน์ ──────────
 // statusFilter: 'pending' (ค่าเริ่มต้น) | 'done' | 'all'
 async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
-  if (!odooConfigured()) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้ตั้งค่า Odoo ครับ' }]); return; }
-  if (!db) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้เชื่อมต่อ Storage ครับ' }]); return; }
+  if (!odooConfigured()) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ' }]); return; }
+  if (!db) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อ Storage ครับ' }]); return; }
   try {
     const { keyword: dkw, company: dCo } = parseCompany(keyword);
     const allPicks = await odooDelivery(dkw, dCo.id);
@@ -97,7 +97,7 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
     const fname = 'delivery/' + Date.now() + '.pdf';
     const { error: upErr } = await db.storage.from('attachments')
       .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
-    if (upErr) { await pushLine(to, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
+    if (upErr) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
 
     const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
     const sumLine = 'รวม ' + picks.length + ' ใบ'
@@ -109,7 +109,7 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
       text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + ' [' + statusLabel + ']\n' + sumLine + '\n\n📎 เปิดไฟล์ PDF:\n' + pub.publicUrl
     }]);
   } catch (e) {
-    await pushLine(to, [{ type:'text', text:'❌ สร้าง PDF ไม่สำเร็จ: ' + e.message }]);
+    await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ สร้าง PDF ไม่สำเร็จ: ' + e.message }]);
   }
 }
 
@@ -461,7 +461,7 @@ export default async function handler(req, res) {
 
       // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
       if (/^\+\d+$/.test(tt)) {
-        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         try {
           if (!quotedId) continue;
           // ดึง message type จาก line_messages
@@ -488,7 +488,7 @@ export default async function handler(req, res) {
 
           const { error: upErr } = await db.storage.from('attachments')
             .upload(storagePath, buffer, { contentType, upsert: true });
-          if (upErr) { await replyLine(replyToken, '❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message); continue; }
+          if (upErr) { await replyLine(replyToken, '⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message); continue; }
 
           const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
 
@@ -498,12 +498,12 @@ export default async function handler(req, res) {
           atts.push({ name: safeName, size: buffer.length, fileId: storagePath, mimeType: contentType, webViewLink: pub.publicUrl });
 
           const { error: updErr } = await db.from('tasks').update({ attachments: atts }).eq('id', last.task_id);
-          if (updErr) { await replyLine(replyToken, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr.message); continue; }
+          if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ บันทึกไฟล์ไม่สำเร็จ: ' + updErr.message); continue; }
 
           const fileNum = tt.replace('+', '');
           await replyLine(replyToken, 'รับทราบครับ ไฟล์ที่ ' + fileNum);
         } catch (e) {
-          await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+          await replyLine(replyToken, '⚠️⚠️⚠️ แนบไฟล์ไม่สำเร็จ: ' + e.message);
         }
         continue;
       }
@@ -530,7 +530,7 @@ export default async function handler(req, res) {
           await replyLine(replyToken, 'รูปแบบไม่ถูกต้องครับ ตัวอย่าง: /เทียบ so1234 po5678');
           continue;
         }
-        if (!odooConfigured()) { await replyLine(replyToken, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ'); continue; }
+        if (!odooConfigured()) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ'); continue; }
         await replyLine(replyToken, '⏳ กำลังดึงข้อมูลและสร้าง PDF เปรียบเทียบ...');
         if (pushTarget) {
           (async () => {
@@ -542,7 +542,7 @@ export default async function handler(req, res) {
               const fname = 'compare/' + Date.now() + '.pdf';
               const { error: upErr } = await db.storage.from('attachments')
                 .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
-              if (upErr) { await pushLine(pushTarget, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
+              if (upErr) { await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
               const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
               // สรุปตัวเลข
               const rows = compareData.rows || [];
@@ -554,11 +554,11 @@ export default async function handler(req, res) {
                 text: '📊 เปรียบเทียบ ' + labelA + ' vs ' + labelB + ' (' + cmp.name + ')\n\n' +
                       '✅ ตรง: ' + cntOk + ' รายการ\n' +
                       (cntDiff ? '⚠️ ต่าง: ' + cntDiff + ' รายการ\n' : '') +
-                      (cntMis  ? '❌ ขาด: ' + cntMis  + ' รายการ\n' : '') +
+                      (cntMis  ? '⚠️⚠️⚠️ ขาด: ' + cntMis  + ' รายการ\n' : '') +
                       '\n📎 เปิด PDF:\n' + pub.publicUrl
               }]);
             } catch (e) {
-              await pushLine(pushTarget, [{ type:'text', text:'❌ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
+              await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
             }
           })();
         }
@@ -596,7 +596,7 @@ export default async function handler(req, res) {
           const reply = await handleTelegramCommand(tt);
           await replyLine(replyToken, reply || '🔍 ไม่พบข้อมูลครับ');
         } catch (e) {
-          await replyLine(replyToken, '❌ ดึงข้อมูลไม่สำเร็จ: ' + e.message);
+          await replyLine(replyToken, '⚠️⚠️⚠️ ดึงข้อมูลไม่สำเร็จ: ' + e.message);
         }
         continue;
       }
@@ -621,7 +621,7 @@ export default async function handler(req, res) {
 
       // ── คำสั่ง /สรุป ─────────────────────────────────────────────────────
       if (text.trim() === '/สรุป') {
-        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         const { data } = await db.from('tasks').select('task_status, done');
         const list = data || [];
         const todo  = list.filter(t => !t.done && t.task_status === 'To Do').length;
@@ -639,7 +639,7 @@ export default async function handler(req, res) {
 
       // ── แก้ไฟล์ → reply ข้อความเดิม + แท็กบอท + "แก้ไฟล์" → ล้างไฟล์เก่า ──
       if (botMentioned && /^แก้ไฟล์$/i.test(tt.replace(/@\S+/g, '').trim())) {
-        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         const { data: last } = await db.from('line_last_task')
           .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
         if (!last || !last.task_id) {
@@ -647,7 +647,7 @@ export default async function handler(req, res) {
         }
         const { error: clrErr } = await db.from('tasks')
           .update({ attachments: [] }).eq('id', last.task_id);
-        if (clrErr) { await replyLine(replyToken, '❌ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
+        if (clrErr) { await replyLine(replyToken, '⚠️⚠️⚠️ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
         await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + last.task_name + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
         continue;
       }
@@ -657,15 +657,15 @@ export default async function handler(req, res) {
         const cleanTT = tt.replace(/@\S+/g, '').trim();
         const dateChangeMatch = cleanTT.match(/^เปลี่ยนวัน\s+(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
         if (dateChangeMatch) {
-          if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
           const newDate = parseDate(dateChangeMatch[1]);
-          if (!newDate) { await replyLine(replyToken, '❌ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20/6/69'); continue; }
+          if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20/6/69'); continue; }
           const { data: last } = await db.from('line_last_task')
             .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
           if (!last || !last.task_id) { await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue; }
           const { error: updErr } = await db.from('tasks')
             .update({ action_date: newDate }).eq('id', last.task_id);
-          if (updErr) { await replyLine(replyToken, '❌ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
+          if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
           await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + last.task_name + '\n📅 ' + dateDisplay);
@@ -700,7 +700,7 @@ export default async function handler(req, res) {
       }
 
       if (taskData) {
-        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
 
         const id = rid();
         const { error } = await db.from('tasks').insert({
