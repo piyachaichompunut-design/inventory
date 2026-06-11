@@ -73,25 +73,42 @@ const CAT_MAP = {
 
 function parseTaskFromText(text, catKeyword) {
   const t = text.trim();
+  const kw = (catKeyword || '').trim();
 
-  // วันที่ — ดึงจากข้อความ เช่น 9/6, 9/6/2569, 09-06-2026
-  const dateMatch = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-  const actionDate = dateMatch ? (parseDate(dateMatch[1]) || todayStr()) : todayStr();
+  // ── วันที่ — ดึงจาก catKeyword ก่อน (สิ่งที่พิมพ์ต่อจาก @บอท) แล้วค่อย fallback ไปหาในข้อความ ──
+  const dateRe = /(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/;
+  const dateFromKw = kw.match(dateRe);
+  const dateFromText = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+  const rawDate = dateFromKw ? dateFromKw[1] : (dateFromText ? dateFromText[1] : null);
+  const actionDate = rawDate ? (parseDate(rawDate) || todayStr()) : todayStr();
 
-  // ชื่องาน = ข้อความทั้งหมด
+  // ── ส่ง/รับ — เช็คจาก catKeyword ก่อน แล้ว fallback ไปหาในข้อความ ──
+  const kwLower = kw.toLowerCase();
+  let duration = 'รับ';
+  if (/^ส่ง/.test(kwLower) || /ส่งของ|นัดส่ง|จัดส่ง|ออกของ/.test(kwLower)) duration = 'ส่ง';
+  else if (/ส่งของ|นัดส่ง|จัดส่ง|ออกของ|นำส่ง/.test(t)) duration = 'ส่ง';
+  else if (/รับของ|รับเข้า|รับสินค้า/.test(t)) duration = 'รับ';
+
+  // ── ชื่องาน = ข้อความต้นฉบับ (reply) ──
   const taskText = t.slice(0, 300);
 
-  // หาหมวดหมู่จาก keyword ที่พิมพ์ต่อจาก @บอท
-  const kw = (catKeyword || '').trim().toLowerCase();
-  const categories = CAT_MAP[kw] || (kw ? 'งานอื่นๆ' : 'งานอื่นๆ');
+  // ── หมวดหมู่ — ตัดวันที่และ ส่ง/รับ ออกจาก kw แล้วหาหมวด ──
+  const kwClean = kw
+    .replace(dateRe, '')
+    .replace(/^(ส่ง|รับ)\s*/i, '')
+    .trim()
+    .toLowerCase();
+  const categories = CAT_MAP[kwClean] || (kwClean ? 'งานอื่นๆ' : 'งานอื่นๆ');
 
-  return {
-    task: taskText,
-    duration: 'รับ',
-    actionDate,
-    salesName: '',
-    categories
-  };
+  // ── ชื่อคน — ถ้าพิมพ์มาหลังหมวด เช่น "ส่ง 16/6/69 ชุบ พี่เต้ย" ──
+  // ตัดทุกอย่างออก เหลือแค่คำท้าย
+  const kwWords = kw.replace(dateRe, '').replace(/^(ส่ง|รับ)\s*/i, '').trim().split(/\s+/).filter(Boolean);
+  let salesName = '';
+  if (kwWords.length >= 2 && CAT_MAP[kwWords[0].toLowerCase()]) {
+    salesName = kwWords.slice(1).join(' ');
+  }
+
+  return { task: taskText, duration, actionDate, salesName, categories };
 }
 
 // ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
@@ -107,7 +124,7 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     task: taskData.task,
     duration: taskData.duration,
     action_date: taskData.actionDate,
-    sales_name: '',
+    sales_name: taskData.salesName || '',
     task_status: 'To Do',
     notification: 'แจ้งล่วงหน้า',
     categories: taskData.categories || '',
@@ -139,7 +156,7 @@ async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, c
     (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
     (fromUser ? `✍️ บันทึกโดย: ${fromUser}\n` : '');
 
-  return { ok: true, confirmMsg, mainMsg };
+  return { ok: true, confirmMsg, mainMsg, taskId: id, taskName: taskData.task.slice(0, 100) };
 }
 
 // ── แก้วันที่ของงานที่ผูกกับ message_id ──────────────────────────────────────
@@ -371,6 +388,16 @@ export default async function handler(req, res) {
         const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword, replyMsg.message_id);
 
         if (result.ok) {
+          // จำงานล่าสุดของกลุ่มนี้ (สำหรับ +1 +2 แนบไฟล์)
+          try {
+            await db.from('tg_last_task').upsert({
+              chat_id: String(chatId),
+              task_id: result.taskId,
+              task_name: result.taskName,
+              created_at: new Date().toISOString()
+            }, { onConflict: 'chat_id' });
+          } catch(e) {}
+
           const fileNote = attachmentObj ? '\n📎 แนบไฟล์: ' + attachmentObj.name : '';
           await sendTelegramReply(chatId, '✅ บันทึกเรียบร้อยครับ' + fileNote);
           const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
@@ -380,6 +407,84 @@ export default async function handler(req, res) {
         }
         res.status(200).json({ ok: true });
         return;
+      }
+
+      // ── @บอท +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด ──────────────
+      if (mentioned && msg.reply_to_message) {
+        const msgText2 = msg.text || msg.caption || '';
+        const botMentionText2 = msgText2.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
+        if (/^\+\d+$/.test(botMentionText2)) {
+          const replyMsg2 = msg.reply_to_message;
+          const tgToken2 = process.env.TELEGRAM_BOT_TOKEN || '';
+
+          // หางานล่าสุดของกลุ่ม
+          const { data: last } = await db.from('tg_last_task')
+            .select('task_id, task_name').eq('chat_id', String(chatId)).maybeSingle();
+          if (!last || !last.task_id) {
+            await sendTelegramReply(chatId, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาบันทึกงานก่อนแนบไฟล์');
+            res.status(200).json({ ok: true }); return;
+          }
+
+          // ดึงไฟล์จาก reply
+          let fileUrl2 = null, fileName2 = null, contentType2 = 'application/octet-stream';
+          const fileSource2 = (msg.photo || msg.document) ? msg : replyMsg2;
+
+          if (fileSource2.photo && fileSource2.photo.length > 0 && tgToken2) {
+            const photo = fileSource2.photo[fileSource2.photo.length - 1];
+            try {
+              const infoRes = await fetch(`https://api.telegram.org/bot${tgToken2}/getFile?file_id=${photo.file_id}`);
+              const info = await infoRes.json();
+              if (info.ok) {
+                fileUrl2 = `https://api.telegram.org/file/bot${tgToken2}/${info.result.file_path}`;
+                fileName2 = info.result.file_path.split('/').pop();
+                contentType2 = 'image/jpeg';
+              }
+            } catch(e) {}
+          } else if (fileSource2.document && tgToken2) {
+            try {
+              const infoRes = await fetch(`https://api.telegram.org/bot${tgToken2}/getFile?file_id=${fileSource2.document.file_id}`);
+              const info = await infoRes.json();
+              if (info.ok) {
+                fileUrl2 = `https://api.telegram.org/file/bot${tgToken2}/${info.result.file_path}`;
+                fileName2 = fileSource2.document.file_name || info.result.file_path.split('/').pop();
+                contentType2 = fileSource2.document.mime_type || 'application/octet-stream';
+              }
+            } catch(e) {}
+          }
+
+          if (!fileUrl2) {
+            await sendTelegramReply(chatId, '⚠️ ไม่พบรูป/ไฟล์ใน reply นั้นครับ');
+            res.status(200).json({ ok: true }); return;
+          }
+
+          // อัปโหลดไปยัง Supabase Storage
+          try {
+            const fileRes2 = await fetch(fileUrl2);
+            const arrayBuffer2 = await fileRes2.arrayBuffer();
+            const buffer2 = Buffer.from(arrayBuffer2);
+            const ext2 = fileName2 ? fileName2.split('.').pop() : 'jpg';
+            const storagePath2 = last.task_id + '/' + Date.now() + '.' + ext2;
+
+            const { error: upErr2 } = await db.storage.from('attachments')
+              .upload(storagePath2, buffer2, { contentType: contentType2, upsert: true });
+            if (upErr2) { await sendTelegramReply(chatId, '❌ อัปไฟล์ไม่สำเร็จ: ' + upErr2.message); res.status(200).json({ ok: true }); return; }
+
+            const { data: pub2 } = db.storage.from('attachments').getPublicUrl(storagePath2);
+
+            // อัปเดต attachments ของงาน
+            const { data: taskRow2 } = await db.from('tasks').select('attachments').eq('id', last.task_id).maybeSingle();
+            let atts2 = Array.isArray(taskRow2?.attachments) ? taskRow2.attachments : [];
+            atts2.push({ name: fileName2 || ('file.' + ext2), size: buffer2.length, fileId: storagePath2, mimeType: contentType2, webViewLink: pub2.publicUrl, source: 'telegram' });
+
+            const { error: updErr2 } = await db.from('tasks').update({ attachments: atts2 }).eq('id', last.task_id);
+            if (updErr2) { await sendTelegramReply(chatId, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr2.message); res.status(200).json({ ok: true }); return; }
+
+            await sendTelegramReply(chatId, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + last.task_name + '\n📁 ไฟล์ทั้งหมด: ' + atts2.length + ' ไฟล์');
+          } catch(e) {
+            await sendTelegramReply(chatId, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+          }
+          res.status(200).json({ ok: true }); return;
+        }
       }
 
       // ── @บอท โดยไม่ได้ Reply → ค้นหางาน / ถาม AI ──────
