@@ -715,10 +715,19 @@ export default async function handler(req, res) {
 
           const { error: updErr } = await db.from('tasks')
             .update({ action_date: newDate }).eq('id', targetTaskId);
+          console.log('CHANGEDATE_RESULT:', JSON.stringify({ targetTaskId, newDate, quotedId, updErr: updErr?.message }));
           if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
           await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + targetTaskName + '\n📅 ' + dateDisplay);
+          // แจ้งเข้ากลุ่ม Telegram หลัก
+          try {
+            await notifyMainChat(
+              '✏️ <b>แก้ไขวันที่งาน (จากไลน์)</b>\n' +
+              '📋 ' + targetTaskName + '\n' +
+              '📅 เปลี่ยนเป็น ' + dateDisplay
+            );
+          } catch (e) {}
           continue;
         }
       }
