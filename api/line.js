@@ -232,6 +232,9 @@ async function parseTaskSmart(text, dbClient, typedText) {
 
   // ชื่องาน = ข้อความงานต้นฉบับ (body) — ถ้า body ว่าง (ไม่ reply) ใช้ typedBody แทน
   const words = (body || typedBody || '').split(' ');
+  let task = words.join(' ').trim();
+  if (task.length > 200) task = task.slice(0, 200);
+  if (!task) return null;
 
   return { task, duration, actionDate, salesName, categories };
 }
