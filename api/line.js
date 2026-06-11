@@ -655,9 +655,17 @@ export default async function handler(req, res) {
       // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" ──
       if (botMentioned) {
         const cleanTT = tt.replace(/@\S+/g, '').trim();
-        const dateChangeMatch = cleanTT.match(/^เปลี่ยนวัน\s+(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-        if (dateChangeMatch) {
+        console.log('DEBUG cleanTT:', JSON.stringify(cleanTT));
+        // รองรับทั้ง "เปลี่ยนวัน 12/6" และ "เปลี่ยนวัน" (วันที่อาจถูก LINE แปลงเป็น hyperlink)
+        const isChangDate = /^เปลี่ยนวัน/.test(cleanTT);
+        if (isChangDate) {
           if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          // ดึงวันที่จากข้อความที่พิมพ์
+          const dateChangeMatch = cleanTT.match(/เปลี่ยนวัน\s+(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+          if (!dateChangeMatch) {
+            await replyLine(replyToken, '⚠️⚠️⚠️ ระบุวันที่ด้วยครับ เช่น เปลี่ยนวัน 20/6/69');
+            continue;
+          }
           const newDate = parseDate(dateChangeMatch[1]);
           if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20/6/69'); continue; }
           const { data: last } = await db.from('line_last_task')
