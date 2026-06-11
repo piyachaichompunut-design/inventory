@@ -287,8 +287,17 @@ async function parseTaskSmart(text, dbClient, typedText) {
     }
   }
 
-  // ชื่องาน = ข้อความงานต้นฉบับ (body) — ถ้า body ว่าง (ไม่ reply) ใช้ typedBody แทน
-  const words = (body || typedBody || '').split(' ');
+  // ชื่องาน = ข้อความงานต้นฉบับเท่านั้น (ตัดส่วนที่พิมพ์ตอน reply ออก)
+  // ลองตัด typedText ดิบก่อน (เช่น "ส่ง เสา พี่นิค") แล้วค่อย typedBody ("เสา พี่นิค")
+  let taskBody = body;
+  const rawTyped = (typedText || '').trim();
+  if (rawTyped && taskBody.endsWith(rawTyped)) {
+    taskBody = taskBody.slice(0, taskBody.length - rawTyped.length).trim();
+  } else if (typedBody && taskBody.endsWith(typedBody)) {
+    taskBody = taskBody.slice(0, taskBody.length - typedBody.length).trim();
+  }
+  // ถ้าตัดจนว่าง (ไม่ได้ reply, พิมพ์อย่างเดียว) ใช้ typedBody เป็นชื่องาน
+  const words = (taskBody || typedBody || '').split(' ');
   let task = words.join(' ').trim();
   if (task.length > 200) task = task.slice(0, 200);
   if (!task) return null;
@@ -439,7 +448,6 @@ export default async function handler(req, res) {
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
         // ถ้าเจอข้อความเดิมที่ reply → รวม | ถ้าไม่เจอ → ใช้ที่พิมพ์ (ไม่หยุด)
-        console.log('REPLY: quotedId=', quotedId, '| quotedText=', quotedText ? quotedText.slice(0,40) : '(ว่าง)', '| typed=', typedClean);
         const combined = quotedText
           ? (quotedText + ' ' + typedClean).trim()
           : typedClean;
