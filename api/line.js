@@ -305,6 +305,65 @@ async function parseTaskSmart(text, dbClient, typedText) {
   return { task, duration, actionDate, salesName, categories };
 }
 
+// ── โหลดไฟล์/รูปจาก LINE (Get Content API) ───────────────────────────────────
+async function getLineContent(messageId) {
+  const r = await fetch('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
+    headers: { 'Authorization': 'Bearer ' + LINE_TOKEN }
+  });
+  if (!r.ok) throw new Error('โหลดไฟล์จาก LINE ไม่ได้: ' + r.status);
+  const arrayBuf = await r.arrayBuffer();
+  const contentType = r.headers.get('content-type') || 'application/octet-stream';
+  return { buffer: Buffer.from(arrayBuf), contentType };
+}
+
+// ── แนบไฟล์เข้างานล่าสุด (ภายใน 5 นาที) ──────────────────────────────────────
+async function attachFileToLastTask(dbClient, groupId, messageId, msgType, fileName) {
+  // หางานล่าสุดของกลุ่มนี้ (ภายใน 5 นาที)
+  const { data: last } = await dbClient.from('line_last_task')
+    .select('task_id, task_name, created_at').eq('group_id', groupId).maybeSingle();
+  if (!last || !last.task_id) return { error: 'ไม่พบงานล่าสุดในกลุ่มนี้ (ต้องสร้างงานก่อนแนบไฟล์)' };
+
+  const ageMin = (Date.now() - new Date(last.created_at).getTime()) / 60000;
+  if (ageMin > 5) return { error: 'เกิน 5 นาทีแล้ว (งานล่าสุด: ' + last.task_name + ') — สร้างงานใหม่ก่อนแนบไฟล์ครับ' };
+
+  // โหลดไฟล์จาก LINE
+  const { buffer, contentType } = await getLineContent(messageId);
+
+  // ตั้งชื่อไฟล์ + นามสกุล
+  const ext = msgType === 'image' ? '.jpg' : (fileName && fileName.includes('.') ? '' : '.bin');
+  const safeName = fileName || (msgType === 'image' ? 'image.jpg' : 'file' + ext);
+  const ts = Date.now();
+  const storagePath = last.task_id + '/' + ts + '_' + safeName.replace(/[^\w.\-ก-๙]/g, '_');
+
+  // อัปขึ้น Storage
+  const { error: upErr } = await dbClient.storage.from('attachments')
+    .upload(storagePath, buffer, { contentType, upsert: true });
+  if (upErr) return { error: 'อัปไฟล์ไม่สำเร็จ: ' + upErr.message };
+
+  const { data: pub } = dbClient.storage.from('attachments').getPublicUrl(storagePath);
+
+  // อ่าน attachments เดิม แล้วเพิ่มไฟล์ใหม่
+  const { data: taskRow } = await dbClient.from('tasks')
+    .select('attachments').eq('id', last.task_id).maybeSingle();
+  let atts = [];
+  if (taskRow && taskRow.attachments) {
+    atts = Array.isArray(taskRow.attachments) ? taskRow.attachments : [];
+  }
+  atts.push({
+    name: safeName,
+    size: buffer.length,
+    fileId: storagePath,
+    mimeType: contentType,
+    webViewLink: pub.publicUrl
+  });
+
+  const { error: updErr } = await dbClient.from('tasks')
+    .update({ attachments: atts }).eq('id', last.task_id);
+  if (updErr) return { error: 'บันทึกไฟล์เข้างานไม่สำเร็จ: ' + updErr.message };
+
+  return { ok: true, taskName: last.task_name, count: atts.length };
+}
+
 // ── verify LINE signature ─────────────────────────────────────────────────────
 function verifySignature(body, signature) {
   if (!LINE_SECRET) return true; // ถ้ายังไม่ตั้ง secret ให้ผ่านไปก่อน
@@ -329,13 +388,37 @@ export default async function handler(req, res) {
     const events = body.events || [];
 
     for (const event of events) {
-      if (event.type !== 'message' || event.message?.type !== 'text') continue;
+      if (event.type !== 'message') continue;
 
-      const text = event.message.text || '';
+      const msgType = event.message?.type || '';
       const replyToken = event.replyToken;
       const senderName = event.source?.userId || '';
-      // ปลายทางสำหรับ push (กลุ่ม/ห้อง/คนเดี่ยว)
       const pushTarget = event.source?.groupId || event.source?.roomId || event.source?.userId || '';
+      const mentionees = event.message?.mention?.mentionees || [];
+      const botMentioned = mentionees.some(m => m.isSelf === true);
+      const quotedId = event.message?.quotedMessageId || '';
+
+      // ══ กรณีไฟล์/รูป + แท็กบอท + reply → แนบเข้างานล่าสุด ══════════════════
+      if ((msgType === 'image' || msgType === 'file') && botMentioned) {
+        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        try {
+          const fname = event.message?.fileName || '';
+          const result = await attachFileToLastTask(db, pushTarget, event.message.id, msgType, fname);
+          if (result.error) {
+            await replyLine(replyToken, '⚠️ ' + result.error);
+          } else {
+            await replyLine(replyToken, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + result.taskName + '\n📁 ไฟล์ทั้งหมด: ' + result.count + ' ไฟล์');
+          }
+        } catch (e) {
+          await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+        }
+        continue;
+      }
+
+      // ข้ามไฟล์/รูป/สติกเกอร์/พิกัด ที่ไม่ได้แท็กบอท (ไม่ยุ่ง)
+      if (msgType !== 'text') continue;
+
+      const text = event.message.text || '';
 
       // ── เก็บทุกข้อความ (text) ลง DB เพื่อให้ reply ย้อนหลังได้ (เก็บ 7 วัน) ──
       const msgId = event.message?.id || '';
@@ -351,7 +434,6 @@ export default async function handler(req, res) {
       }
 
       // ── ถ้าเป็นการ reply ข้อความเก่า → ดึงข้อความต้นฉบับจาก DB ──────────────
-      const quotedId = event.message?.quotedMessageId || '';
       let quotedText = '';
       if (db && quotedId) {
         try {
@@ -429,8 +511,7 @@ export default async function handler(req, res) {
 
       // ── สร้างงานใหม่ ──────────────────────────────────────────────────────
       // กฎ: รับงาน = ต้อง Reply ข้อความงาน + แท็กบอท เท่านั้น
-      const mentionees = event.message?.mention?.mentionees || [];
-      const botMentioned = mentionees.some(m => m.isSelf === true);
+      // (mentionees, botMentioned, quotedId ประกาศไว้ข้างบนแล้ว)
 
       // แบบเดิม (รับ:/ส่ง:/งานใหม่) — พิมพ์ตรงๆ ยังใช้ได้
       let taskData = parseTask(text);
@@ -476,6 +557,16 @@ export default async function handler(req, res) {
         if (error) {
           await replyLine(replyToken, `❌ บันทึกไม่สำเร็จครับ: ${error.message}`);
         } else {
+          // จำงานล่าสุดของกลุ่มนี้ (สำหรับแนบไฟล์ +1 ภายใน 5 นาที)
+          try {
+            await db.from('line_last_task').upsert({
+              group_id: pushTarget,
+              task_id: id,
+              task_name: taskData.task.slice(0, 100),
+              created_at: new Date().toISOString()
+            }, { onConflict: 'group_id' });
+          } catch (e) {}
+
           const dur = taskData.duration === 'รับ' ? '📦 รับ' : '🚚 ส่ง';
           const [y, m, d] = taskData.actionDate.split('-');
           const dateDisplay = `${+d}/${+m}/${+y+543}`;
