@@ -272,13 +272,14 @@ export default async function handler(req, res) {
       const msgId = event.message?.id || '';
       if (db && msgId) {
         try {
-          await db.from('line_messages').upsert({
+          const { error: insErr } = await db.from('line_messages').upsert({
             message_id: msgId,
             group_id: pushTarget,
             user_id: senderName,
             text: text
           }, { onConflict: 'message_id' });
-        } catch (e) { /* เก็บไม่ได้ก็ไม่เป็นไร */ }
+          console.log('STORE msg', msgId, insErr ? ('ERR:'+insErr.message) : 'OK', '| text:', text.slice(0,30));
+        } catch (e) { console.log('STORE exception:', e.message); }
       }
 
       // ── ถ้าเป็นการ reply ข้อความเก่า → ดึงข้อความต้นฉบับจาก DB ──────────────
@@ -289,7 +290,8 @@ export default async function handler(req, res) {
           const { data } = await db.from('line_messages')
             .select('text').eq('message_id', quotedId).maybeSingle();
           if (data && data.text) quotedText = data.text;
-        } catch (e) {}
+          console.log('QUOTE lookup', quotedId, data ? 'FOUND' : 'NOT FOUND');
+        } catch (e) { console.log('QUOTE exception:', e.message); }
       }
 
       const tt = text.trim();
