@@ -272,14 +272,13 @@ export default async function handler(req, res) {
       const msgId = event.message?.id || '';
       if (db && msgId) {
         try {
-          const { error: insErr } = await db.from('line_messages').upsert({
+          await db.from('line_messages').upsert({
             message_id: msgId,
             group_id: pushTarget,
             user_id: senderName,
             text: text
           }, { onConflict: 'message_id' });
-          console.log('STORE msg', msgId, insErr ? ('ERR:'+insErr.message) : 'OK', '| text:', text.slice(0,30));
-        } catch (e) { console.log('STORE exception:', e.message); }
+        } catch (e) {}
       }
 
       // ── ถ้าเป็นการ reply ข้อความเก่า → ดึงข้อความต้นฉบับจาก DB ──────────────
@@ -290,8 +289,7 @@ export default async function handler(req, res) {
           const { data } = await db.from('line_messages')
             .select('text').eq('message_id', quotedId).maybeSingle();
           if (data && data.text) quotedText = data.text;
-          console.log('QUOTE lookup', quotedId, data ? 'FOUND' : 'NOT FOUND');
-        } catch (e) { console.log('QUOTE exception:', e.message); }
+        } catch (e) {}
       }
 
       const tt = text.trim();
@@ -361,15 +359,14 @@ export default async function handler(req, res) {
       }
 
       // ── สร้างงานใหม่ ──────────────────────────────────────────────────────
-      // กฎ: บันทึกงาน = ต้อง Reply ข้อความงาน + แท็กบอท เท่านั้น
-      //     แท็กบอทเฉยๆ (ไม่ reply) = ถามข้อมูลอื่น (ไม่สร้างงาน)
+      // กฎ: รับงาน = ต้อง Reply ข้อความงาน + แท็กบอท เท่านั้น
       const mentionees = event.message?.mention?.mentionees || [];
       const botMentioned = mentionees.some(m => m.isSelf === true);
 
       // แบบเดิม (รับ:/ส่ง:/งานใหม่) — พิมพ์ตรงๆ ยังใช้ได้
       let taskData = parseTask(text);
 
-      // แบบ Reply: ต้องมี quotedId (เป็นการ reply) + แท็กบอท
+      // แบบ Reply: ต้องเป็นการ reply (มี quotedId) + แท็กบอท
       if (!taskData && botMentioned && quotedId) {
         // ตัด mention บอทออกตรงตำแหน่งจริง (index+length) กันคำว่า Bot ค้าง
         let typedClean = text;
@@ -381,20 +378,13 @@ export default async function handler(req, res) {
         }
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // ต้องเจอข้อความต้นฉบับที่ reply ถ้าไม่เจอ → เตือน
-        if (!quotedText) {
-          await replyLine(replyToken,
-            '⚠️ บอทยังไม่มีข้อความที่คุณ Reply ในระบบครับ\n' +
-            '(อาจเป็นข้อความเก่าก่อนติดตั้ง หรือเป็นรูป/ไฟล์/พิกัด)\n\n' +
-            'ลอง Reply ข้อความงานที่เป็น "ตัวอักษร" และส่งใหม่หลังจากนี้ครับ'
-          );
-          continue;
-        }
-
-        // รวมข้อความงานต้นฉบับ + หมวด/ชื่อที่พิมพ์ → สร้างงาน
-        const combined = (quotedText + ' ' + typedClean).trim();
+        // ถ้าเจอข้อความเดิมที่ reply → รวม | ถ้าไม่เจอ → ใช้ที่พิมพ์ (ไม่หยุด)
+        const combined = quotedText
+          ? (quotedText + ' ' + typedClean).trim()
+          : typedClean;
         taskData = await parseTaskSmart(combined, db, typedClean);
       }
+
       if (taskData) {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
 
