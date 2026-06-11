@@ -691,15 +691,34 @@ export default async function handler(req, res) {
           }
           const newDate = parseDate(dateStr);
           if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20-6-69'); continue; }
-          const { data: last } = await db.from('line_last_task')
-            .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
-          if (!last || !last.task_id) { await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue; }
+
+          // หางานที่ reply มา — จาก task_id ที่ผูกกับ quotedId ก่อน (แม่นยำตรงงาน)
+          let targetTaskId = null, targetTaskName = '';
+          if (quotedId) {
+            const { data: qmsg } = await db.from('line_messages')
+              .select('task_id').eq('message_id', quotedId).maybeSingle();
+            if (qmsg && qmsg.task_id) targetTaskId = qmsg.task_id;
+          }
+          // fallback → งานล่าสุดของกลุ่ม (กรณีไม่เจอ)
+          if (!targetTaskId) {
+            const { data: last } = await db.from('line_last_task')
+              .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+            if (last && last.task_id) { targetTaskId = last.task_id; targetTaskName = last.task_name; }
+          }
+          if (!targetTaskId) { await replyLine(replyToken, '⚠️ ไม่พบงานที่จะแก้ครับ ลอง reply ข้อความที่สร้างงานนั้น'); continue; }
+
+          // ดึงชื่องานถ้ายังไม่มี
+          if (!targetTaskName) {
+            const { data: trow } = await db.from('tasks').select('task').eq('id', targetTaskId).maybeSingle();
+            targetTaskName = trow?.task ? trow.task.slice(0, 100) : '';
+          }
+
           const { error: updErr } = await db.from('tasks')
-            .update({ action_date: newDate }).eq('id', last.task_id);
+            .update({ action_date: newDate }).eq('id', targetTaskId);
           if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
-          await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + last.task_name + '\n📅 ' + dateDisplay);
+          await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + targetTaskName + '\n📅 ' + dateDisplay);
           continue;
         }
       }
@@ -761,6 +780,14 @@ export default async function handler(req, res) {
               created_at: new Date().toISOString()
             }, { onConflict: 'group_id' });
           } catch (e) {}
+
+          // ผูก task_id กับข้อความที่ reply (สำหรับ "เปลี่ยนวัน" ย้อนหลังให้ตรงงาน)
+          if (quotedId) {
+            try {
+              await db.from('line_messages')
+                .update({ task_id: id }).eq('message_id', quotedId);
+            } catch (e) {}
+          }
 
           const dur = taskData.duration === 'รับ' ? '📦 รับ' : '🚚 ส่ง';
           const [y, m, d] = taskData.actionDate.split('-');
