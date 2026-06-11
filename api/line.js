@@ -656,6 +656,7 @@ export default async function handler(req, res) {
       if (botMentioned) {
         const cleanTT = tt.replace(/@\S+/g, '').trim();
         const isChangDate = /^เปลี่ยนวัน/.test(cleanTT);
+        if (isChangDate) console.log('CHANGEDATE:', JSON.stringify({cleanTT, text: tt, entities: event.message?.entities}));
         if (isChangDate) {
           if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
           // ดึงวันที่จาก cleanTT ก่อน — ถ้า LINE แปลง 12/6 เป็น URL ให้ดึงจาก entities แทน
