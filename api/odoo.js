@@ -206,6 +206,74 @@ export async function odooPR(prNumber, companyId) {
   return reqs;
 }
 
+// ── เทียบสินค้าระหว่าง 2 เอกสาร (SO/PO/SO vs SO ฯลฯ) ──────────────────────────
+// คืน { docA, docB, rows: [{code,name,qtyA,qtyB,diff,status}] }
+export async function odooCompare(typeA, numA, typeB, numB, companyId) {
+  const fetchDoc = async (type, num) => {
+    if (type === 'so') return await odooSO(num, companyId);
+    if (type === 'po') return await odooPO(num, companyId);
+    if (type === 'pr') return await odooPR(num, companyId);
+    throw new Error('ไม่รู้จักประเภทเอกสาร: ' + type);
+  };
+
+  const [docsA, docsB] = await Promise.all([fetchDoc(typeA, numA), fetchDoc(typeB, numB)]);
+  if (!docsA.length) throw new Error('ไม่พบ ' + typeA.toUpperCase() + numA);
+  if (!docsB.length) throw new Error('ไม่พบ ' + typeB.toUpperCase() + numB);
+
+  const docA = docsA[0];
+  const docB = docsB[0];
+
+  // normalize lines → { code, name, qty }
+  const normalizeLines = (doc, type) => {
+    const lines = doc.lines || [];
+    return lines.map(l => {
+      const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+      const code = prod[0] ? String(prod[0]) : '';
+      const name = prod[1] || l.name || '';
+      let qty = 0;
+      if (type === 'so') qty = l.product_uom_qty || 0;
+      else if (type === 'po') qty = l.product_qty || 0;
+      else if (type === 'pr') qty = l.product_qty || 0;
+      return { code, name, qty: +qty };
+    });
+  };
+
+  const linesA = normalizeLines(docA, typeA);
+  const linesB = normalizeLines(docB, typeB);
+
+  // merge ตาม product_id (code) — ถ้าไม่มี code ใช้ชื่อแทน
+  const mapA = new Map();
+  linesA.forEach(l => mapA.set(l.code || l.name, l));
+  const mapB = new Map();
+  linesB.forEach(l => mapB.set(l.code || l.name, l));
+
+  const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+  const rows = [];
+  for (const k of allKeys) {
+    const a = mapA.get(k);
+    const b = mapB.get(k);
+    const qtyA = a ? a.qty : 0;
+    const qtyB = b ? b.qty : 0;
+    const diff = qtyA - qtyB;
+    let status = 'ok';
+    if (!a) status = 'missing_a';
+    else if (!b) status = 'missing_b';
+    else if (diff !== 0) status = 'diff';
+    rows.push({
+      code: (a || b).code,
+      name: (a || b).name,
+      qtyA, qtyB, diff, status
+    });
+  }
+  // เรียง: ผิดก่อน ถูกทีหลัง
+  rows.sort((a, b) => {
+    const order = { missing_a: 0, missing_b: 1, diff: 2, ok: 3 };
+    return (order[a.status] || 3) - (order[b.status] || 3);
+  });
+
+  return { docA, docB, typeA, typeB, numA, numB, rows };
+}
+
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
 // ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooDelivery(keyword, companyId) {
