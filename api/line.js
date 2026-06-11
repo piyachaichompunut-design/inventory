@@ -656,15 +656,39 @@ export default async function handler(req, res) {
         cleanForCmd = cleanForCmd.replace(/\s+/g, ' ').trim();
         if (/^แก้ไฟล์$/i.test(cleanForCmd)) {
           if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
-          const { data: last } = await db.from('line_last_task')
-            .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
-          if (!last || !last.task_id) {
-            await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue;
+
+          // หางานที่ reply มา — จาก task_id ที่ผูกกับ quotedId ก่อน (แม่นตรงงาน)
+          let fTaskId = null, fTaskName = '';
+          if (quotedId) {
+            const { data: qmsg } = await db.from('line_messages')
+              .select('task_id').eq('message_id', quotedId).maybeSingle();
+            if (qmsg && qmsg.task_id) fTaskId = qmsg.task_id;
           }
+          // fallback → งานล่าสุดของกลุ่ม
+          if (!fTaskId) {
+            const { data: last } = await db.from('line_last_task')
+              .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+            if (last && last.task_id) { fTaskId = last.task_id; fTaskName = last.task_name; }
+          }
+          if (!fTaskId) { await replyLine(replyToken, '⚠️ ไม่พบงานที่จะแก้ครับ ลอง reply ข้อความที่สร้างงานนั้น'); continue; }
+
+          if (!fTaskName) {
+            const { data: trow } = await db.from('tasks').select('task').eq('id', fTaskId).maybeSingle();
+            fTaskName = trow?.task ? trow.task.slice(0, 100) : '';
+          }
+
+          // อัปเดต line_last_task ให้ชี้งานนี้ → +1 ที่ตามมาจะแนบเข้างานเดียวกัน
+          try {
+            await db.from('line_last_task').upsert({
+              group_id: pushTarget, task_id: fTaskId, task_name: fTaskName,
+              created_at: new Date().toISOString()
+            }, { onConflict: 'group_id' });
+          } catch (e) {}
+
           const { error: clrErr } = await db.from('tasks')
-            .update({ attachments: [] }).eq('id', last.task_id);
+            .update({ attachments: [] }).eq('id', fTaskId);
           if (clrErr) { await replyLine(replyToken, '⚠️⚠️⚠️ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
-          await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + last.task_name + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
+          await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + fTaskName + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
           continue;
         }
       }
