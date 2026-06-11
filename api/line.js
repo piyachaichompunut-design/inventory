@@ -458,7 +458,6 @@ export default async function handler(req, res) {
 
       const tt = text.trim();
       const lc = tt.toLowerCase();
-      if (botMentioned) console.log('RAW_TEXT:', JSON.stringify(text), 'HEX:', Buffer.from(text).toString('hex').slice(0,100));
 
       // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
       if (/^\+\d+$/.test(tt)) {
@@ -639,25 +638,36 @@ export default async function handler(req, res) {
       }
 
       // ── แก้ไฟล์ → reply ข้อความเดิม + แท็กบอท + "แก้ไฟล์" → ล้างไฟล์เก่า ──
-      if (botMentioned && /^แก้ไฟล์$/i.test(tt.replace(/@\S+/g, '').trim())) {
-        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
-        const { data: last } = await db.from('line_last_task')
-          .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
-        if (!last || !last.task_id) {
-          await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue;
+      if (botMentioned) {
+        let cleanForCmd = tt;
+        const sortedM2 = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a,b) => b.index - a.index);
+        for (const m of sortedM2) { cleanForCmd = cleanForCmd.slice(0, m.index) + cleanForCmd.slice(m.index + m.length); }
+        cleanForCmd = cleanForCmd.replace(/\s+/g, ' ').trim();
+        if (/^แก้ไฟล์$/i.test(cleanForCmd)) {
+          if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          const { data: last } = await db.from('line_last_task')
+            .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+          if (!last || !last.task_id) {
+            await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue;
+          }
+          const { error: clrErr } = await db.from('tasks')
+            .update({ attachments: [] }).eq('id', last.task_id);
+          if (clrErr) { await replyLine(replyToken, '⚠️⚠️⚠️ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
+          await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + last.task_name + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
+          continue;
         }
-        const { error: clrErr } = await db.from('tasks')
-          .update({ attachments: [] }).eq('id', last.task_id);
-        if (clrErr) { await replyLine(replyToken, '⚠️⚠️⚠️ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
-        await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + last.task_name + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
-        continue;
       }
 
       // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" ──
       if (botMentioned) {
-        const cleanTT = tt.replace(/@\S+/g, '').trim();
+        // ตัด @mention ออกโดยใช้ตำแหน่งจริงจาก mentionees
+        let cleanTT = tt;
+        const sortedM = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a,b) => b.index - a.index);
+        for (const m of sortedM) {
+          cleanTT = cleanTT.slice(0, m.index) + cleanTT.slice(m.index + m.length);
+        }
+        cleanTT = cleanTT.replace(/\s+/g, ' ').trim();
         const isChangDate = /^เปลี่ยนวัน/.test(cleanTT);
-        if (isChangDate) console.log('CHANGEDATE:', JSON.stringify({cleanTT, text: tt, entities: event.message?.entities}));
         if (isChangDate) {
           if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
           // ดึงวันที่จาก cleanTT ก่อน — ถ้า LINE แปลง 12/6 เป็น URL ให้ดึงจาก entities แทน
