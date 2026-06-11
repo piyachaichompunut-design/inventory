@@ -88,46 +88,77 @@ function withCompany(domain, companyId) {
   return ['&', ['company_id', '=', companyId], ...domain];
 }
 
-// ── แยกคำอัตโนมัติ: "ภูเก็ต4+570" → ["ภูเก็ต","4+570"] ──────────────────────
-// ตัดตรงรอยต่อ ไทย↔ตัวเลข ทั้งสองทาง + รองรับเว้นวรรคปกติ
+// ── แยกคำอัตโนมัติ ───────────────────────────────────────────────────────────
 function smartWords(keyword) {
   let s = String(keyword).trim();
-  // แทรกช่องว่างตรงรอยต่อ ตัวอักษรไทย→ตัวเลข และ ตัวเลข→ตัวอักษรไทย
   s = s.replace(/([\u0E00-\u0E7F])(\d)/g, '$1 $2');
   s = s.replace(/(\d)([\u0E00-\u0E7F])/g, '$1 $2');
   return s.split(/\s+/).filter(Boolean);
 }
 
-// ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
-// รองรับหลายคำ: "15FG แผ่น 3.2 ชุบ" → หาสินค้าที่ทุกคำอยู่ในชื่อหรือรหัส
-// (ไม่ต้องเรียงติดกัน — แต่ละคำหาได้ทั้งใน name และ default_code)
-export async function odooStock(keyword, companyId) {
-  const words = smartWords(keyword);
+// ── parse keyword ก่อนค้น: รองรับ [รหัส], ---, ชื่อสินค้า ─────────────────────
+// ตัวอย่าง:
+//   "[07RP-016-00-00-02] แบตเตอรี่---12V 7.5Ah" → code="07RP-016-00-00-02", name="แบตเตอรี่ 12V 7.5Ah"
+//   "[07RP-016-00-00-02]"                         → code="07RP-016-00-00-02", name=""
+//   "แบตเตอรี่---12V 7.5Ah"                       → code="", name="แบตเตอรี่ 12V 7.5Ah"
+function parseStockKeyword(raw) {
+  let s = String(raw).trim();
+  // ดึงรหัสจาก [...] ถ้ามี
+  let code = '';
+  const bracketMatch = s.match(/\[([^\]]+)\]/);
+  if (bracketMatch) {
+    code = bracketMatch[1].trim();
+    s = s.replace(/\[[^\]]+\]/, '').trim();
+  }
+  // ทำความสะอาดชื่อสินค้า: แทน --- หรือ ----- ด้วยช่องว่าง
+  s = s.replace(/-{2,}/g, ' ').trim();
+  return { code, name: s };
+}
 
-  let domain;
-  if (words.length <= 1) {
-    const kw = words[0] || '';
-    domain = ['|', ['name', 'ilike', kw], ['default_code', 'ilike', kw]];
-  } else {
-    // หลายคำ: ทุกคำต้องเจอ (AND) โดยแต่ละคำหาได้ทั้งชื่อหรือรหัส (OR)
-    // โครงสร้าง domain: '&' (n-1 ตัว) แล้วตามด้วยแต่ละคำที่เป็น ['|', name, code]
-    domain = [];
-    for (let i = 0; i < words.length - 1; i++) domain.push('&');
-    words.forEach(w => {
-      domain.push('|');
-      domain.push(['name', 'ilike', w]);
-      domain.push(['default_code', 'ilike', w]);
-    });
+// ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
+export async function odooStock(keyword, companyId) {
+  const { code, name } = parseStockKeyword(keyword);
+
+  // ถ้ามีรหัส → ค้นรหัสตรงๆ ก่อน (แม่นที่สุด)
+  if (code && !name) {
+    const domain = ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]];
+    return await searchRead('product.product', domain,
+      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
   }
 
-  // หมายเหตุ: สินค้า (product.product) ใช้ร่วมกันทุกบริษัท ไม่กรอง company_id
-  // (ถ้ากรองจะไม่เจอ เพราะสินค้าไม่ได้ผูกบริษัทตรงๆ)
-  return await searchRead(
-    'product.product',
-    domain,
-    ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'],
-    15
-  );
+  // ถ้ามีทั้งรหัสและชื่อ → ค้นรหัสก่อน ถ้าไม่เจอค่อยค้นชื่อ
+  if (code && name) {
+    const byCode = await searchRead('product.product',
+      ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]],
+      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+    if (byCode.length) return byCode;
+    // fallback ค้นชื่อ
+    const words = smartWords(name);
+    return await searchRead('product.product', buildWordsDomain(words),
+      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+  }
+
+  // ค้นชื่อล้วน
+  const words = smartWords(name || keyword);
+  const domain = buildWordsDomain(words);
+  return await searchRead('product.product', domain,
+    ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+}
+
+// helper: สร้าง domain จากหลายคำ (AND ของแต่ละคำ, OR ระหว่าง name กับ code)
+function buildWordsDomain(words) {
+  if (!words.length) return [['name', 'ilike', '']];
+  if (words.length === 1) {
+    return ['|', ['name', 'ilike', words[0]], ['default_code', 'ilike', words[0]]];
+  }
+  const domain = [];
+  for (let i = 0; i < words.length - 1; i++) domain.push('&');
+  words.forEach(w => {
+    domain.push('|');
+    domain.push(['name', 'ilike', w]);
+    domain.push(['default_code', 'ilike', w]);
+  });
+  return domain;
 }
 
 // ── ดูใบสั่งซื้อ (PO) พร้อมรายการสินค้า ──────────────────────────────────────
