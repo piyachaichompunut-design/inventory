@@ -350,33 +350,38 @@ export default async function handler(req, res) {
       }
 
       // ── สร้างงานใหม่ ──────────────────────────────────────────────────────
-      // เช็คว่าบอทถูกแท็กไหม (mention.mentionees มี isSelf=true)
+      // กฎ: บันทึกงาน = ต้อง Reply ข้อความงาน + แท็กบอท เท่านั้น
+      //     แท็กบอทเฉยๆ (ไม่ reply) = ถามข้อมูลอื่น (ไม่สร้างงาน)
       const mentionees = event.message?.mention?.mentionees || [];
       const botMentioned = mentionees.some(m => m.isSelf === true);
 
-      // ลองแบบเดิมก่อน (รับ:/ส่ง:/งานใหม่)
+      // แบบเดิม (รับ:/ส่ง:/งานใหม่) — พิมพ์ตรงๆ ยังใช้ได้
       let taskData = parseTask(text);
 
-      // ถ้าบอทถูกแท็ก และเป็นการ reply ข้อความงาน → รวมข้อความต้นฉบับ + ที่พิมพ์ใหม่
-      // เช่น reply งาน "แจ้งส่งของ อบจ..." แล้วพิมพ์ "ชุบ พี่เต้ย"
-      // → ข้อความรวม = "แจ้งส่งของ อบจ... ชุบ พี่เต้ย"
-      if (!taskData && botMentioned) {
-        const typedClean = text.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
+      // แบบ Reply: ต้องมี quotedId (เป็นการ reply) + แท็กบอท
+      if (!taskData && botMentioned && quotedId) {
+        // ตัด mention บอทออกตรงตำแหน่งจริง (index+length) กันคำว่า Bot ค้าง
+        let typedClean = text;
+        const botMentions = mentionees
+          .filter(m => m.isSelf === true && typeof m.index === 'number' && typeof m.length === 'number')
+          .sort((a, b) => b.index - a.index);
+        for (const m of botMentions) {
+          typedClean = typedClean.slice(0, m.index) + typedClean.slice(m.index + m.length);
+        }
+        typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // กรณี reply: ต้องมีข้อความต้นฉบับ ถ้าหาไม่เจอ → เตือน (ไม่สร้างงานมั่ว)
-        if (quotedId && !quotedText) {
+        // ต้องเจอข้อความต้นฉบับที่ reply ถ้าไม่เจอ → เตือน
+        if (!quotedText) {
           await replyLine(replyToken,
-            '⚠️ ขออภัยครับ บอทยังไม่มีข้อความที่คุณ Reply ในระบบ\n' +
-            '(ข้อความเก่าก่อนติดตั้งฟีเจอร์นี้ หรือเป็นรูป/ไฟล์)\n\n' +
-            'ลองพิมพ์งานใหม่แบบเต็มแทนครับ เช่น:\n' +
-            '@TMS Bot แจ้งส่งของ งานอบจ.อำนาจเจริญ ป้าย 20 ชุด วันที่11มิถุนายน [หมวด] [ชื่อ]'
+            '⚠️ บอทยังไม่มีข้อความที่คุณ Reply ในระบบครับ\n' +
+            '(อาจเป็นข้อความเก่าก่อนติดตั้ง หรือเป็นรูป/ไฟล์/พิกัด)\n\n' +
+            'ลอง Reply ข้อความงานที่เป็น "ตัวอักษร" และส่งใหม่หลังจากนี้ครับ'
           );
           continue;
         }
 
-        const combined = quotedText
-          ? (quotedText + ' ' + typedClean).trim()
-          : typedClean;
+        // รวมข้อความงานต้นฉบับ + หมวด/ชื่อที่พิมพ์ → สร้างงาน
+        const combined = (quotedText + ' ' + typedClean).trim();
         taskData = await parseTaskSmart(combined, db);
       }
       if (taskData) {
