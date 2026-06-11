@@ -323,9 +323,6 @@ async function attachFileToLastTask(dbClient, groupId, messageId, msgType, fileN
     .select('task_id, task_name, created_at').eq('group_id', groupId).maybeSingle();
   if (!last || !last.task_id) return { error: 'ไม่พบงานล่าสุดในกลุ่มนี้ (ต้องสร้างงานก่อนแนบไฟล์)' };
 
-  const ageMin = (Date.now() - new Date(last.created_at).getTime()) / 60000;
-  if (ageMin > 5) return { error: 'เกิน 5 นาทีแล้ว (งานล่าสุด: ' + last.task_name + ') — สร้างงานใหม่ก่อนแนบไฟล์ครับ' };
-
   // โหลดไฟล์จาก LINE
   const { buffer, contentType } = await getLineContent(messageId);
 
@@ -398,31 +395,19 @@ export default async function handler(req, res) {
       const botMentioned = mentionees.some(m => m.isSelf === true);
       const quotedId = event.message?.quotedMessageId || '';
 
-      // DEBUG: log event ที่เป็นรูป/ไฟล์
+      // ══ กรณีไฟล์/รูป → เก็บ messageId ไว้ใน line_messages เพื่อให้ +1 ดึงได้ ══
       if (msgType === 'image' || msgType === 'file') {
-        console.log('FILE EVENT:', JSON.stringify({
-          msgType, botMentioned, quotedId,
-          hasMention: !!event.message?.mention,
-          mentionees: mentionees.map(m => ({ isSelf: m.isSelf })),
-          msgId: event.message?.id
-        }));
-      }
-
-      // ══ กรณีไฟล์/รูป → แนบเข้างานล่าสุด ══════════════════════════════════
-      // หมายเหตุ: รูป/ไฟล์ใน LINE แท็กบอทไม่ได้ (mention ใช้ได้เฉพาะข้อความ)
-      // จึงไม่เช็ค botMentioned — ใช้แค่ "เป็นไฟล์ + มีงานล่าสุดใน 5 นาที"
-      if (msgType === 'image' || msgType === 'file') {
-        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
-        try {
-          const fname = event.message?.fileName || '';
-          const result = await attachFileToLastTask(db, pushTarget, event.message.id, msgType, fname);
-          if (result.error) {
-            await replyLine(replyToken, '⚠️ ' + result.error);
-          } else {
-            await replyLine(replyToken, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + result.taskName + '\n📁 ไฟล์ทั้งหมด: ' + result.count + ' ไฟล์');
-          }
-        } catch (e) {
-          await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+        if (db) {
+          try {
+            await db.from('line_messages').upsert({
+              message_id: event.message.id,
+              group_id: pushTarget,
+              user_id: senderName,
+              text: null,
+              msg_type: msgType,
+              file_name: event.message?.fileName || null
+            }, { onConflict: 'message_id' });
+          } catch (e) {}
         }
         continue;
       }
@@ -457,6 +442,56 @@ export default async function handler(req, res) {
 
       const tt = text.trim();
       const lc = tt.toLowerCase();
+
+      // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
+      if (tt === '+1') {
+        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        try {
+          if (!quotedId) {
+            await replyLine(replyToken, '⚠️ ต้อง Reply รูป/ไฟล์ก่อนแล้วพิมพ์ +1 ครับ');
+            continue;
+          }
+          // ดึง message type จาก line_messages
+          const { data: quotedMsg } = await db.from('line_messages')
+            .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
+          const fileMsgType = quotedMsg?.msg_type || 'image';
+          const fname = quotedMsg?.file_name || '';
+
+          // หางานล่าสุดของกลุ่มนี้
+          const { data: last } = await db.from('line_last_task')
+            .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+          if (!last || !last.task_id) {
+            await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาสร้างงานก่อนแนบไฟล์');
+            continue;
+          }
+
+          // โหลดไฟล์จาก LINE ตาม quotedId
+          const { buffer, contentType } = await getLineContent(quotedId);
+          const ext = fileMsgType === 'image' ? '.jpg' : (fname && fname.includes('.') ? '' : '.bin');
+          const safeName = fname || (fileMsgType === 'image' ? 'image.jpg' : 'file' + ext);
+          const ts = Date.now();
+          const storagePath = last.task_id + '/' + ts + '_' + safeName.replace(/[^\w.\-ก-๙]/g, '_');
+
+          const { error: upErr } = await db.storage.from('attachments')
+            .upload(storagePath, buffer, { contentType, upsert: true });
+          if (upErr) { await replyLine(replyToken, '❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message); continue; }
+
+          const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
+
+          const { data: taskRow } = await db.from('tasks')
+            .select('attachments').eq('id', last.task_id).maybeSingle();
+          let atts = Array.isArray(taskRow?.attachments) ? taskRow.attachments : [];
+          atts.push({ name: safeName, size: buffer.length, fileId: storagePath, mimeType: contentType, webViewLink: pub.publicUrl });
+
+          const { error: updErr } = await db.from('tasks').update({ attachments: atts }).eq('id', last.task_id);
+          if (updErr) { await replyLine(replyToken, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr.message); continue; }
+
+          await replyLine(replyToken, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + last.task_name + '\n📁 ไฟล์ทั้งหมด: ' + atts.length + ' ไฟล์');
+        } catch (e) {
+          await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+        }
+        continue;
+      }
 
       // ── /ส่งของ → สร้าง PDF อัป Storage แล้วส่งลิงก์ ─────────────────────
       if (tt.startsWith('/ส่งของ') || tt.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
