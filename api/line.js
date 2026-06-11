@@ -248,10 +248,15 @@ async function parseTaskSmart(text, dbClient, typedText) {
     typedBody = typedBody.replace(/^\s*(ส่ง|รับ)\s+/, '').trim(); // ตัดคำ ส่ง/รับ ออก
   }
 
-  // ดึงวันที่ (ทุกรูปแบบ)
+  // ดึงวันที่ — typedText มี priority สูงกว่า (พิมพ์เองตอน reply ชนะวันในข้อความเดิมเสมอ)
   let actionDate = todayStr();
-  const parsedDate = smartParseDate(t);
-  if (parsedDate) actionDate = parsedDate;
+  const dateFromTyped = typedText ? smartParseDate(typedText) : null;
+  if (dateFromTyped) {
+    actionDate = dateFromTyped; // ใช้วันที่ที่พิมพ์มาเอง
+  } else {
+    const parsedDate = smartParseDate(t); // fallback → วันแรกในข้อความเดิม
+    if (parsedDate) actionDate = parsedDate;
+  }
 
   // ตัดวันที่ออกจากข้อความ (ข้อความงานต้นฉบับ) — ครอบคลุมทุกรูปแบบ
   const thMonthAlt = 'มกราคม|ม.ค|กุมภาพันธ์|ก.พ|มีนาคม|มี.ค|เมษายน|เม.ย|พฤษภาคม|พ.ค|มิถุนายน|มิ.ย|กรกฎาคม|ก.ค|สิงหาคม|ส.ค|กันยายน|ก.ย|ตุลาคม|ต.ค|พฤศจิกายน|พ.ย|ธันวาคม|ธ.ค';
