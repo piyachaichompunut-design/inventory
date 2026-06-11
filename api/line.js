@@ -40,22 +40,37 @@ async function pushLine(to, messages) {
 }
 
 // ── สร้าง PDF ใบส่งของ → อัปขึ้น Supabase Storage → ส่งลิงก์เข้าไลน์ ──────────
-async function sendDeliveryPDFtoLine(to, keyword) {
+// statusFilter: 'pending' (ค่าเริ่มต้น) | 'done' | 'all'
+async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
   if (!odooConfigured()) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้ตั้งค่า Odoo ครับ' }]); return; }
   if (!db) { await pushLine(to, [{ type:'text', text:'❌ ยังไม่ได้เชื่อมต่อ Storage ครับ' }]); return; }
   try {
     const { keyword: dkw, company: dCo } = parseCompany(keyword);
-    const picks = await odooDelivery(dkw, dCo.id);
-    if (!picks.length) {
+    const allPicks = await odooDelivery(dkw, dCo.id);
+    if (!allPicks.length) {
       await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของ "' + dkw + '" (บริษัท ' + dCo.name + ') ใน Odoo' }]);
       return;
     }
-    // นับสถานะ + เตรียมข้อมูล PDF
+
+    // กรองตาม statusFilter
+    const picks = allPicks.filter(p => {
+      if (statusFilter === 'done')    return p.state === 'done';
+      if (statusFilter === 'all')     return true;
+      return p.state !== 'done' && p.state !== 'cancel'; // pending = ค่าเริ่มต้น
+    });
+
+    if (!picks.length) {
+      const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
+      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของสถานะ "' + label + '" ของ "' + dkw + '" ครับ\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)' }]);
+      return;
+    }
+
+    // นับสถานะ
     let cntDone = 0, cntPending = 0, cntCancel = 0;
     const picksData = picks.map(p => {
       let statusText, statusColor;
-      if (p.state === 'done')        { statusText='ส่งแล้ว'; statusColor='red';  cntDone++; }
-      else if (p.state === 'cancel') { statusText='ยกเลิก';  statusColor='gray'; cntCancel++; }
+      if (p.state === 'done')        { statusText='ส่งแล้ว'; statusColor='red';   cntDone++; }
+      else if (p.state === 'cancel') { statusText='ยกเลิก';  statusColor='gray';  cntCancel++; }
       else                           { statusText='รอส่ง';   statusColor='green'; cntPending++; }
       return {
         name: p.name || '-',
@@ -70,32 +85,28 @@ async function sendDeliveryPDFtoLine(to, keyword) {
         }))
       };
     });
+
+    const statusLabel = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
     const data = {
-      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ') [' + statusLabel + ']',
       summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
       picks: picksData
     };
     const pdfBytes = await buildDeliveryPDF(data);
 
-    // อัปขึ้น Supabase Storage (bucket: attachments) → ได้ public URL
     const fname = 'delivery/' + Date.now() + '.pdf';
     const { error: upErr } = await db.storage.from('attachments')
       .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
-    if (upErr) {
-      await pushLine(to, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]);
-      return;
-    }
-    const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
-    const url = pub.publicUrl;
+    if (upErr) { await pushLine(to, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
 
-    // ส่งสรุป + ลิงก์ PDF เข้าไลน์
+    const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
     const sumLine = 'รวม ' + picks.length + ' ใบ'
-      + (cntDone ? ' | ส่งแล้ว ' + cntDone : '')
-      + (cntPending ? ' | รอส่ง ' + cntPending : '')
-      + (cntCancel ? ' | ยกเลิก ' + cntCancel : '');
+      + (cntDone    ? ' | ส่งแล้ว ' + cntDone    : '')
+      + (cntPending ? ' | รอส่ง '   + cntPending : '')
+      + (cntCancel  ? ' | ยกเลิก '  + cntCancel  : '');
     await pushLine(to, [{
       type: 'text',
-      text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + '\n' + sumLine + '\n\n📎 เปิดไฟล์ PDF:\n' + url
+      text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + ' [' + statusLabel + ']\n' + sumLine + '\n\n📎 เปิดไฟล์ PDF:\n' + pub.publicUrl
     }]);
   } catch (e) {
     await pushLine(to, [{ type:'text', text:'❌ สร้าง PDF ไม่สำเร็จ: ' + e.message }]);
@@ -550,13 +561,22 @@ export default async function handler(req, res) {
 
       // ── /ส่งของ → สร้าง PDF อัป Storage แล้วส่งลิงก์ ─────────────────────
       if (tt.startsWith('/ส่งของ') || tt.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
-        const kw = tt.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+        let kw = tt.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
         if (!kw) {
-          await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์');
+          await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
-          await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ PDF ของ "' + kw + '" ครับ...');
-          // สร้าง PDF + อัป + ส่งลิงก์ (ใช้ push เพราะ replyToken ใช้ได้ครั้งเดียว)
-          if (pushTarget) await sendDeliveryPDFtoLine(pushTarget, kw);
+          // ดึง statusFilter จากคำท้าย (default = รอส่ง)
+          let statusFilter = 'pending';
+          kw = kw.replace(/\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอ|รอส่ง|pending)\s*$/i, (_, m) => {
+            const ml = m.toLowerCase();
+            if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
+            else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
+            else                                                    statusFilter = 'pending';
+            return '';
+          }).trim();
+          const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
+          await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
+          if (pushTarget) sendDeliveryPDFtoLine(pushTarget, kw, statusFilter);
         }
         continue;
       }
