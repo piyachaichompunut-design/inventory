@@ -160,6 +160,60 @@ function parseTask(text) {
   return { task, duration, actionDate, salesName };
 }
 
+// ── ตารางตัวย่อหมวด → ชื่อเต็ม (ตรงกับ categories ใน web) ──────────────────
+const CAT_ALIAS = {
+  'เสา': 'งานเสาไฟฟ้า',
+  'เสาอุปกรณ์': 'งานเสาไฟฟ้าและอุปกรณ์',
+  'ชุบ': 'บริการชุบกัลวาไนซ์',
+  'ป้าย': 'งานป้าย',
+  'ป้ายเฟรม': 'งานป้าย+เฟรม',
+  'เฟรม': 'งานเฟรม',
+  'มาส': 'งาน mast arm',
+  'ไฟฟ้า': 'งานอุปกรณ์ไฟฟ้า',
+  'ราก': 'งานรากฐาน',
+  'พัสดุ': 'งานส่งพัสดุ',
+  'การ์ดเรล': 'งานการ์ดเรล',
+  'ซ่อม': 'ซ่อมบำรุง',
+  'ไฟ': 'แผนกไฟฟ้า',
+  'ซิลิกัล': 'ซิลิกัล',
+  'so': 'ใบสั่งซื้อ( so )',
+  'ผลิต': 'วัตถุดิบเพื่อการผลิต',
+  'สิ้นเปลือง': 'วัตถุดิบสิ้นเปลือง',
+  'อื่นๆ': 'อื่นๆ'
+};
+
+// ── จับวันที่ทุกรูปแบบ: วันนี้/พรุ่งนี้, 16/6/69, 16/6/2026, 16มิ.ย., 16มิถุนายน2569 ──
+function smartParseDate(text) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const fmt = (y, m, d) => y + '-' + pad(m) + '-' + pad(d);
+  const toCE = y => { y = +y; if (y < 100) y += 2500; if (y >= 2500) y -= 543; return y; };
+  const thMonth = { 'มกราคม':1,'ม.ค':1,'กุมภาพันธ์':2,'ก.พ':2,'มีนาคม':3,'มี.ค':3,'เมษายน':4,'เม.ย':4,'พฤษภาคม':5,'พ.ค':5,'มิถุนายน':6,'มิ.ย':6,'กรกฎาคม':7,'ก.ค':7,'สิงหาคม':8,'ส.ค':8,'กันยายน':9,'ก.ย':9,'ตุลาคม':10,'ต.ค':10,'พฤศจิกายน':11,'พ.ย':11,'ธันวาคม':12,'ธ.ค':12 };
+  const monthAlt = Object.keys(thMonth).sort((a,b)=>b.length-a.length).join('|');
+
+  if (/วันนี้/.test(text)) { const d=now; return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+  if (/พรุ่งนี้/.test(text)) { const d=new Date(now.getTime()+86400000); return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+  if (/มะรืน/.test(text)) { const d=new Date(now.getTime()+2*86400000); return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+
+  let m = text.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (m) { const d=+m[1], mo=+m[2], y=toCE(m[3]); if(mo>=1&&mo<=12&&d>=1&&d<=31) return fmt(y, mo, d); }
+
+  m = text.match(new RegExp('(\\d{1,2})\\s*(' + monthAlt + ')\\.?\\s*(\\d{2,4})'));
+  if (m) { const d=+m[1], mo=thMonth[m[2]], y=toCE(m[3]); if(mo) return fmt(y, mo, d); }
+
+  m = text.match(new RegExp('(\\d{1,2})\\s*(' + monthAlt + ')\\.?'));
+  if (m) {
+    const d=+m[1], mo=thMonth[m[2]];
+    if (mo) {
+      let y = now.getFullYear();
+      const cand = new Date(y, mo-1, d);
+      if (cand < new Date(now.getFullYear(), now.getMonth(), now.getDate())) y++;
+      return fmt(y, mo, d);
+    }
+  }
+  return null;
+}
+
 // ── เดางานจากข้อความธรรมชาติ (ใช้เมื่อแท็กบอท) ───────────────────────────────
 // รูปแบบ: @TMS Bot [ข้อความงาน] [ตัวย่อหมวด] [ชื่อผู้รับผิดชอบ]
 // เช่น: @TMS Bot ส่งของปราจีนบุรี วันที่10มิถุนายน ชุบ พี่เต้ย
@@ -183,24 +237,16 @@ async function parseTaskSmart(text, dbClient, typedText) {
     typedBody = typedBody.replace(/^\s*(ส่ง|รับ)\s+/, '').trim(); // ตัดคำ ส่ง/รับ ออก
   }
 
-  // ดึงวันที่ (ตัวเลข 10/6/2026 หรือไทย "วันที่10มิถุนายน")
+  // ดึงวันที่ (ทุกรูปแบบ)
   let actionDate = todayStr();
-  const dateMatch = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
-  if (dateMatch) {
-    const parsed = parseDate(dateMatch[1]);
-    if (parsed) actionDate = parsed;
-  } else {
-    const thMonth = { 'มกราคม':1,'กุมภาพันธ์':2,'มีนาคม':3,'เมษายน':4,'พฤษภาคม':5,'มิถุนายน':6,'กรกฎาคม':7,'สิงหาคม':8,'กันยายน':9,'ตุลาคม':10,'พฤศจิกายน':11,'ธันวาคม':12 };
-    const m = t.match(/วันที่?\s*(\d{1,2})\s*(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/);
-    if (m) {
-      const now = new Date();
-      actionDate = now.getFullYear() + '-' + String(thMonth[m[2]]).padStart(2,'0') + '-' + String(+m[1]).padStart(2,'0');
-    }
-  }
+  const parsedDate = smartParseDate(t);
+  if (parsedDate) actionDate = parsedDate;
 
-  // ตัดวันที่ออกจากข้อความ (ข้อความงานต้นฉบับ)
-  let body = t.replace(/วันที่?\s*\d{1,2}\s*(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/, '')
-              .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/, '')
+  // ตัดวันที่ออกจากข้อความ (ข้อความงานต้นฉบับ) — ครอบคลุมทุกรูปแบบ
+  const thMonthAlt = 'มกราคม|ม.ค|กุมภาพันธ์|ก.พ|มีนาคม|มี.ค|เมษายน|เม.ย|พฤษภาคม|พ.ค|มิถุนายน|มิ.ย|กรกฎาคม|ก.ค|สิงหาคม|ส.ค|กันยายน|ก.ย|ตุลาคม|ต.ค|พฤศจิกายน|พ.ย|ธันวาคม|ธ.ค';
+  let body = t.replace(/วันนี้|พรุ่งนี้|มะรืน/g, '')
+              .replace(new RegExp('(?:วันที่\\s*)?\\d{1,2}\\s*(?:' + thMonthAlt + ')\\.?\\s*\\d{0,4}', 'g'), '')
+              .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/g, '')
               .replace(/\s+/g, ' ').trim();
 
   // ── จับหมวดหมู่ + ผู้รับผิดชอบ ───────────────────────────────────────────
@@ -214,20 +260,31 @@ async function parseTaskSmart(text, dbClient, typedText) {
     } catch (e) {}
   }
 
-  // แยกคำจากที่พิมพ์ (typedBody) — รูปแบบ: [หมวด] [ชื่อ]
+  // แยกคำจากที่พิมพ์ (typedBody) — รูปแบบ: [ตัวย่อหมวด] [ชื่อ]
   const typedWords = (typedBody || '').split(/\s+/).filter(Boolean);
   if (typedWords.length >= 2) {
-    // 2 คำขึ้นไป: คำแรก=หมวด, ที่เหลือ=ชื่อ
+    // 2 คำขึ้นไป: คำแรก=ตัวย่อหมวด, ที่เหลือ=ชื่อ
     const catWord = typedWords[0];
-    const matched = catList.find(c => c === catWord || c.includes(catWord) || catWord.includes(c));
-    categories = matched || catWord;        // ถ้าตรง DB ใช้ชื่อเต็ม ไม่ตรงก็ใช้ที่พิมพ์
+    const fullCat = CAT_ALIAS[catWord];                          // ลองตัวย่อก่อน
+    if (fullCat) {
+      categories = fullCat;
+    } else {
+      // ไม่ตรงตัวย่อ → ลองเทียบกับชื่อเต็มใน DB
+      const matched = catList.find(c => c === catWord || c.includes(catWord) || catWord.includes(c));
+      categories = matched || catWord;
+    }
     salesName = typedWords.slice(1).join(' ');
   } else if (typedWords.length === 1) {
-    // คำเดียว: เดาว่าเป็นหมวด หรือ ชื่อ — ถ้าตรง DB = หมวด, ไม่ตรง = ชื่อ
+    // คำเดียว: ลองตัวย่อก่อน ถ้าตรง = หมวด, ไม่ตรง = ชื่อคน
     const w = typedWords[0];
-    const matched = catList.find(c => c === w || c.includes(w) || w.includes(c));
-    if (matched) categories = matched;
-    else salesName = w;
+    const fullCat = CAT_ALIAS[w];
+    if (fullCat) {
+      categories = fullCat;
+    } else {
+      const matched = catList.find(c => c === w || c.includes(w) || w.includes(c));
+      if (matched) categories = matched;
+      else salesName = w;
+    }
   }
 
   // ชื่องาน = ข้อความงานต้นฉบับ (body) — ถ้า body ว่าง (ไม่ reply) ใช้ typedBody แทน
@@ -382,6 +439,7 @@ export default async function handler(req, res) {
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
         // ถ้าเจอข้อความเดิมที่ reply → รวม | ถ้าไม่เจอ → ใช้ที่พิมพ์ (ไม่หยุด)
+        console.log('REPLY: quotedId=', quotedId, '| quotedText=', quotedText ? quotedText.slice(0,40) : '(ว่าง)', '| typed=', typedClean);
         const combined = quotedText
           ? (quotedText + ' ' + typedClean).trim()
           : typedClean;
