@@ -655,19 +655,30 @@ export default async function handler(req, res) {
       // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" ──
       if (botMentioned) {
         const cleanTT = tt.replace(/@\S+/g, '').trim();
-        console.log('DEBUG cleanTT:', JSON.stringify(cleanTT));
-        // รองรับทั้ง "เปลี่ยนวัน 12/6" และ "เปลี่ยนวัน" (วันที่อาจถูก LINE แปลงเป็น hyperlink)
         const isChangDate = /^เปลี่ยนวัน/.test(cleanTT);
         if (isChangDate) {
           if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
-          // ดึงวันที่จากข้อความที่พิมพ์
-          const dateChangeMatch = cleanTT.match(/เปลี่ยนวัน\s+(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-          if (!dateChangeMatch) {
-            await replyLine(replyToken, '⚠️⚠️⚠️ ระบุวันที่ด้วยครับ เช่น เปลี่ยนวัน 20/6/69');
+          // ดึงวันที่จาก cleanTT ก่อน — ถ้า LINE แปลง 12/6 เป็น URL ให้ดึงจาก entities แทน
+          let dateStr = null;
+          const dmatch = cleanTT.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+          if (dmatch) {
+            dateStr = dmatch[1];
+          } else {
+            const ents = event.message?.entities || [];
+            for (const ent of ents) {
+              if (ent.type === 'url') {
+                const utext = tt.slice(ent.offset, ent.offset + ent.length);
+                const um = utext.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+                if (um) { dateStr = um[1]; break; }
+              }
+            }
+          }
+          if (!dateStr) {
+            await replyLine(replyToken, '⚠️⚠️⚠️ ระบุวันที่ด้วยครับ เช่น เปลี่ยนวัน 20-6-69\n(ใช้ - แทน / กันลิงก์)');
             continue;
           }
-          const newDate = parseDate(dateChangeMatch[1]);
-          if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20/6/69'); continue; }
+          const newDate = parseDate(dateStr);
+          if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20-6-69'); continue; }
           const { data: last } = await db.from('line_last_task')
             .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
           if (!last || !last.task_id) { await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue; }
