@@ -163,7 +163,7 @@ function parseTask(text) {
 // ── เดางานจากข้อความธรรมชาติ (ใช้เมื่อแท็กบอท) ───────────────────────────────
 // รูปแบบ: @TMS Bot [ข้อความงาน] [ตัวย่อหมวด] [ชื่อผู้รับผิดชอบ]
 // เช่น: @TMS Bot ส่งของปราจีนบุรี วันที่10มิถุนายน ชุบ พี่เต้ย
-async function parseTaskSmart(text, dbClient) {
+async function parseTaskSmart(text, dbClient, typedText) {
   let t = text.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t) return null;
 
@@ -173,6 +173,15 @@ async function parseTaskSmart(text, dbClient) {
   const recvWords = /(รับของ|รับเข้า|มารับ|ขอรับ|จะรับ|รับงาน|เข้ารับ|รับสินค้า|แจ้งรับ)/;
   if (sendWords.test(t)) duration = 'ส่ง';
   else if (recvWords.test(t)) duration = 'รับ';
+
+  // ระบุเองได้: ถ้าที่พิมพ์ขึ้นต้นด้วย "ส่ง" หรือ "รับ" → ใช้อันนั้นเลย (override)
+  // เช่น reply แล้วพิมพ์ "ส่ง เสา พี่เต้ย" → บังคับเป็นงานส่ง
+  let typedBody = typedText || '';
+  const mExplicit = typedBody.match(/^\s*(ส่ง|รับ)\s+/);
+  if (mExplicit) {
+    duration = mExplicit[1];
+    typedBody = typedBody.replace(/^\s*(ส่ง|รับ)\s+/, '').trim(); // ตัดคำ ส่ง/รับ ออก
+  }
 
   // ดึงวันที่ (ตัวเลข 10/6/2026 หรือไทย "วันที่10มิถุนายน")
   let actionDate = todayStr();
@@ -189,13 +198,13 @@ async function parseTaskSmart(text, dbClient) {
     }
   }
 
-  // ตัดวันที่ออกจากข้อความ
+  // ตัดวันที่ออกจากข้อความ (ข้อความงานต้นฉบับ)
   let body = t.replace(/วันที่?\s*\d{1,2}\s*(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/, '')
               .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/, '')
               .replace(/\s+/g, ' ').trim();
 
-  // ── จับหมวดหมู่ + ผู้รับผิดชอบ จาก 2 คำท้าย ──────────────────────────────
-  // ดึงรายชื่อหมวดจาก DB มาเทียบ
+  // ── จับหมวดหมู่ + ผู้รับผิดชอบ ───────────────────────────────────────────
+  // หมวด+ชื่อ มาจาก "ที่พิมพ์" (typedBody เช่น "เสา พี่เต้ย") ไม่ใช่จากข้อความงาน
   let categories = '', salesName = '';
   let catList = [];
   if (dbClient) {
@@ -205,24 +214,24 @@ async function parseTaskSmart(text, dbClient) {
     } catch (e) {}
   }
 
-  const words = body.split(' ');
-  // ลองดูคำท้ายๆ ว่ามีคำไหนตรง (หรือเป็นส่วนหนึ่งของ) ชื่อหมวด
-  // รูปแบบที่ตั้งใจ: ...งาน [หมวด] [ชื่อคน]  → คำรองท้าย = หมวด, คำท้าย = ชื่อ
-  if (words.length >= 2) {
-    const lastWord = words[words.length - 1];      // ชื่อคน
-    const secondLast = words[words.length - 2];    // ตัวย่อหมวด
-    // เช็คว่า secondLast ตรงกับหมวดไหนใน DB ไหม (เทียบแบบมีคำนั้นอยู่)
-    const matched = catList.find(c => c === secondLast || c.includes(secondLast) || secondLast.includes(c));
-    if (matched) {
-      categories = matched;          // ใช้ชื่อหมวดเต็มจาก DB
-      salesName = lastWord;          // คำท้าย = ผู้รับผิดชอบ
-      words.splice(words.length - 2, 2); // ตัด 2 คำท้ายออกจากชื่องาน
-    }
+  // แยกคำจากที่พิมพ์ (typedBody) — รูปแบบ: [หมวด] [ชื่อ]
+  const typedWords = (typedBody || '').split(/\s+/).filter(Boolean);
+  if (typedWords.length >= 2) {
+    // 2 คำขึ้นไป: คำแรก=หมวด, ที่เหลือ=ชื่อ
+    const catWord = typedWords[0];
+    const matched = catList.find(c => c === catWord || c.includes(catWord) || catWord.includes(c));
+    categories = matched || catWord;        // ถ้าตรง DB ใช้ชื่อเต็ม ไม่ตรงก็ใช้ที่พิมพ์
+    salesName = typedWords.slice(1).join(' ');
+  } else if (typedWords.length === 1) {
+    // คำเดียว: เดาว่าเป็นหมวด หรือ ชื่อ — ถ้าตรง DB = หมวด, ไม่ตรง = ชื่อ
+    const w = typedWords[0];
+    const matched = catList.find(c => c === w || c.includes(w) || w.includes(c));
+    if (matched) categories = matched;
+    else salesName = w;
   }
 
-  let task = words.join(' ').trim();
-  if (task.length > 200) task = task.slice(0, 200);
-  if (!task) return null;
+  // ชื่องาน = ข้อความงานต้นฉบับ (body) — ถ้า body ว่าง (ไม่ reply) ใช้ typedBody แทน
+  const words = (body || typedBody || '').split(' ');
 
   return { task, duration, actionDate, salesName, categories };
 }
@@ -382,7 +391,7 @@ export default async function handler(req, res) {
 
         // รวมข้อความงานต้นฉบับ + หมวด/ชื่อที่พิมพ์ → สร้างงาน
         const combined = (quotedText + ' ' + typedClean).trim();
-        taskData = await parseTaskSmart(combined, db);
+        taskData = await parseTaskSmart(combined, db, typedClean);
       }
       if (taskData) {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
