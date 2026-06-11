@@ -631,6 +631,42 @@ export default async function handler(req, res) {
         continue;
       }
 
+      // ── แก้ไฟล์ → reply ข้อความเดิม + แท็กบอท + "แก้ไฟล์" → ล้างไฟล์เก่า ──
+      if (botMentioned && /^แก้ไฟล์$/i.test(tt.replace(/@\S+/g, '').trim())) {
+        if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        const { data: last } = await db.from('line_last_task')
+          .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+        if (!last || !last.task_id) {
+          await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue;
+        }
+        const { error: clrErr } = await db.from('tasks')
+          .update({ attachments: [] }).eq('id', last.task_id);
+        if (clrErr) { await replyLine(replyToken, '❌ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
+        await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + last.task_name + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
+        continue;
+      }
+
+      // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" ──
+      if (botMentioned) {
+        const cleanTT = tt.replace(/@\S+/g, '').trim();
+        const dateChangeMatch = cleanTT.match(/^เปลี่ยนวัน\s+(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+        if (dateChangeMatch) {
+          if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          const newDate = parseDate(dateChangeMatch[1]);
+          if (!newDate) { await replyLine(replyToken, '❌ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20/6/69'); continue; }
+          const { data: last } = await db.from('line_last_task')
+            .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
+          if (!last || !last.task_id) { await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ'); continue; }
+          const { error: updErr } = await db.from('tasks')
+            .update({ action_date: newDate }).eq('id', last.task_id);
+          if (updErr) { await replyLine(replyToken, '❌ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
+          const [y2, m2, d2] = newDate.split('-');
+          const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
+          await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + last.task_name + '\n📅 ' + dateDisplay);
+          continue;
+        }
+      }
+
       // ── สร้างงานใหม่ ──────────────────────────────────────────────────────
       // กฎ: รับงาน = ต้อง Reply ข้อความงาน + แท็กบอท เท่านั้น
       // (mentionees, botMentioned, quotedId ประกาศไว้ข้างบนแล้ว)
