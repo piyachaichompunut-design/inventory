@@ -2,8 +2,8 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
-import { odooConfigured, odooDelivery, parseCompany } from './odoo.js';
-import { buildDeliveryPDF } from './pdfgen.js';
+import { odooConfigured, odooDelivery, parseCompany, odooCompare } from './odoo.js';
+import { buildDeliveryPDF, buildComparePDF } from './pdfgen.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -487,6 +487,63 @@ export default async function handler(req, res) {
           await replyLine(replyToken, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + last.task_name + '\n📁 ไฟล์ทั้งหมด: ' + atts.length + ' ไฟล์');
         } catch (e) {
           await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+        }
+        continue;
+      }
+
+      // ── /เทียบ so1234 po5678 [ตัวย่อบริษัท] → PDF เปรียบเทียบ ───────────────
+      if (tt.startsWith('/เทียบ') || tt.toLowerCase().startsWith('/compare')) {
+        const arg = tt.replace(/^\/เทียบ/,'').replace(/^\/compare/i,'').trim();
+        // parse: "so1234 po5678" หรือ "so1234 po5678 md"
+        const { keyword: argClean, company: cmp } = parseCompany(arg);
+        const parts = argClean.trim().split(/\s+/);
+        if (parts.length < 2) {
+          await replyLine(replyToken, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md');
+          continue;
+        }
+        // แยก type + เลขที่ เช่น "so1234" → type=so, num=1234
+        const parseDocRef = (s) => {
+          const m = s.match(/^(so|po|pr)(.+)$/i);
+          if (!m) return null;
+          return { type: m[1].toLowerCase(), num: m[2] };
+        };
+        const refA = parseDocRef(parts[0]);
+        const refB = parseDocRef(parts[1]);
+        if (!refA || !refB) {
+          await replyLine(replyToken, 'รูปแบบไม่ถูกต้องครับ ตัวอย่าง: /เทียบ so1234 po5678');
+          continue;
+        }
+        if (!odooConfigured()) { await replyLine(replyToken, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ'); continue; }
+        await replyLine(replyToken, '⏳ กำลังดึงข้อมูลและสร้าง PDF เปรียบเทียบ...');
+        if (pushTarget) {
+          (async () => {
+            try {
+              const compareData = await odooCompare(refA.type, refA.num, refB.type, refB.num, cmp.id);
+              const pdfBytes = await buildComparePDF(compareData);
+              const labelA = refA.type.toUpperCase() + refA.num;
+              const labelB = refB.type.toUpperCase() + refB.num;
+              const fname = 'compare/' + Date.now() + '.pdf';
+              const { error: upErr } = await db.storage.from('attachments')
+                .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
+              if (upErr) { await pushLine(pushTarget, [{ type:'text', text:'❌ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
+              const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
+              // สรุปตัวเลข
+              const rows = compareData.rows || [];
+              const cntOk   = rows.filter(r=>r.status==='ok').length;
+              const cntDiff = rows.filter(r=>r.status==='diff').length;
+              const cntMis  = rows.filter(r=>r.status.startsWith('missing')).length;
+              await pushLine(pushTarget, [{
+                type: 'text',
+                text: '📊 เปรียบเทียบ ' + labelA + ' vs ' + labelB + ' (' + cmp.name + ')\n\n' +
+                      '✅ ตรง: ' + cntOk + ' รายการ\n' +
+                      (cntDiff ? '⚠️ ต่าง: ' + cntDiff + ' รายการ\n' : '') +
+                      (cntMis  ? '❌ ขาด: ' + cntMis  + ' รายการ\n' : '') +
+                      '\n📎 เปิด PDF:\n' + pub.publicUrl
+              }]);
+            } catch (e) {
+              await pushLine(pushTarget, [{ type:'text', text:'❌ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
+            }
+          })();
         }
         continue;
       }
