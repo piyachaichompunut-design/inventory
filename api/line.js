@@ -444,7 +444,7 @@ export default async function handler(req, res) {
       const lc = tt.toLowerCase();
 
       // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
-      if (tt === '+1') {
+      if (/^\+\d+$/.test(tt)) {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         try {
           if (!quotedId) {
