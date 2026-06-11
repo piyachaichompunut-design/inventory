@@ -398,8 +398,20 @@ export default async function handler(req, res) {
       const botMentioned = mentionees.some(m => m.isSelf === true);
       const quotedId = event.message?.quotedMessageId || '';
 
-      // ══ กรณีไฟล์/รูป + แท็กบอท + reply → แนบเข้างานล่าสุด ══════════════════
-      if ((msgType === 'image' || msgType === 'file') && botMentioned) {
+      // DEBUG: log event ที่เป็นรูป/ไฟล์
+      if (msgType === 'image' || msgType === 'file') {
+        console.log('FILE EVENT:', JSON.stringify({
+          msgType, botMentioned, quotedId,
+          hasMention: !!event.message?.mention,
+          mentionees: mentionees.map(m => ({ isSelf: m.isSelf })),
+          msgId: event.message?.id
+        }));
+      }
+
+      // ══ กรณีไฟล์/รูป → แนบเข้างานล่าสุด ══════════════════════════════════
+      // หมายเหตุ: รูป/ไฟล์ใน LINE แท็กบอทไม่ได้ (mention ใช้ได้เฉพาะข้อความ)
+      // จึงไม่เช็ค botMentioned — ใช้แค่ "เป็นไฟล์ + มีงานล่าสุดใน 5 นาที"
+      if (msgType === 'image' || msgType === 'file') {
         if (!db) { await replyLine(replyToken, '❌ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         try {
           const fname = event.message?.fileName || '';
