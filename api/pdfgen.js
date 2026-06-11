@@ -123,3 +123,119 @@ export async function buildDeliveryPDF(data) {
 
   return await pdf.save(); // คืน Uint8Array
 }
+
+// ── สร้าง PDF เปรียบเทียบ SO vs PO (หรือคู่ใดก็ได้) ──────────────────────────
+// compareData = { docA, docB, typeA, typeB, numA, numB, rows:[{code,name,qtyA,qtyB,diff,status}] }
+export async function buildComparePDF(compareData) {
+  const fonts = await loadFonts();
+  const pdf = await PDFDocument.create();
+  pdf.registerFontkit(fontkit);
+  const font  = await pdf.embedFont(fonts.reg);
+  const fontB = await pdf.embedFont(fonts.bold);
+
+  const A4 = [595.28, 841.89];
+  const margin = 40;
+  let page = pdf.addPage(A4);
+  let y = A4[1] - margin;
+
+  const black  = rgb(0.1,  0.1,  0.1);
+  const gray   = rgb(0.5,  0.5,  0.5);
+  const orange = rgb(0.92, 0.35, 0.05);
+  const red    = rgb(0.86, 0.15, 0.15);
+  const green  = rgb(0.13, 0.6,  0.23);
+  const yellow = rgb(0.8,  0.55, 0.0);
+  const bgRed  = rgb(1.0,  0.93, 0.93);
+  const bgYel  = rgb(1.0,  0.97, 0.88);
+  const bgGray = rgb(0.97, 0.97, 0.97);
+
+  const newPageIfNeeded = (need = 20) => {
+    if (y < margin + need) { page = pdf.addPage(A4); y = A4[1] - margin; }
+  };
+
+  const txt = (text, x, yy, { size=11, bold=false, color=black }={}) => {
+    const clean = String(text||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu,'').replace(/\s+$/,'');
+    page.drawText(clean, { x, y: yy, size, font: bold ? fontB : font, color });
+  };
+
+  const hr = (thick=0.5, color=gray) => {
+    newPageIfNeeded(10);
+    page.drawLine({ start:{x:margin,y}, end:{x:A4[0]-margin,y}, thickness:thick, color });
+    y -= 8;
+  };
+
+  // ── หัว ──
+  const labelA = (compareData.typeA||'').toUpperCase() + (compareData.numA||'');
+  const labelB = (compareData.typeB||'').toUpperCase() + (compareData.numB||'');
+  txt('เปรียบเทียบ ' + labelA + ' vs ' + labelB, margin, y, { size:18, bold:true, color:orange });
+  y -= 26;
+  const nameA = Array.isArray(compareData.docA?.partner_id) ? compareData.docA.partner_id[1] : '';
+  const nameB = Array.isArray(compareData.docB?.partner_id) ? compareData.docB.partner_id[1] : '';
+  if (nameA) { txt(labelA + ': ' + nameA, margin, y, { size:10, color:gray }); y -= 14; }
+  if (nameB) { txt(labelB + ': ' + nameB, margin, y, { size:10, color:gray }); y -= 14; }
+  y -= 4;
+  hr(1, orange);
+
+  // สรุปจำนวน
+  const rows = compareData.rows || [];
+  const cntOk   = rows.filter(r=>r.status==='ok').length;
+  const cntDiff = rows.filter(r=>r.status==='diff').length;
+  const cntMisA = rows.filter(r=>r.status==='missing_a').length;
+  const cntMisB = rows.filter(r=>r.status==='missing_b').length;
+  txt('รายการทั้งหมด: ' + rows.length + '  |  ตรง: ' + cntOk + '  |  ต่าง: ' + cntDiff + '  |  ไม่มีใน ' + labelA + ': ' + cntMisA + '  |  ไม่มีใน ' + labelB + ': ' + cntMisB,
+    margin, y, { size:10, bold:true, color:black });
+  y -= 20;
+  hr();
+
+  // ── header ตาราง ──
+  const W = A4[0] - margin*2; // ~515
+  const cols = { code:0, name:90, qtyA:330, qtyB:390, diff:450, status:490 };
+  const rowH = 18;
+
+  // วาด header bar
+  page.drawRectangle({ x:margin, y:y-2, width:W, height:rowH+4, color:rgb(0.2,0.2,0.2) });
+  txt('รหัส',       margin+cols.code,   y, { size:10, bold:true, color:rgb(1,1,1) });
+  txt('ชื่อสินค้า', margin+cols.name,   y, { size:10, bold:true, color:rgb(1,1,1) });
+  txt(labelA,       margin+cols.qtyA,   y, { size:10, bold:true, color:rgb(1,1,1) });
+  txt(labelB,       margin+cols.qtyB,   y, { size:10, bold:true, color:rgb(1,1,1) });
+  txt('ต่าง',       margin+cols.diff,   y, { size:10, bold:true, color:rgb(1,1,1) });
+  txt('สถานะ',      margin+cols.status, y, { size:10, bold:true, color:rgb(1,1,1) });
+  y -= rowH + 6;
+
+  // ── แถวข้อมูล ──
+  rows.forEach((r, i) => {
+    newPageIfNeeded(rowH + 4);
+
+    // สีพื้นหลังตามสถานะ
+    let bg = i%2===0 ? rgb(1,1,1) : bgGray;
+    let textColor = black;
+    let statusTxt = 'ตรง';
+    let statusColor = green;
+
+    if (r.status === 'diff') {
+      bg = bgYel; statusTxt = 'ไม่ตรง'; statusColor = yellow;
+    } else if (r.status === 'missing_a') {
+      bg = bgRed; statusTxt = 'ไม่มีใน '+labelA; statusColor = red; textColor = red;
+    } else if (r.status === 'missing_b') {
+      bg = bgRed; statusTxt = 'ไม่มีใน '+labelB; statusColor = red; textColor = red;
+    }
+
+    page.drawRectangle({ x:margin, y:y-4, width:W, height:rowH, color:bg });
+
+    // ตัดชื่อสินค้าไม่ให้ยาวเกิน
+    const nameShort = (r.name||'').slice(0, 28);
+    txt(r.code||'-',              margin+cols.code,   y, { size:9,  color:textColor });
+    txt(nameShort,                margin+cols.name,   y, { size:9,  color:textColor });
+    txt(r.qtyA||0,                margin+cols.qtyA,   y, { size:10, bold:true, color:r.status==='missing_a'?red:black });
+    txt(r.qtyB||0,                margin+cols.qtyB,   y, { size:10, bold:true, color:r.status==='missing_b'?red:black });
+    txt(r.diff===0?'-':String(r.diff), margin+cols.diff, y, { size:10, bold:true, color:r.diff!==0?red:green });
+    txt(statusTxt,                margin+cols.status, y, { size:9,  bold:true, color:statusColor });
+
+    y -= rowH + 2;
+  });
+
+  hr();
+  const now2 = new Date();
+  txt('พิมพ์เมื่อ: ' + now2.toISOString().slice(0,10), margin, y, { size:9, color:gray });
+
+  return await pdf.save();
+}
