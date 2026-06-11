@@ -1627,8 +1627,15 @@ async function dailyReceiveSend() {
     .order('seq',         { ascending: true });
   const overdueList = overdueData || [];
 
-  // ไม่มีงานเลยทั้ง 2 ส่วน → ไม่ส่งข้อความ
-  if (!list.length && !overdueList.length) return { success: true, count: 0 };
+  // ถ้าไม่มีงานเลย → ส่งข้อความแจ้งว่าวันนี้ไม่มีงาน
+  if (!list.length && !overdueList.length) {
+    await notifyTelegram(
+      '🌅 <b>สรุปงานประจำวัน</b>\n' +
+      '📅 ' + tgDate(today) + '\n\n' +
+      '📊 วันนี้ไม่มีงานรับ/ส่งครับ'
+    );
+    return { success: true, count: 0 };
+  }
 
   // ── helper แสดงรายละเอียด 1 งาน พร้อมสถานะ + วันที่ + ไฟล์แนบ ──────────
   const fmtTask = (t, i, showDate = false) => {
@@ -1994,8 +2001,8 @@ const HANDLERS = {
 };
 
 // ── สร้าง PDF ใบส่งของจาก Odoo แล้วส่งเข้า Telegram ─────────────────────────
-// statusFilter: 'pending' (ค่าเริ่มต้น) | 'done' | 'all'
-export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending') {
+// คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ส่งของpdf
+export async function sendDeliveryPDF(chatId, keyword) {
   if (!TG_TOKEN) return { ok: false, error: 'ยังไม่ได้ตั้ง TELEGRAM_BOT_TOKEN' };
   if (!odooConfigured()) {
     await sendTelegramReply(chatId, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ');
@@ -2003,36 +2010,30 @@ export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending')
   }
   try {
     const { keyword: dkw, company: dCo } = parseCompany(keyword);
-    const allPicks = await odooDelivery(dkw, dCo.id);
-    if (!allPicks.length) {
+    const picks = await odooDelivery(dkw, dCo.id);
+    if (!picks.length) {
       await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + dkw + '" (บริษัท ' + dCo.name + ') ใน Odoo');
       return { ok: false };
     }
-
-    // กรองตาม statusFilter
-    const picks = allPicks.filter(p => {
-      if (statusFilter === 'done') return p.state === 'done';
-      if (statusFilter === 'all')  return true;
-      return p.state !== 'done' && p.state !== 'cancel'; // pending
-    });
-
-    if (!picks.length) {
-      const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + label + '" ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)');
-      return { ok: false };
-    }
-
+    const stateMap = {
+      draft: 'ร่าง', waiting: 'รอ', confirmed: 'รอของ',
+      assigned: 'พร้อมส่ง', done: 'ส่งแล้ว', cancel: 'ยกเลิก'
+    };
+    // เตรียมข้อมูลสำหรับ PDF
     let cntDone = 0, cntPending = 0, cntCancel = 0;
     const picksData = picks.map(p => {
+      // Done = ส่งแล้ว(แดง), Cancel = ยกเลิก(เทา), ที่เหลือ = รอส่ง(เขียว)
       let statusText, statusColor;
-      if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red';   cntDone++; }
-      else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray';  cntCancel++; }
+      if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red';  cntDone++; }
+      else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; cntCancel++; }
       else                           { statusText = 'รอส่ง';   statusColor = 'green'; cntPending++; }
       return {
         name: p.name || '-',
         origin: p.origin || '',
         partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-        statusText, statusColor, shipped: p.state === 'done',
+        statusText,
+        statusColor,
+        shipped: p.state === 'done',
         date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
         lines: (p.lines || []).map(l => ({
           name: Array.isArray(l.product_id) ? l.product_id[1] : '',
@@ -2041,20 +2042,20 @@ export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending')
         }))
       };
     });
-
-    const statusLabel = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
     const data = {
-      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ') [' + statusLabel + ']',
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
       summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
       picks: picksData
     };
     const pdfBytes = await buildDeliveryPDF(data);
 
+    // ส่งไฟล์เข้า Telegram ผ่าน sendDocument (multipart/form-data)
     const fd = new FormData();
     fd.append('chat_id', String(chatId));
-    fd.append('caption', '📄 ใบส่งของ "' + dkw + '" [' + statusLabel + '] (' + picks.length + ' ใบ)');
+    fd.append('caption', '📄 ใบส่งของ "' + keyword + '" (' + picks.length + ' ใบ)');
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    fd.append('document', blob, 'delivery_' + Date.now() + '.pdf');
+    const fname = 'delivery_' + Date.now() + '.pdf';
+    fd.append('document', blob, fname);
 
     const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendDocument`, {
       method: 'POST', body: fd
