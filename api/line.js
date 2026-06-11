@@ -500,7 +500,8 @@ export default async function handler(req, res) {
           const { error: updErr } = await db.from('tasks').update({ attachments: atts }).eq('id', last.task_id);
           if (updErr) { await replyLine(replyToken, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr.message); continue; }
 
-          await replyLine(replyToken, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + last.task_name + '\n📁 ไฟล์ทั้งหมด: ' + atts.length + ' ไฟล์');
+          const fileNum = tt.replace('+', '');
+          await replyLine(replyToken, 'รับทราบครับ ไฟล์ที่ ' + fileNum);
         } catch (e) {
           await replyLine(replyToken, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
         }
