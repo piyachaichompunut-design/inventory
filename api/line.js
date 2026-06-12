@@ -224,6 +224,18 @@ function smartParseDate(text) {
   let m = text.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (m) { const d=+m[1], mo=+m[2], y=toCE(m[3]); if(mo>=1&&mo<=12&&d>=1&&d<=31) return fmt(y, mo, d); }
 
+  // วัน/เดือน ไม่มีปี เช่น 16/6 → ใช้ปีปัจจุบัน (ถ้าผ่านไปแล้วขยับเป็นปีหน้า)
+  m = text.match(/(\d{1,2})[\/\-](\d{1,2})(?![\/\-\d])/);
+  if (m) {
+    const d=+m[1], mo=+m[2];
+    if (mo>=1 && mo<=12 && d>=1 && d<=31) {
+      let y = now.getFullYear();
+      const cand = new Date(y, mo-1, d);
+      if (cand < new Date(now.getFullYear(), now.getMonth(), now.getDate())) y++;
+      return fmt(y, mo, d);
+    }
+  }
+
   m = text.match(new RegExp('(\\d{1,2})\\s*(' + monthAlt + ')\\.?\\s*(\\d{2,4})'));
   if (m) { const d=+m[1], mo=thMonth[m[2]], y=toCE(m[3]); if(mo) return fmt(y, mo, d); }
 
