@@ -315,18 +315,29 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
 export async function odooDelivery(keyword, companyId) {
   const words = smartWords(keyword);
 
-  // ลองค้นแบบเต็ม (รวม location_dest_id.complete_name) ก่อน
-  // ถ้า error/ช้า → fallback ใช้แค่ name/origin/partner
-  const buildDomain = (includeDest) => {
+  // ค้นทุก field ที่ชื่อโครงการอาจอยู่:
+  //   name = เลขเอกสาร | origin = เอกสารต้นทาง | partner = ลูกค้า
+  //   location_dest_id.complete_name = ปลายทาง (มีชื่อโครงการเต็ม)
+  //   group_id.name = Reference ที่จัดกลุ่ม (เช่น "ถนนสาย กท.1001 ถนนกัลปพฤกษ์")
+  const buildDomain = (level) => {
     const oneWord = (w) => {
-      if (includeDest) {
-        return ['|', '|', '|',
+      if (level === 'full') {
+        return ['|', '|', '|', '|',
           ['name', 'ilike', w],
           ['origin', 'ilike', w],
           ['partner_id.name', 'ilike', w],
-          ['location_dest_id.complete_name', 'ilike', w]
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
         ];
       }
+      if (level === 'dest') {
+        return ['|', '|',
+          ['origin', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
+        ];
+      }
+      // simple
       return ['|', '|',
         ['name', 'ilike', w],
         ['origin', 'ilike', w],
@@ -344,36 +355,26 @@ export async function odooDelivery(keyword, companyId) {
     return withCompany(domain, companyId);
   };
 
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
   let pickings = [];
-  // 1) ลองแบบเต็มก่อน
+  // 1) ค้นแบบเต็ม (ทุก field)
   try {
-    pickings = await searchRead(
-      'stock.picking', buildDomain(true),
-      ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
-      40
-    );
+    pickings = await searchRead('stock.picking', buildDomain('full'), fields, 40);
   } catch (e) {
-    // 2) fallback: ตัด location_dest_id ออก
+    // 2) บาง field อาจไม่มี → ลองเฉพาะ dest/group
     try {
-      pickings = await searchRead(
-        'stock.picking', buildDomain(false),
-        ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
-        40
-      );
+      pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40);
     } catch (e2) {
       pickings = [];
     }
   }
-
-  // ถ้าแบบเต็มไม่เจอเลย ลอง fallback แบบง่ายด้วย (เผื่อ dest query ไม่ match)
+  // 3) ถ้ายังไม่เจอ → ลอง dest/group อย่างเดียว (เผื่อชื่ออยู่แค่ปลายทาง)
   if (!pickings.length) {
-    try {
-      pickings = await searchRead(
-        'stock.picking', buildDomain(false),
-        ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
-        40
-      );
-    } catch (e) {}
+    try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) {}
+  }
+  // 4) สุดท้าย fallback simple
+  if (!pickings.length) {
+    try { pickings = await searchRead('stock.picking', buildDomain('simple'), fields, 40); } catch (e) {}
   }
 
   for (const p of pickings) {
