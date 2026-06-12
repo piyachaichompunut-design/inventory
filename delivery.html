@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ใบส่งของ — Task Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1a1d29; --ink-soft:#5a6072; --line:#e4e7ef; --paper:#ffffff;
+    --bg:#eef1f7; --accent:#e8590c; --accent-soft:#fff1e8;
+    --green:#1f9d55; --green-soft:#e6f7ee; --red:#d6336c; --red-soft:#fff0f4;
+    --gray:#868e96; --gray-soft:#f1f3f5;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:'IBM Plex Sans Thai','Sarabun',sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.6;
+    padding:24px 16px; -webkit-font-smoothing:antialiased;
+  }
+  .sheet{
+    max-width:780px; margin:0 auto; background:var(--paper);
+    border-radius:18px; overflow:hidden;
+    box-shadow:0 4px 24px rgba(26,29,41,.08), 0 1px 3px rgba(26,29,41,.06);
+  }
+  /* header */
+  .head{
+    background:linear-gradient(135deg,#1a1d29 0%,#2d3142 100%);
+    color:#fff; padding:28px 32px; position:relative;
+  }
+  .head::after{
+    content:''; position:absolute; left:0; bottom:0; width:100%; height:4px;
+    background:linear-gradient(90deg,var(--accent),#ffa94d);
+  }
+  .head h1{font-size:24px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px}
+  .head .sub{font-size:13px; color:#aeb4c4; font-weight:400}
+  .head .proj{font-size:16px; font-weight:600; color:#ffd8a8; margin-top:10px}
+  /* summary bar */
+  .summary{
+    display:flex; flex-wrap:wrap; gap:10px; padding:18px 32px;
+    background:var(--gray-soft); border-bottom:1px solid var(--line);
+  }
+  .chip{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 14px; border-radius:999px; font-size:13px; font-weight:600;
+    background:#fff; border:1px solid var(--line);
+  }
+  .chip b{font-weight:700}
+  .chip.total{background:var(--ink); color:#fff; border-color:var(--ink)}
+  .chip.pending{background:var(--green-soft); color:var(--green); border-color:transparent}
+  .chip.done{background:var(--red-soft); color:var(--red); border-color:transparent}
+  /* body */
+  .body{padding:8px 32px 32px}
+  .card{
+    border:1px solid var(--line); border-radius:14px; margin-top:20px;
+    overflow:hidden;
+  }
+  .card-head{
+    display:flex; align-items:flex-start; justify-content:space-between;
+    gap:12px; padding:16px 18px; background:#fafbfc; border-bottom:1px solid var(--line);
+  }
+  .card-no{
+    flex:0 0 auto; width:30px; height:30px; border-radius:9px;
+    background:var(--ink); color:#fff; font-weight:700; font-size:14px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .card-title{flex:1; min-width:0}
+  .card-title .name{font-size:16px; font-weight:700; word-break:break-word}
+  .badge{
+    flex:0 0 auto; padding:5px 12px; border-radius:8px;
+    font-size:12.5px; font-weight:700; white-space:nowrap;
+  }
+  .badge.pending{background:var(--green-soft); color:var(--green)}
+  .badge.done{background:var(--red-soft); color:var(--red)}
+  .badge.gray{background:var(--gray-soft); color:var(--gray)}
+  .meta{padding:14px 18px; display:grid; gap:7px; border-bottom:1px solid var(--line)}
+  .meta-row{display:flex; gap:8px; font-size:14px}
+  .meta-row .k{color:var(--ink-soft); flex:0 0 auto; min-width:62px}
+  .meta-row .v{color:var(--ink); font-weight:500; word-break:break-word}
+  /* product table */
+  .items{padding:6px 0}
+  .items-h{
+    padding:10px 18px 6px; font-size:13px; font-weight:700;
+    color:var(--ink-soft); text-transform:none;
+  }
+  .item{
+    display:grid; grid-template-columns:1fr auto; gap:4px 14px;
+    padding:11px 18px; border-top:1px solid var(--line); align-items:start;
+  }
+  .item:first-of-type{border-top:none}
+  .item .pcode{
+    grid-column:1/-1; font-size:12px; color:var(--accent);
+    font-weight:600; font-family:'Sarabun',monospace; letter-spacing:.02em;
+  }
+  .item .pname{font-size:14px; color:var(--ink); word-break:break-word}
+  .item .pqty{
+    font-size:14px; font-weight:700; color:var(--ink);
+    white-space:nowrap; text-align:right; align-self:center;
+  }
+  /* footer */
+  .foot{
+    padding:20px 32px; text-align:center; color:var(--ink-soft);
+    font-size:12.5px; border-top:1px solid var(--line); background:#fafbfc;
+  }
+  .foot .print-btn{
+    display:inline-flex; align-items:center; gap:7px; margin-bottom:12px;
+    padding:10px 22px; border-radius:10px; border:none; cursor:pointer;
+    background:var(--accent); color:#fff; font-size:14px; font-weight:600;
+    font-family:inherit; transition:transform .12s, box-shadow .12s;
+  }
+  .foot .print-btn:hover{transform:translateY(-1px); box-shadow:0 4px 12px rgba(232,89,12,.3)}
+  /* states */
+  .loading,.error{
+    max-width:780px; margin:60px auto; text-align:center;
+    color:var(--ink-soft); font-size:15px;
+  }
+  .error{color:var(--red)}
+  .spinner{
+    width:32px; height:32px; margin:0 auto 16px; border-radius:50%;
+    border:3px solid var(--line); border-top-color:var(--accent);
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* print */
+  @media print{
+    body{background:#fff; padding:0}
+    .sheet{box-shadow:none; border-radius:0; max-width:100%}
+    .foot .print-btn{display:none}
+    .card{break-inside:avoid}
+  }
+  @media(max-width:520px){
+    body{padding:12px 8px}
+    .head,.summary,.body,.foot{padding-left:18px; padding-right:18px}
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div class="loading">
+      <div class="spinner"></div>
+      กำลังโหลดใบส่งของ...
+    </div>
+  </div>
+
+<script>
+const SUPABASE_URL = 'https://rvdboyrusmrjzurukwja.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZGJveXJ1c21yanp1cnVrd2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTQ3MDEsImV4cCI6MjA5NTgzMDcwMX0.UxP6ZlJ41DxxG_ofA6ge43XIfm6BMIOARvmsn1gDtrQ';
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function badgeClass(color){
+  if(color==='red') return 'done';
+  if(color==='gray') return 'gray';
+  return 'pending';
+}
+
+function render(d){
+  const picks = d.data && d.data.picks ? d.data.picks : [];
+  const s = d.data && d.data.summary ? d.data.summary : {};
+  let chips = '<span class="chip total">รวม <b>'+(s.total||picks.length)+'</b> ใบ</span>';
+  if(s.pending) chips += '<span class="chip pending">รอส่ง <b>'+s.pending+'</b></span>';
+  if(s.done)    chips += '<span class="chip done">ส่งแล้ว <b>'+s.done+'</b></span>';
+  if(s.cancel)  chips += '<span class="chip">ยกเลิก <b>'+s.cancel+'</b></span>';
+
+  let cards = picks.map((p,i)=>{
+    let lines = (p.lines||[]).map(l=>{
+      const full = l.name||'';
+      const m = full.match(/^\[([^\]]+)\]\s*/);
+      const code = m ? m[1] : '';
+      const name = (m ? full.slice(m[0].length) : full).replace(/-{2,}/g,' ').trim();
+      const qty = (l.qty||0)+' '+(l.uom||'');
+      return '<div class="item">'+
+        (code?'<div class="pcode">'+esc(code)+'</div>':'')+
+        '<div class="pname">'+esc(name)+'</div>'+
+        '<div class="pqty">'+esc(qty)+'</div>'+
+      '</div>';
+    }).join('');
+
+    return '<div class="card">'+
+      '<div class="card-head">'+
+        '<div class="card-no">'+(i+1)+'</div>'+
+        '<div class="card-title"><div class="name">'+esc(p.name)+'</div></div>'+
+        (p.statusText?'<div class="badge '+badgeClass(p.statusColor)+'">'+esc(p.statusText)+'</div>':'')+
+      '</div>'+
+      '<div class="meta">'+
+        (p.origin?'<div class="meta-row"><span class="k">โครงการ</span><span class="v">'+esc(p.origin)+'</span></div>':'')+
+        (p.partner?'<div class="meta-row"><span class="k">ปลายทาง</span><span class="v">'+esc(p.partner)+'</span></div>':'')+
+        (p.date?'<div class="meta-row"><span class="k">วันที่</span><span class="v">'+esc(p.date)+'</span></div>':'')+
+      '</div>'+
+      (lines?'<div class="items"><div class="items-h">รายการสินค้า</div>'+lines+'</div>':'')+
+    '</div>';
+  }).join('');
+
+  document.getElementById('app').innerHTML =
+    '<div class="sheet">'+
+      '<div class="head">'+
+        '<h1>'+esc(d.title||'ใบส่งของ')+'</h1>'+
+        '<div class="sub">Task Management System — ดึงข้อมูลจาก Odoo</div>'+
+        (d.status_label?'<div class="proj">สถานะ: '+esc(d.status_label)+'</div>':'')+
+      '</div>'+
+      '<div class="summary">'+chips+'</div>'+
+      '<div class="body">'+cards+'</div>'+
+      '<div class="foot">'+
+        '<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>'+
+        '<div>พิมพ์เมื่อ '+new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})+'</div>'+
+      '</div>'+
+    '</div>';
+  document.title = (d.title||'ใบส่งของ')+' — TMS';
+}
+
+async function load(){
+  const id = new URLSearchParams(location.search).get('id');
+  if(!id){ document.getElementById('app').innerHTML='<div class="error">ไม่พบรหัสใบส่งของ</div>'; return; }
+  try{
+    const r = await fetch(SUPABASE_URL+'/rest/v1/delivery_views?id=eq.'+encodeURIComponent(id)+'&select=*',{
+      headers:{ apikey:SUPABASE_ANON, Authorization:'Bearer '+SUPABASE_ANON }
+    });
+    const rows = await r.json();
+    if(!rows || !rows.length){ document.getElementById('app').innerHTML='<div class="error">ไม่พบใบส่งของนี้ (อาจหมดอายุแล้ว)</div>'; return; }
+    render(rows[0]);
+  }catch(e){
+    document.getElementById('app').innerHTML='<div class="error">โหลดไม่สำเร็จ: '+esc(e.message)+'</div>';
+  }
+}
+load();
+</script>
+</body>
+</html>
