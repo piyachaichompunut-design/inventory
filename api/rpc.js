@@ -2002,7 +2002,7 @@ const HANDLERS = {
 
 // ── สร้าง PDF ใบส่งของจาก Odoo แล้วส่งเข้า Telegram ─────────────────────────
 // คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ส่งของpdf
-export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending') {
+export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending', dateFilter = null) {
   if (!TG_TOKEN) return { ok: false, error: 'ยังไม่ได้ตั้ง TELEGRAM_BOT_TOKEN' };
   if (!odooConfigured()) {
     await sendTelegramReply(chatId, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ');
@@ -2016,14 +2016,19 @@ export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending')
       return { ok: false };
     }
     // กรองตาม statusFilter
-    const picks = allPicks.filter(p => {
+    let picks = allPicks.filter(p => {
       if (statusFilter === 'done') return p.state === 'done';
       if (statusFilter === 'all')  return true;
       return p.state !== 'done' && p.state !== 'cancel';
     });
+    // กรองตามวันที่ Scheduled (ถ้าระบุ)
+    if (dateFilter) {
+      picks = picks.filter(p => String(p.scheduled_date || '').slice(0, 10) === dateFilter);
+    }
     if (!picks.length) {
       const lb = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + lb + '" ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)');
+      const dnote = dateFilter ? ' วันที่ ' + dateFilter : '';
+      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + lb + '"' + dnote + ' ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)');
       return { ok: false };
     }
     const stateMap = {
@@ -2050,7 +2055,8 @@ export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending')
           name: Array.isArray(l.product_id) ? l.product_id[1] : '',
           qty: l.quantity || l.product_uom_qty || 0,
           uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-        }))
+        })),
+        images: p.images || []
       };
     });
     const statusLabel2 = (typeof statusFilter !== 'undefined' && statusFilter === 'done') ? 'ส่งแล้ว'
