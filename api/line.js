@@ -88,28 +88,32 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
 
     const statusLabel = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
     const data = {
-      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ') [' + statusLabel + ']',
       summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
       picks: picksData
     };
-    const pdfBytes = await buildDeliveryPDF(data);
 
-    const fname = 'delivery/' + Date.now() + '.pdf';
-    const { error: upErr } = await db.storage.from('attachments')
-      .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
-    if (upErr) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
+    // บันทึกลง delivery_views แล้วส่งลิงก์หน้าเว็บ (ภาษาไทยชัด เปิดบนมือถือ/พิมพ์ PDF ได้)
+    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const { error: insErr } = await db.from('delivery_views').insert({
+      id: viewId,
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
+      company: dCo.name,
+      status_label: statusLabel,
+      data: data
+    });
+    if (insErr) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ บันทึกใบส่งของไม่สำเร็จ: ' + insErr.message }]); return; }
 
-    const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
+    const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
     const sumLine = 'รวม ' + picks.length + ' ใบ'
       + (cntDone    ? ' | ส่งแล้ว ' + cntDone    : '')
       + (cntPending ? ' | รอส่ง '   + cntPending : '')
       + (cntCancel  ? ' | ยกเลิก '  + cntCancel  : '');
     await pushLine(to, [{
       type: 'text',
-      text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + ' [' + statusLabel + ']\n' + sumLine + '\n\n📎 เปิดไฟล์ PDF:\n' + pub.publicUrl
+      text: '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + ' [' + statusLabel + ']\n' + sumLine + '\n\n📎 เปิดดูใบส่งของ:\n' + viewUrl
     }]);
   } catch (e) {
-    await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ สร้าง PDF ไม่สำเร็จ: ' + e.message }]);
+    await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ สร้างใบส่งของไม่สำเร็จ: ' + e.message }]);
   }
 }
 
