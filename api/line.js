@@ -475,24 +475,20 @@ export default async function handler(req, res) {
         if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
         try {
           if (!quotedId) continue;
-          // ดึง message type จาก line_messages
           const { data: quotedMsg } = await db.from('line_messages')
             .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
           const fileMsgType = quotedMsg?.msg_type || 'image';
           const fname = quotedMsg?.file_name || '';
 
-          // หางานล่าสุดของกลุ่มนี้
           const { data: last } = await db.from('line_last_task')
             .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
           if (!last || !last.task_id) {
-            await replyLine(replyToken, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาสร้างงานก่อนแนบไฟล์');
+            await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาสร้างงานก่อนแนบไฟล์');
             continue;
           }
 
-          // โหลดไฟล์จาก LINE ตาม quotedId
           const { buffer, contentType } = await getLineContent(quotedId);
-          const ext = fileMsgType === 'image' ? '.jpg' : (fname && fname.includes('.') ? '' : '.bin');
-          const safeName = fname || (fileMsgType === 'image' ? 'image.jpg' : 'file' + ext);
+          const safeName = fname || (fileMsgType === 'image' ? 'image.jpg' : 'file.bin');
           const ts = Date.now();
           const ext2 = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : '';
           const storagePath = last.task_id + '/' + ts + ext2;
@@ -502,7 +498,6 @@ export default async function handler(req, res) {
           if (upErr) { await replyLine(replyToken, '⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message); continue; }
 
           const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
-
           const { data: taskRow } = await db.from('tasks')
             .select('attachments').eq('id', last.task_id).maybeSingle();
           let atts = Array.isArray(taskRow?.attachments) ? taskRow.attachments : [];
@@ -593,7 +588,11 @@ export default async function handler(req, res) {
           }).trim();
           const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
           await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
-          if (pushTarget) sendDeliveryPDFtoLine(pushTarget, kw, statusFilter);
+          if (pushTarget) {
+            await sendDeliveryPDFtoLine(pushTarget, kw, statusFilter).catch(async (e) => {
+              await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ สร้างใบส่งของไม่สำเร็จ: ' + e.message }]);
+            });
+          }
         }
         continue;
       }
@@ -750,7 +749,6 @@ export default async function handler(req, res) {
 
           const { error: updErr } = await db.from('tasks')
             .update({ action_date: newDate }).eq('id', targetTaskId);
-          console.log('CHANGEDATE_RESULT:', JSON.stringify({ dateStr, newDate, targetTaskId, quotedId, updErr: updErr?.message }));
           if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
@@ -815,7 +813,7 @@ export default async function handler(req, res) {
         if (error) {
           await replyLine(replyToken, `❌ บันทึกไม่สำเร็จครับ: ${error.message}`);
         } else {
-          // จำงานล่าสุดของกลุ่มนี้ (สำหรับแนบไฟล์ +1 ภายใน 5 นาที)
+          // จำงานล่าสุดของกลุ่มนี้ (สำหรับแนบไฟล์ +1)
           try {
             await db.from('line_last_task').upsert({
               group_id: pushTarget,
@@ -825,7 +823,7 @@ export default async function handler(req, res) {
             }, { onConflict: 'group_id' });
           } catch (e) {}
 
-          // ผูก task_id กับข้อความที่ reply (สำหรับ "เปลี่ยนวัน" ย้อนหลังให้ตรงงาน)
+          // ผูก task_id กับข้อความที่ reply (สำหรับ "เปลี่ยนวัน"/"แก้ไฟล์" ย้อนหลัง)
           if (quotedId) {
             try {
               await db.from('line_messages')
@@ -845,7 +843,7 @@ export default async function handler(req, res) {
             (taskData.categories ? `🏷️ ${taskData.categories}\n` : '') +
             `\n🔗 ดูในระบบ: inventory-rho-hazel.vercel.app`
           );
-          // แจ้งเข้ากลุ่ม Telegram หลักด้วย (chat id 1)
+          // แจ้งเข้ากลุ่ม Telegram หลักทันที
           try {
             await notifyMainChat(
               `🆕 <b>งานใหม่จากไลน์</b>\n` +
