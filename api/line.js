@@ -41,7 +41,7 @@ async function pushLine(to, messages) {
 
 // ── สร้าง PDF ใบส่งของ → อัปขึ้น Supabase Storage → ส่งลิงก์เข้าไลน์ ──────────
 // statusFilter: 'pending' (ค่าเริ่มต้น) | 'done' | 'all'
-async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
+async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending', dateFilter = null) {
   if (!odooConfigured()) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ' }]); return; }
   if (!db) { await pushLine(to, [{ type:'text', text:'⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อ Storage ครับ' }]); return; }
   try {
@@ -53,15 +53,24 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
     }
 
     // กรองตาม statusFilter
-    const picks = allPicks.filter(p => {
+    let picks = allPicks.filter(p => {
       if (statusFilter === 'done')    return p.state === 'done';
       if (statusFilter === 'all')     return true;
       return p.state !== 'done' && p.state !== 'cancel'; // pending = ค่าเริ่มต้น
     });
 
+    // กรองตามวันที่ Scheduled (ถ้าระบุ) — เทียบเฉพาะส่วนวันที่ (YYYY-MM-DD)
+    if (dateFilter) {
+      picks = picks.filter(p => {
+        const sd = String(p.scheduled_date || '').slice(0, 10);
+        return sd === dateFilter;
+      });
+    }
+
     if (!picks.length) {
       const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของสถานะ "' + label + '" ของ "' + dkw + '" ครับ\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)' }]);
+      const dnote = dateFilter ? ' วันที่ ' + dateFilter : '';
+      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของสถานะ "' + label + '"' + dnote + ' ของ "' + dkw + '" ครับ\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)' }]);
       return;
     }
 
@@ -82,7 +91,8 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending') {
           name: Array.isArray(l.product_id) ? l.product_id[1] : '',
           qty: l.quantity || l.product_uom_qty || 0,
           uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-        }))
+        })),
+        images: p.images || []
       };
     });
 
@@ -601,20 +611,32 @@ export default async function handler(req, res) {
           await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
           // ดึง statusFilter จากคำท้าย (default = รอส่ง)
-          // รองรับทั้ง "...รอส่ง" และ "...รอส่ง md" (status ก่อน company)
           let statusFilter = 'pending';
+          let statusGiven = false;
           const statusRe = /\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอส่ง|รอ|pending)(\s+(?:md|cg|sep|akn|set))?\s*$/i;
           kw = kw.replace(statusRe, (match, st, comp) => {
+            statusGiven = true;
             const ml = st.toLowerCase();
             if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
             else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
             else                                                    statusFilter = 'pending';
-            return comp ? comp : ''; // คืน company กลับไปถ้ามี (ให้ parseCompany จัดการต่อ)
+            return comp ? comp : '';
           }).trim();
+
+          // ดึงวันที่ Scheduled (ถ้ามี) เช่น "กท.1002 12/6"
+          let dateFilter = null;
+          const dm = kw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
+          if (dm) {
+            dateFilter = parseDate(dm[1]);
+            kw = kw.replace(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/, '').trim();
+            if (!statusGiven) statusFilter = 'all'; // มีวันที่แต่ไม่ระบุสถานะ → ทุกสถานะของวันนั้น
+          }
+
           const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-          await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
+          const dateNote = dm ? ' วันที่ ' + dm[1] : '';
+          await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ [' + label + ']' + dateNote + ' ของ "' + kw + '" ครับ...');
           if (pushTarget) {
-            await sendDeliveryPDFtoLine(pushTarget, kw, statusFilter).catch(async (e) => {
+            await sendDeliveryPDFtoLine(pushTarget, kw, statusFilter, dateFilter).catch(async (e) => {
               await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ สร้างใบส่งของไม่สำเร็จ: ' + e.message }]);
             });
           }
