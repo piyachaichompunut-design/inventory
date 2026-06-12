@@ -2002,7 +2002,7 @@ const HANDLERS = {
 
 // ── สร้าง PDF ใบส่งของจาก Odoo แล้วส่งเข้า Telegram ─────────────────────────
 // คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ส่งของpdf
-export async function sendDeliveryPDF(chatId, keyword) {
+export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending') {
   if (!TG_TOKEN) return { ok: false, error: 'ยังไม่ได้ตั้ง TELEGRAM_BOT_TOKEN' };
   if (!odooConfigured()) {
     await sendTelegramReply(chatId, '❌ ยังไม่ได้ตั้งค่า Odoo ครับ');
@@ -2010,9 +2010,20 @@ export async function sendDeliveryPDF(chatId, keyword) {
   }
   try {
     const { keyword: dkw, company: dCo } = parseCompany(keyword);
-    const picks = await odooDelivery(dkw, dCo.id);
-    if (!picks.length) {
+    const allPicks = await odooDelivery(dkw, dCo.id);
+    if (!allPicks.length) {
       await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + dkw + '" (บริษัท ' + dCo.name + ') ใน Odoo');
+      return { ok: false };
+    }
+    // กรองตาม statusFilter
+    const picks = allPicks.filter(p => {
+      if (statusFilter === 'done') return p.state === 'done';
+      if (statusFilter === 'all')  return true;
+      return p.state !== 'done' && p.state !== 'cancel';
+    });
+    if (!picks.length) {
+      const lb = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
+      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + lb + '" ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)');
       return { ok: false };
     }
     const stateMap = {
@@ -2042,32 +2053,38 @@ export async function sendDeliveryPDF(chatId, keyword) {
         }))
       };
     });
+    const statusLabel2 = (typeof statusFilter !== 'undefined' && statusFilter === 'done') ? 'ส่งแล้ว'
+      : (typeof statusFilter !== 'undefined' && statusFilter === 'all') ? 'ทั้งหมด' : 'รอส่ง';
     const data = {
-      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
       summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
       picks: picksData
     };
-    const pdfBytes = await buildDeliveryPDF(data);
 
-    // ส่งไฟล์เข้า Telegram ผ่าน sendDocument (multipart/form-data)
-    const fd = new FormData();
-    fd.append('chat_id', String(chatId));
-    fd.append('caption', '📄 ใบส่งของ "' + keyword + '" (' + picks.length + ' ใบ)');
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const fname = 'delivery_' + Date.now() + '.pdf';
-    fd.append('document', blob, fname);
-
-    const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendDocument`, {
-      method: 'POST', body: fd
+    // บันทึกลง delivery_views แล้วส่งลิงก์ (ภาษาไทยชัด เปิดมือถือ/พิมพ์ PDF ได้)
+    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const { error: insErr } = await db.from('delivery_views').insert({
+      id: viewId,
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
+      company: dCo.name,
+      status_label: statusLabel2,
+      data: data
     });
-    const out = await res.json();
-    if (!out.ok) {
-      await sendTelegramReply(chatId, '❌ ส่งไฟล์ไม่สำเร็จ: ' + (out.description || ''));
+    if (insErr) {
+      await sendTelegramReply(chatId, '⚠️⚠️⚠️ บันทึกใบส่งของไม่สำเร็จ: ' + insErr.message);
       return { ok: false };
     }
+    const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+    const sumLine = 'รวม ' + picks.length + ' ใบ'
+      + (cntDone    ? ' | ส่งแล้ว ' + cntDone    : '')
+      + (cntPending ? ' | รอส่ง '   + cntPending : '')
+      + (cntCancel  ? ' | ยกเลิก '  + cntCancel  : '');
+    await sendTelegramReply(chatId,
+      '📄 ใบส่งของ "' + dkw + '" — ' + dCo.name + ' [' + statusLabel2 + ']\n' + sumLine +
+      '\n\n📎 เปิดดูใบส่งของ:\n' + viewUrl
+    );
     return { ok: true };
   } catch (e) {
-    await sendTelegramReply(chatId, '❌ สร้าง PDF ไม่สำเร็จ: ' + e.message);
+    await sendTelegramReply(chatId, '⚠️⚠️⚠️ สร้างใบส่งของไม่สำเร็จ: ' + e.message);
     return { ok: false, error: e.message };
   }
 }
