@@ -578,13 +578,15 @@ export default async function handler(req, res) {
           await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
           // ดึง statusFilter จากคำท้าย (default = รอส่ง)
+          // รองรับทั้ง "...รอส่ง" และ "...รอส่ง md" (status ก่อน company)
           let statusFilter = 'pending';
-          kw = kw.replace(/\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอ|รอส่ง|pending)\s*$/i, (_, m) => {
-            const ml = m.toLowerCase();
+          const statusRe = /\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอส่ง|รอ|pending)(\s+(?:md|cg|sep|akn|set))?\s*$/i;
+          kw = kw.replace(statusRe, (match, st, comp) => {
+            const ml = st.toLowerCase();
             if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
             else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
             else                                                    statusFilter = 'pending';
-            return '';
+            return comp ? comp : ''; // คืน company กลับไปถ้ามี (ให้ parseCompany จัดการต่อ)
           }).trim();
           const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
           await replyLine(replyToken, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
