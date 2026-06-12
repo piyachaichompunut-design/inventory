@@ -134,6 +134,30 @@
     body{padding:12px 8px}
     .head,.summary,.body,.foot{padding-left:18px; padding-right:18px}
   }
+  /* gallery */
+  .gallery{padding:12px 18px 16px; border-top:1px solid var(--line)}
+  .gallery-h{font-size:13px; font-weight:700; color:var(--ink-soft); margin-bottom:10px}
+  .thumbs{display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px}
+  .thumb{
+    width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px;
+    border:1px solid var(--line); cursor:pointer; background:var(--gray-soft);
+    transition:transform .12s, box-shadow .12s;
+  }
+  .thumb:hover{transform:scale(1.03); box-shadow:0 4px 12px rgba(26,29,41,.15)}
+  /* lightbox */
+  .lb{
+    position:fixed; inset:0; background:rgba(10,12,20,.92); z-index:1000;
+    display:none; align-items:center; justify-content:center; padding:20px;
+    cursor:zoom-out;
+  }
+  .lb.on{display:flex}
+  .lb img{max-width:100%; max-height:100%; border-radius:12px; box-shadow:0 8px 40px rgba(0,0,0,.5)}
+  .lb-close{
+    position:absolute; top:18px; right:22px; color:#fff; font-size:32px;
+    cursor:pointer; line-height:1; font-weight:300; opacity:.85;
+  }
+  .lb-close:hover{opacity:1}
+  @media print{ .gallery .thumbs{grid-template-columns:repeat(4,1fr)} .lb{display:none!important} }
 </style>
 </head>
 <body>
@@ -144,7 +168,19 @@
     </div>
   </div>
 
+  <div class="lb" id="lb" onclick="closeLB()">
+    <span class="lb-close" onclick="closeLB()">&times;</span>
+    <img id="lb-img" src="" alt="">
+  </div>
+
 <script>
+function openLB(src){
+  document.getElementById('lb-img').src = src;
+  document.getElementById('lb').classList.add('on');
+}
+function closeLB(){
+  document.getElementById('lb').classList.remove('on');
+}
 const SUPABASE_URL = 'https://rvdboyrusmrjzurukwja.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZGJveXJ1c21yanp1cnVrd2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTQ3MDEsImV4cCI6MjA5NTgzMDcwMX0.UxP6ZlJ41DxxG_ofA6ge43XIfm6BMIOARvmsn1gDtrQ';
 
@@ -154,6 +190,15 @@ function badgeClass(color){
   if(color==='red') return 'done';
   if(color==='gray') return 'gray';
   return 'pending';
+}
+
+function gallery(imgs){
+  if(!imgs || !imgs.length) return '';
+  let thumbs = imgs.map((im,idx)=>{
+    const url = '/api/odoo-image?id=' + encodeURIComponent(im.id);
+    return '<img class="thumb" src="'+url+'" alt="'+esc(im.name)+'" onclick="openLB(this.src)" loading="lazy">';
+  }).join('');
+  return '<div class="gallery"><div class="gallery-h">📷 รูปงาน ('+imgs.length+')</div><div class="thumbs">'+thumbs+'</div></div>';
 }
 
 function render(d){
@@ -190,6 +235,7 @@ function render(d){
         (p.date?'<div class="meta-row"><span class="k">วันที่</span><span class="v">'+esc(p.date)+'</span></div>':'')+
       '</div>'+
       (lines?'<div class="items"><div class="items-h">รายการสินค้า</div>'+lines+'</div>':'')+
+      gallery(p.images)+
     '</div>';
   }).join('');
 
