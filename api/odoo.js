@@ -356,6 +356,21 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
   return { docA, docB, typeA, typeB, numA, numB, rows };
 }
 
+// ── ดึงรูป attachment เดียวตาม ID → คืน { buffer, mimetype } ──────────────────
+export async function odooGetAttachmentImage(attId) {
+  const rows = await searchRead(
+    'ir.attachment',
+    [['id', '=', +attId], ['mimetype', 'ilike', 'image']],
+    ['datas', 'mimetype'],
+    1
+  );
+  if (!rows || !rows.length || !rows[0].datas) return null;
+  return {
+    buffer: Buffer.from(rows[0].datas, 'base64'),
+    mimetype: rows[0].mimetype || 'image/jpeg'
+  };
+}
+
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
 // ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooDelivery(keyword, companyId) {
@@ -432,6 +447,17 @@ export async function odooDelivery(keyword, companyId) {
         50
       );
     } catch (e) { p.lines = []; }
+
+    // ดึงรายการรูปที่แนบ (เก็บแค่ ID + ชื่อ — รูปจริงโหลดผ่าน proxy ทีหลัง)
+    try {
+      const atts = await searchRead(
+        'ir.attachment',
+        ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
+        ['id', 'name', 'mimetype'],
+        20
+      );
+      p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
+    } catch (e) { p.images = []; }
   }
   return pickings;
 }
