@@ -89,11 +89,16 @@ function withCompany(domain, companyId) {
 }
 
 // ── แยกคำอัตโนมัติ ───────────────────────────────────────────────────────────
+// แยกตรงรอยต่อ ไทย↔ตัวเลข + ตัด . , - / ออก เพื่อค้นกว้างขึ้น
+// เช่น "สป.1001" → ["สป","1001"] | "กท 1002" → ["กท","1002"] | "ภูเก็ต4+570" → ["ภูเก็ต","4+570"]
 function smartWords(keyword) {
   let s = String(keyword).trim();
+  // แทรกช่องว่างตรงรอยต่อไทย↔ตัวเลข
   s = s.replace(/([\u0E00-\u0E7F])(\d)/g, '$1 $2');
   s = s.replace(/(\d)([\u0E00-\u0E7F])/g, '$1 $2');
-  return s.split(/\s+/).filter(Boolean);
+  // แทนจุด/คอมม่า/ขีด ด้วยช่องว่าง (แต่เก็บ + ไว้ เพราะ 4+570 เป็นชื่อจริง)
+  s = s.replace(/[.,\-]/g, ' ');
+  return s.split(/\s+/).filter(w => w.length > 0);
 }
 
 // ── parse keyword ก่อนค้น: รองรับ [รหัส], ---, ชื่อสินค้า ─────────────────────
@@ -310,32 +315,67 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
 export async function odooDelivery(keyword, companyId) {
   const words = smartWords(keyword);
 
-  // แต่ละคำ → ต้องเจอใน (name/origin/ลูกค้า/ปลายทาง) = OR 4 ช่อง
-  // หมายเหตุ: ชื่อโครงการเต็ม (เช่น กม.4+570) อยู่ใน location_dest_id (ปลายทาง)
-  // แล้วทุกคำต้องเจอ = AND
-  const oneWord = (w) => ['|', '|', '|',
-    ['name', 'ilike', w],
-    ['origin', 'ilike', w],
-    ['partner_id.name', 'ilike', w],
-    ['location_dest_id.complete_name', 'ilike', w]
-  ];
+  // ลองค้นแบบเต็ม (รวม location_dest_id.complete_name) ก่อน
+  // ถ้า error/ช้า → fallback ใช้แค่ name/origin/partner
+  const buildDomain = (includeDest) => {
+    const oneWord = (w) => {
+      if (includeDest) {
+        return ['|', '|', '|',
+          ['name', 'ilike', w],
+          ['origin', 'ilike', w],
+          ['partner_id.name', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w]
+        ];
+      }
+      return ['|', '|',
+        ['name', 'ilike', w],
+        ['origin', 'ilike', w],
+        ['partner_id.name', 'ilike', w]
+      ];
+    };
+    let domain;
+    if (words.length <= 1) {
+      domain = oneWord(words[0] || '');
+    } else {
+      domain = [];
+      for (let i = 0; i < words.length - 1; i++) domain.push('&');
+      words.forEach(w => { domain.push(...oneWord(w)); });
+    }
+    return withCompany(domain, companyId);
+  };
 
-  let domain;
-  if (words.length <= 1) {
-    domain = oneWord(words[0] || '');
-  } else {
-    domain = [];
-    for (let i = 0; i < words.length - 1; i++) domain.push('&');
-    words.forEach(w => { domain.push(...oneWord(w)); });
+  let pickings = [];
+  // 1) ลองแบบเต็มก่อน
+  try {
+    pickings = await searchRead(
+      'stock.picking', buildDomain(true),
+      ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
+      40
+    );
+  } catch (e) {
+    // 2) fallback: ตัด location_dest_id ออก
+    try {
+      pickings = await searchRead(
+        'stock.picking', buildDomain(false),
+        ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
+        40
+      );
+    } catch (e2) {
+      pickings = [];
+    }
   }
-  domain = withCompany(domain, companyId);
 
-  const pickings = await safeSearchRead(
-    'stock.picking',
-    domain,
-    ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
-    40
-  );
+  // ถ้าแบบเต็มไม่เจอเลย ลอง fallback แบบง่ายด้วย (เผื่อ dest query ไม่ match)
+  if (!pickings.length) {
+    try {
+      pickings = await searchRead(
+        'stock.picking', buildDomain(false),
+        ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id'],
+        40
+      );
+    } catch (e) {}
+  }
+
   for (const p of pickings) {
     try {
       p.lines = await searchRead(
