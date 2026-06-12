@@ -290,14 +290,15 @@ export default async function handler(req, res) {
         if (!kw) {
           await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
-          // ดึง statusFilter จากคำท้าย (default = รอส่ง)
+          // ดึง statusFilter จากคำท้าย (default = รอส่ง) รองรับ status ก่อน company
           var statusFilter = 'pending';
-          kw = kw.replace(/\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอ|รอส่ง|pending)\s*$/i, function(_, m) {
-            var ml = m.toLowerCase();
+          var statusRe = /\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอส่ง|รอ|pending)(\s+(?:md|cg|sep|akn|set))?\s*$/i;
+          kw = kw.replace(statusRe, function(match, st, comp) {
+            var ml = st.toLowerCase();
             if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
             else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
             else                                                    statusFilter = 'pending';
-            return '';
+            return comp ? comp : '';
           }).trim();
           var label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
           await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
