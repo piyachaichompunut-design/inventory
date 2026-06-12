@@ -40,9 +40,13 @@ function parseDate(s) {
   const m = s.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
   if (!m) return null;
   let [, d, mo, y] = m;
-  y = y ? parseInt(y) : new Date().getFullYear();
-  if (y < 100) y += 2000;
-  if (y >= 2500) y -= 543;
+  if (y === undefined) {
+    y = new Date().getFullYear();
+  } else {
+    y = parseInt(y);
+    if (y < 100) { if (y >= 50) y += 2500; else y += 2000; }
+    if (y >= 2400) y -= 543;
+  }
   if (+mo < 1 || +mo > 12 || +d < 1 || +d > 31) return null;
   return y + '-' + String(+mo).padStart(2,'0') + '-' + String(+d).padStart(2,'0');
 }
@@ -292,19 +296,30 @@ export default async function handler(req, res) {
         } else {
           // ดึง statusFilter จากคำท้าย (default = รอส่ง) รองรับ status ก่อน company
           var statusFilter = 'pending';
+          var statusGiven = false;
           var statusRe = /\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอส่ง|รอ|pending)(\s+(?:md|cg|sep|akn|set))?\s*$/i;
           kw = kw.replace(statusRe, function(match, st, comp) {
+            statusGiven = true;
             var ml = st.toLowerCase();
             if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
             else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
             else                                                    statusFilter = 'pending';
             return comp ? comp : '';
           }).trim();
+
+          // ดึงวันที่ Scheduled (ถ้ามี) เช่น "กท.1002 12/6"
+          var dateFilter = null;
+          var dmTg = kw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
+          if (dmTg) {
+            dateFilter = parseDate(dmTg[1]);
+            kw = kw.replace(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/, '').trim();
+            if (!statusGiven) statusFilter = 'all';
+          }
+
           var label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-          await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
-          // await ให้เสร็จก่อนปิด function (serverless จะ kill ถ้าไม่ await)
-          // sendDeliveryPDF จับ error เองภายในแล้ว
-          await sendDeliveryPDF(chatId, kw, statusFilter);
+          var dateNote = dmTg ? ' วันที่ ' + dmTg[1] : '';
+          await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ [' + label + ']' + dateNote + ' ของ "' + kw + '" ครับ...');
+          await sendDeliveryPDF(chatId, kw, statusFilter, dateFilter);
           res.status(200).json({ ok: true });
           return;
         }
