@@ -251,6 +251,20 @@ export default async function handler(req, res) {
     const msg = update.message || update.channel_post;
     if (!msg || !msg.text) { res.status(200).json({ ok: true }); return; }
 
+    // ── กัน Telegram retry ส่ง update เดิมซ้ำ (สาเหตุบอทค้าง/ตอบซ้ำ) ──
+    // ถ้าเคยเห็น update_id นี้แล้ว → ตอบ 200 ทันที ไม่ประมวลผลซ้ำ
+    if (update.update_id && db) {
+      try {
+        const { error: dupErr } = await db.from('tg_processed_updates')
+          .insert({ update_id: update.update_id });
+        if (dupErr) {
+          // insert ซ้ำ (duplicate key) = เคยทำแล้ว → ข้าม
+          res.status(200).json({ ok: true, dup: true });
+          return;
+        }
+      } catch (e) { /* ถ้าตารางมีปัญหา ปล่อยผ่านไปทำงานปกติ */ }
+    }
+
     const chatId   = msg.chat && msg.chat.id;
     const text     = msg.text;
     const trimmed  = text.trim();
@@ -287,7 +301,11 @@ export default async function handler(req, res) {
           }).trim();
           var label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
           await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ [' + label + '] ของ "' + kw + '" ครับ...');
+          // await ให้เสร็จก่อนปิด function (serverless จะ kill ถ้าไม่ await)
+          // sendDeliveryPDF จับ error เองภายในแล้ว
           await sendDeliveryPDF(chatId, kw, statusFilter);
+          res.status(200).json({ ok: true });
+          return;
         }
         res.status(200).json({ ok: true });
         return;
