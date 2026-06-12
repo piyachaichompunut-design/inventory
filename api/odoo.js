@@ -136,20 +136,64 @@ export async function odooStock(keyword, companyId) {
     return await searchRead('product.product', domain, fields, 15, ctx);
   }
 
-  // ถ้ามีทั้งรหัสและชื่อ → ค้นรหัสก่อน ถ้าไม่เจอค่อยค้นชื่อ
+  // ถ้ามีทั้งรหัสและชื่อ → ค้นรหัสก่อน ถ้าไม่เจอค่อยค้นชื่อ (หลายชั้น)
   if (code && name) {
     const byCode = await searchRead('product.product',
       ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]],
       fields, 15, ctx);
     if (byCode.length) return byCode;
-    const words = smartWords(name);
-    return await searchRead('product.product', buildWordsDomain(words), fields, 15, ctx);
+    return await stockSearchByName(name, fields, ctx);
   }
 
-  // ค้นชื่อล้วน
-  const words = smartWords(name || keyword);
-  const domain = buildWordsDomain(words);
-  return await searchRead('product.product', domain, fields, 15, ctx);
+  // ค้นชื่อล้วน (หลายชั้น)
+  return await stockSearchByName(name || keyword, fields, ctx);
+}
+
+// ── ค้นชื่อสินค้าแบบหลายชั้น (ยืดหยุ่นสูง) ────────────────────────────────────
+// คำประสมที่คนพิมพ์ติดกันบ่อย → แตกเป็นคำย่อย (เพราะ Odoo เก็บแบบมีขีด/เว้นวรรค)
+const COMPOUND_SPLIT = {
+  'แผ่นการ์ดเรล': ['แผ่น','การ์ดเรล'],
+  'เหล็กชุบ': ['เหล็ก','ชุบ'],
+  'ท่อชุบ': ['ท่อ','ชุบ'],
+  'เสาไฟ': ['เสา','ไฟ'],
+  'น็อตตัวผู้': ['น็อต','ตัวผู้'],
+  'น็อตตัวเมีย': ['น็อต','ตัวเมีย'],
+};
+
+function expandWords(words) {
+  const out = [];
+  for (const w of words) {
+    if (COMPOUND_SPLIT[w]) out.push(...COMPOUND_SPLIT[w]);
+    else out.push(w);
+  }
+  return out;
+}
+
+async function stockSearchByName(name, fields, ctx) {
+  let words = smartWords(name);
+  words = expandWords(words); // แตกคำประสมที่รู้จัก
+
+  // ชั้น 1: ทุกคำต้องเจอ (AND)
+  let result = await searchRead('product.product', buildWordsDomain(words), fields, 15, ctx);
+  if (result.length) return result;
+
+  // ชั้น 2: แทรก % ระหว่างคำ จับกรณีมีขีด/อักขระแทรก เช่น "แผ่น-การ์ดเรล"
+  if (words.length >= 2) {
+    const pattern = '%' + words.join('%') + '%';
+    result = await searchRead('product.product',
+      ['|', ['name', 'ilike', pattern], ['default_code', 'ilike', pattern]], fields, 15, ctx);
+    if (result.length) return result;
+  }
+
+  // ชั้น 3: ค้นด้วยคำที่ยาวที่สุดคำเดียว
+  const longest = words.slice().sort((a,b) => b.length - a.length)[0];
+  if (longest && longest.length >= 3) {
+    result = await searchRead('product.product',
+      ['|', ['name', 'ilike', longest], ['default_code', 'ilike', longest]], fields, 15, ctx);
+    if (result.length) return result;
+  }
+
+  return [];
 }
 
 // helper: สร้าง domain จากหลายคำ (AND ของแต่ละคำ, OR ระหว่าง name กับ code)
