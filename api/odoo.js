@@ -71,13 +71,15 @@ async function odooAuth() {
 }
 
 // ── search_read แบบทั่วไป ────────────────────────────────────────────────────
-async function searchRead(model, domain, fields, limit = 20) {
+async function searchRead(model, domain, fields, limit = 20, context = null) {
   const uid = await odooAuth();
+  const kwargs = { fields, limit };
+  if (context) kwargs.context = context;
   return await jsonRpc('object', 'execute_kw', [
     ODOO_DB, uid, ODOO_KEY,
     model, 'search_read',
     [domain],
-    { fields, limit }
+    kwargs
   ]);
 }
 
@@ -124,30 +126,30 @@ function parseStockKeyword(raw) {
 export async function odooStock(keyword, companyId) {
   const { code, name } = parseStockKeyword(keyword);
 
+  // context: ให้ qty_available คำนวณเฉพาะบริษัทที่เลือก (ไม่รวมทุกบริษัท)
+  const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
+  const fields = ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'];
+
   // ถ้ามีรหัส → ค้นรหัสตรงๆ ก่อน (แม่นที่สุด)
   if (code && !name) {
     const domain = ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]];
-    return await searchRead('product.product', domain,
-      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+    return await searchRead('product.product', domain, fields, 15, ctx);
   }
 
   // ถ้ามีทั้งรหัสและชื่อ → ค้นรหัสก่อน ถ้าไม่เจอค่อยค้นชื่อ
   if (code && name) {
     const byCode = await searchRead('product.product',
       ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]],
-      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+      fields, 15, ctx);
     if (byCode.length) return byCode;
-    // fallback ค้นชื่อ
     const words = smartWords(name);
-    return await searchRead('product.product', buildWordsDomain(words),
-      ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+    return await searchRead('product.product', buildWordsDomain(words), fields, 15, ctx);
   }
 
   // ค้นชื่อล้วน
   const words = smartWords(name || keyword);
   const domain = buildWordsDomain(words);
-  return await searchRead('product.product', domain,
-    ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'], 15);
+  return await searchRead('product.product', domain, fields, 15, ctx);
 }
 
 // helper: สร้าง domain จากหลายคำ (AND ของแต่ละคำ, OR ระหว่าง name กับ code)
