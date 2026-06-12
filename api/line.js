@@ -292,7 +292,14 @@ async function parseTaskSmart(text, dbClient, typedText) {
   }
 
   // แยกคำจากที่พิมพ์ (typedBody) — รูปแบบ: [ตัวย่อหมวด] [ชื่อ]
-  const typedWords = (typedBody || '').split(/\s+/).filter(Boolean);
+  // ตัดวันที่ออกจาก typedBody ก่อน (กันวันที่กลายเป็นหมวด/ชื่อ)
+  let typedClean = (typedBody || '')
+    .replace(/วันนี้|พรุ่งนี้|มะรืน/g, '')
+    .replace(new RegExp('(?:วันที่\\s*)?\\d{1,2}\\s*(?:' + thMonthAlt + ')\\.?\\s*\\d{0,4}', 'g'), '')
+    .replace(/(?:วันที่\s*)?\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/g, '')
+    .replace(/\s+/g, ' ').trim();
+
+  const typedWords = typedClean.split(/\s+/).filter(Boolean);
   if (typedWords.length >= 2) {
     // 2 คำขึ้นไป: คำแรก=ตัวย่อหมวด, ที่เหลือ=ชื่อ
     const catWord = typedWords[0];
