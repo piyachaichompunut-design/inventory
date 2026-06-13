@@ -371,6 +371,85 @@ export async function odooGetAttachmentImage(attId) {
   };
 }
 
+// ── อัปรูปเข้า Odoo ir.attachment ─────────────────────────────────────────────
+// resModel = 'stock.picking' | 'purchase.order' | 'sale.order'
+// resId = id ของเอกสาร
+// buffer = Buffer ของรูป, mimetype = 'image/jpeg' เป็นต้น, name = ชื่อไฟล์
+export async function odooUploadAttachment(resModel, resId, buffer, mimetype, name) {
+  const uid = await odooAuth();
+  const base64 = buffer.toString('base64');
+  const attId = await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY,
+    'ir.attachment', 'create',
+    [{
+      name: name || 'image.jpg',
+      datas: base64,
+      res_model: resModel,
+      res_id: resId,
+      mimetype: mimetype || 'image/jpeg',
+      type: 'binary'
+    }]
+  ]);
+  return attId;
+}
+
+// ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
+// คืน { id, name, model } หรือ null ถ้าไม่เจอ
+export async function odooFindDoc(docType, keyword, dateFilter) {
+  const words = smartWords(keyword);
+
+  if (docType === 'po') {
+    const rows = await safeSearchRead('purchase.order',
+      ['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]],
+      ['id', 'name', 'partner_id'], 5);
+    if (!rows.length) return null;
+    return { id: rows[0].id, name: rows[0].name, model: 'purchase.order' };
+  }
+
+  if (docType === 'so') {
+    const rows = await safeSearchRead('sale.order',
+      ['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]],
+      ['id', 'name', 'partner_id'], 5);
+    if (!rows.length) return null;
+    return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
+  }
+
+  // picking — ค้นแบบ odooDelivery + กรองวันที่
+  const buildDomain = (level) => {
+    const oneWord = (w) => {
+      if (level === 'full') {
+        return ['|', '|', '|', '|',
+          ['name', 'ilike', w], ['origin', 'ilike', w],
+          ['partner_id.name', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
+        ];
+      }
+      return ['|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]];
+    };
+    let domain = words.length <= 1 ? oneWord(words[0] || '') : [];
+    if (words.length > 1) {
+      for (let i = 0; i < words.length - 1; i++) domain.push('&');
+      words.forEach(w => domain.push(...oneWord(w)));
+    }
+    return domain;
+  };
+
+  let rows = [];
+  try { rows = await searchRead('stock.picking', buildDomain('full'), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
+    try { rows = await searchRead('stock.picking', buildDomain('simple'), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
+  }
+
+  // กรองวันที่ถ้าระบุ
+  if (dateFilter && rows.length) {
+    const filtered = rows.filter(p => String(p.scheduled_date || '').slice(0, 10) === dateFilter);
+    if (filtered.length) rows = filtered;
+  }
+
+  if (!rows.length) return null;
+  return { id: rows[0].id, name: rows[0].name, model: 'stock.picking' };
+}
+
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
 // ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooDelivery(keyword, companyId) {
