@@ -19,6 +19,25 @@ const db = (SUPABASE_URL && SERVICE_KEY)
 const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,5).toUpperCase();
 const todayStr = () => new Date().toISOString().slice(0,10);
 
+// ── ย่อรูปก่อนเก็บ (ประหยัด Storage) — ไม่ใช่รูปหรือย่อไม่ได้ คืนของเดิม ──
+async function compressIfImage(buffer, contentType) {
+  if (!/^image\/(jpe?g|png|webp)/i.test(contentType || '')) {
+    return { buffer, contentType };
+  }
+  try {
+    const sharp = (await import('sharp')).default;
+    const out = await sharp(buffer)
+      .rotate()
+      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 72 })
+      .toBuffer();
+    if (out.length < buffer.length) return { buffer: out, contentType: 'image/jpeg' };
+    return { buffer, contentType };
+  } catch (e) {
+    return { buffer, contentType };
+  }
+}
+
 // ── System prompt ─────────────────────────────────────────────────────────────
 const SYSTEM = `คุณคือ "Odoo Bot" ผู้ช่วย AI ประจำทีมงานในประเทศไทย
 บุคลิก: กันเอง อบอุ่น ขี้เล่น เหมือนเพื่อนสนิทที่ฉลาด พูดภาษาไทยเป็นธรรมชาติ ใช้ "ครับ" ลงท้าย
@@ -505,12 +524,15 @@ export default async function handler(req, res) {
           try {
             const fileRes2 = await fetch(fileUrl2);
             const arrayBuffer2 = await fileRes2.arrayBuffer();
-            const buffer2 = Buffer.from(arrayBuffer2);
-            const ext2 = fileName2 ? fileName2.split('.').pop() : 'jpg';
+            const compressed2 = await compressIfImage(Buffer.from(arrayBuffer2), contentType2);
+            const buffer2 = compressed2.buffer;
+            const ctUp2 = compressed2.contentType;
+            const ext2 = (compressed2.contentType === 'image/jpeg' && contentType2 !== 'image/jpeg')
+              ? 'jpg' : (fileName2 ? fileName2.split('.').pop() : 'jpg');
             const storagePath2 = last.task_id + '/' + Date.now() + '.' + ext2;
 
             const { error: upErr2 } = await db.storage.from('attachments')
-              .upload(storagePath2, buffer2, { contentType: contentType2, upsert: true });
+              .upload(storagePath2, buffer2, { contentType: ctUp2, upsert: true });
             if (upErr2) { await sendTelegramReply(chatId, '❌ อัปไฟล์ไม่สำเร็จ: ' + upErr2.message); res.status(200).json({ ok: true }); return; }
 
             const { data: pub2 } = db.storage.from('attachments').getPublicUrl(storagePath2);
@@ -518,7 +540,7 @@ export default async function handler(req, res) {
             // อัปเดต attachments ของงาน
             const { data: taskRow2 } = await db.from('tasks').select('attachments').eq('id', last.task_id).maybeSingle();
             let atts2 = Array.isArray(taskRow2?.attachments) ? taskRow2.attachments : [];
-            atts2.push({ name: fileName2 || ('file.' + ext2), size: buffer2.length, fileId: storagePath2, mimeType: contentType2, webViewLink: pub2.publicUrl, source: 'telegram' });
+            atts2.push({ name: fileName2 || ('file.' + ext2), size: buffer2.length, fileId: storagePath2, mimeType: ctUp2, webViewLink: pub2.publicUrl, source: 'telegram' });
 
             const { error: updErr2 } = await db.from('tasks').update({ attachments: atts2 }).eq('id', last.task_id);
             if (updErr2) { await sendTelegramReply(chatId, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr2.message); res.status(200).json({ ok: true }); return; }
