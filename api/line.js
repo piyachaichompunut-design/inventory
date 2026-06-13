@@ -376,6 +376,28 @@ async function getLineContent(messageId) {
   return { buffer: Buffer.from(arrayBuf), contentType };
 }
 
+// ── ย่อรูปก่อนเก็บ (ประหยัด Storage) — ถ้าไม่ใช่รูปหรือย่อไม่ได้ คืนของเดิม ──
+async function compressIfImage(buffer, contentType) {
+  // ย่อเฉพาะรูปภาพ (jpeg/png/webp) ไฟล์อื่น เช่น PDF ไม่แตะ
+  if (!/^image\/(jpe?g|png|webp)/i.test(contentType || '')) {
+    return { buffer, contentType };
+  }
+  try {
+    const sharp = (await import('sharp')).default;
+    const out = await sharp(buffer)
+      .rotate() // หมุนตาม EXIF orientation
+      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 72 })
+      .toBuffer();
+    // ถ้าย่อแล้วเล็กลงจริง ค่อยใช้ ไม่งั้นใช้ของเดิม
+    if (out.length < buffer.length) return { buffer: out, contentType: 'image/jpeg' };
+    return { buffer, contentType };
+  } catch (e) {
+    // sharp ใช้ไม่ได้ → เก็บรูปเต็มแทน (ไม่พัง)
+    return { buffer, contentType };
+  }
+}
+
 // ── แนบไฟล์เข้างานล่าสุด (ภายใน 5 นาที) ──────────────────────────────────────
 async function attachFileToLastTask(dbClient, groupId, messageId, msgType, fileName) {
   // หางานล่าสุดของกลุ่มนี้ (ภายใน 5 นาที)
@@ -383,8 +405,9 @@ async function attachFileToLastTask(dbClient, groupId, messageId, msgType, fileN
     .select('task_id, task_name, created_at').eq('group_id', groupId).maybeSingle();
   if (!last || !last.task_id) return { error: 'ไม่พบงานล่าสุดในกลุ่มนี้ (ต้องสร้างงานก่อนแนบไฟล์)' };
 
-  // โหลดไฟล์จาก LINE
-  const { buffer, contentType } = await getLineContent(messageId);
+  // โหลดไฟล์จาก LINE + ย่อรูป
+  const raw = await getLineContent(messageId);
+  const { buffer, contentType } = await compressIfImage(raw.buffer, raw.contentType);
 
   // ตั้งชื่อไฟล์ + นามสกุล
   const ext = msgType === 'image' ? '.jpg' : (fileName && fileName.includes('.') ? '' : '.bin');
@@ -520,7 +543,8 @@ export default async function handler(req, res) {
             continue;
           }
 
-          const { buffer, contentType } = await getLineContent(quotedId);
+          const raw = await getLineContent(quotedId);
+          const { buffer, contentType } = await compressIfImage(raw.buffer, raw.contentType);
           const safeName = fname || (fileMsgType === 'image' ? 'image.jpg' : 'file.bin');
           const ts = Date.now();
           const ext2 = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : '';
