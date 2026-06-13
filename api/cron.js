@@ -1,31 +1,69 @@
 // Vercel Hobby Plan — รันวันละครั้ง 07:45 น. ไทย (00:45 UTC)
-// ส่งรายงานทุกอย่างในครั้งเดียว:
-//   1) งานรับ/ส่งวันนี้ พร้อมรายละเอียดครบ (dailyReceiveSend)
-//   2) งานครบกำหนด/เลยกำหนด (checkDueTasks)
-//   3) วันที่ 1 ของเดือน → KPI รายเดือน (monthlyKPIReport)
-//
-// ⚠️  Hobby Plan ไม่รองรับรายงานเย็น 16:45 น.
-//     ถ้าต้องการ ให้อัปเป็น Pro Plan แล้วเปลี่ยน schedule เป็น */15 * * * *
-
 import { checkDueTasks, dailyReceiveSend, monthlyKPIReport } from './rpc.js';
 import { createClient } from '@supabase/supabase-js';
 
-// ลบ log ข้อความไลน์ที่เก่ากว่า 7 วัน (กันตารางโต)
-async function cleanupLineMessages() {
+function getDb() {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return { skipped: true };
-  const db = createClient(url, key, { auth: { persistSession: false } });
+  if (!url || !key) return null;
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+// ลบ log ข้อความไลน์ที่เก่ากว่า 7 วัน
+async function cleanupLineMessages(db) {
   const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const { error } = await db.from('line_messages').delete().lt('created_at', cutoff);
+  return error ? { error: error.message } : { ok: true };
+}
+
+// ลบไฟล์แนบงานใน Supabase Storage ที่เก่ากว่า 90 วัน
+async function cleanupAttachments(db) {
+  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  // หา task ที่เก่ากว่า 90 วัน และมี attachments
+  const { data: oldTasks, error: fetchErr } = await db
+    .from('tasks')
+    .select('id, attachments')
+    .lt('created_at', cutoff)
+    .not('attachments', 'eq', '[]');
+  if (fetchErr) return { error: fetchErr.message };
+  if (!oldTasks || !oldTasks.length) return { ok: true, deleted: 0 };
+
+  let deleted = 0;
+  for (const task of oldTasks) {
+    const atts = Array.isArray(task.attachments) ? task.attachments : [];
+    if (!atts.length) continue;
+    // ลบแต่ละไฟล์จาก Storage
+    const paths = atts.map(a => a.fileId).filter(Boolean);
+    if (paths.length) {
+      const { error: delErr } = await db.storage.from('attachments').remove(paths);
+      if (!delErr) {
+        // ล้าง attachments ใน task record
+        await db.from('tasks').update({ attachments: [] }).eq('id', task.id);
+        deleted += paths.length;
+      }
+    }
+  }
+  return { ok: true, deleted };
+}
+
+// ลบ delivery_views ที่เก่ากว่า 30 วัน (link ใบส่งของหมดอายุ)
+async function cleanupDeliveryViews(db) {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await db.from('delivery_views').delete().lt('created_at', cutoff);
+  return error ? { error: error.message } : { ok: true };
+}
+
+// ลบ tg_processed_updates ที่เก่ากว่า 7 วัน (กัน table โต)
+async function cleanupTgUpdates(db) {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await db.from('tg_processed_updates').delete().lt('created_at', cutoff);
   return error ? { error: error.message } : { ok: true };
 }
 
 export default async function handler(req, res) {
   try {
     const now = new Date();
-    // วันที่ไทย (UTC+7) — ใช้เฉพาะเช็ควันที่ 1 ของเดือน
     const thaiDate = new Date(now.getTime() + 7 * 60 * 60 * 1000).getUTCDate();
-
+    const db = getDb();
     const results = {};
 
     // ทุกวัน — งานรับ/ส่งประจำวันพร้อมรายละเอียดครบ
@@ -34,8 +72,19 @@ export default async function handler(req, res) {
     // ทุกวัน — งานครบกำหนด/เลยกำหนด
     results.due = await checkDueTasks();
 
-    // ทุกวัน — ลบ log ข้อความไลน์เก่ากว่า 7 วัน
-    try { results.cleanup = await cleanupLineMessages(); } catch (e) { results.cleanup = { error: e.message }; }
+    if (db) {
+      // ลบ log ข้อความไลน์เก่ากว่า 7 วัน
+      try { results.cleanupLine = await cleanupLineMessages(db); } catch (e) { results.cleanupLine = { error: e.message }; }
+
+      // ลบไฟล์แนบงานเก่ากว่า 90 วัน (ประหยัด Storage)
+      try { results.cleanupAtts = await cleanupAttachments(db); } catch (e) { results.cleanupAtts = { error: e.message }; }
+
+      // ลบ delivery_views เก่ากว่า 30 วัน
+      try { results.cleanupDelivery = await cleanupDeliveryViews(db); } catch (e) { results.cleanupDelivery = { error: e.message }; }
+
+      // ลบ tg_processed_updates เก่ากว่า 7 วัน
+      try { results.cleanupTg = await cleanupTgUpdates(db); } catch (e) { results.cleanupTg = { error: e.message }; }
+    }
 
     // วันที่ 1 ของเดือน — KPI รายเดือน
     if (thaiDate === 1) {
