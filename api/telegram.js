@@ -554,8 +554,9 @@ export default async function handler(req, res) {
           await sendTelegramReply(chatId,
             'ระบุเอกสารด้วยครับ เช่น:\n' +
             '/ลงรูป กท.1002 12/6\n' +
-            '/ลงรูป po PO2606001\n' +
-            '/ลงรูป so 2606007'
+            '/ลงรูป po2606001\n' +
+            '/ลงรูป so2606007\n' +
+            '/ลงรูป pr00278'
           );
           res.status(200).json({ ok: true }); return;
         }
@@ -563,8 +564,9 @@ export default async function handler(req, res) {
         // แยก docType
         var docType = 'picking', docKeyword = rawArg;
         var docDateFilter = null;
-        if (/^po\s+/i.test(rawArg)) { docType = 'po'; docKeyword = rawArg.replace(/^po\s+/i,'').trim(); }
-        else if (/^so\s+/i.test(rawArg)) { docType = 'so'; docKeyword = rawArg.replace(/^so\s+/i,'').trim(); }
+        if (/^po\s*/i.test(rawArg)) { docType = 'po'; docKeyword = rawArg.replace(/^po\s*/i,'').trim(); }
+        else if (/^so\s*/i.test(rawArg)) { docType = 'so'; docKeyword = rawArg.replace(/^so\s*/i,'').trim(); }
+        else if (/^pr\s*/i.test(rawArg)) { docType = 'pr'; docKeyword = rawArg.replace(/^pr\s*/i,'').trim(); }
         else {
           // picking — ดึงวันที่ออก
           var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
