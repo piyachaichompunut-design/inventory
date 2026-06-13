@@ -268,6 +268,75 @@ function addHistory(chatId, role, content) {
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
+// ── ส่งรายงานใบส่งของเข้า LINE หรือ Telegram กลุ่ม 2 ──────────────────────────
+async function sendReport(fromChatId, picking, target, lineGroups, db) {
+  try {
+    const { odooDelivery, parseCompany, odooGetAttachmentImage } = await import('./odoo.js');
+    const { buildDeliveryPDF } = await import('./pdfgen.js');
+    const { createClient } = await import('@supabase/supabase-js');
+
+    // ดึงข้อมูลครบจาก picking (มี lines + images)
+    const allPicks = await odooDelivery(picking.name || '', null);
+    const p = allPicks.find(x => x.id === picking.id) || picking;
+
+    const name = p.name || '-';
+    const origin = p.origin || '';
+    const lines = (p.lines || []).slice(0, 5);
+    const totalLines = (p.lines || []).length;
+    const date = String(p.scheduled_date || '').slice(0, 10);
+    const images = p.images || [];
+
+    // สร้างข้อความรายงาน
+    let lineItems = lines.map((l, i) => {
+      const pname = (Array.isArray(l.product_id) ? l.product_id[1] : l.name || '').replace(/-{2,}/g, ' ').trim();
+      const qty = (l.quantity || l.product_uom_qty || 0) + ' ' + (Array.isArray(l.product_uom) ? l.product_uom[1] : '');
+      return (i+1) + '. ' + pname.slice(0, 50) + ' — ' + qty;
+    }).join('\n');
+    if (totalLines > 5) lineItems += '\n... และอีก ' + (totalLines-5) + ' รายการ';
+
+    // สร้างลิงก์ Odoo โดยตรง
+    const ODOO_URL = (process.env.ODOO_URL || '').replace(/\/+$/, '');
+    const odooLink = ODOO_URL + '/web#id=' + p.id + '&model=stock.picking&view_type=form';
+
+    const msg =
+      '📊 รายงาน: ' + name + '\n' +
+      (origin ? '📋 โครงการ: ' + origin + '\n' : '') +
+      '📅 วันที่: ' + date + '\n' +
+      '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
+      '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
+      lineItems + '\n\n' +
+      '🔗 ดูใน Odoo:\n' + odooLink + '\n\n' +
+      'เรียบร้อยครับ ✅';
+
+    const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+
+    if (target === 'เทเลแกรม') {
+      // ส่งเข้า Telegram กลุ่ม 2
+      const TG_SUB = process.env.TELEGRAM_SUB_CHAT_ID || process.env.TG_SUB_CHAT_ID || '';
+      if (!TG_SUB) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_SUB_CHAT_ID ใน env'); return; }
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
+      });
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
+    } else {
+      // ส่งเข้า LINE
+      const groupId = lineGroups[target];
+      if (!groupId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบกลุ่ม LINE "' + target + '"'); return; }
+      const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+      await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+      });
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า LINE กลุ่ม "' + target + '" เรียบร้อยครับ');
+    }
+  } catch(e) {
+    await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่งรายงานไม่สำเร็จ: ' + e.message);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(200).json({ ok: true }); return; }
   try {
@@ -350,6 +419,103 @@ export default async function handler(req, res) {
       cmdText = cmdText.trim();
 
       var lc = cmdText.toLowerCase();
+
+      // ── /รายงาน → ค้นใบส่งของ แล้วส่งรายงานเข้า LINE หรือ Telegram กลุ่ม 2 ──
+      if (cmdText.startsWith('/รายงาน')) {
+        var rawRep = cmdText.replace(/^\/รายงาน/, '').trim();
+        if (!rawRep) {
+          await sendTelegramReply(chatId,
+            'ระบุให้ครบครับ เช่น:\n' +
+            '/รายงาน กท.1002 12/6 ไลน์\n' +
+            '/รายงาน กท.1002 12/6 เทส\n' +
+            '/รายงาน กท.1002 12/6 เทเลแกรม'
+          );
+          res.status(200).json({ ok: true }); return;
+        }
+
+        // แยก target (ไลน์/เทส/เทเลแกรม) จากท้ายคำสั่ง
+        var repTarget = null;
+        var LINE_GROUPS = {
+          'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+        };
+        var repKw = rawRep;
+        if (/\sไลน์\s*$/i.test(repKw))      { repTarget = 'ไลน์';     repKw = repKw.replace(/\sไลน์\s*$/, '').trim(); }
+        else if (/\sเทส\s*$/i.test(repKw))  { repTarget = 'เทส';      repKw = repKw.replace(/\sเทส\s*$/, '').trim(); }
+        else if (/\sเทเลแกรม\s*$/i.test(repKw)) { repTarget = 'เทเลแกรม'; repKw = repKw.replace(/\sเทเลแกรม\s*$/, '').trim(); }
+
+        if (!repTarget) {
+          await sendTelegramReply(chatId, '⚠️ ระบุปลายทางด้วยครับ: ไลน์ / เทส / เทเลแกรม');
+          res.status(200).json({ ok: true }); return;
+        }
+
+        // ดึงวันที่ออกจาก keyword
+        var repDate = null;
+        var repDm = repKw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
+        if (repDm) { repDate = parseDate(repDm[1]); repKw = repKw.replace(repDm[0], '').trim(); }
+
+        await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
+
+        try {
+          const { odooDelivery, parseCompany } = await import('./odoo.js');
+          const { keyword: dkw, company: dCo } = parseCompany(repKw);
+          const allPicks = await odooDelivery(dkw, dCo.id);
+
+          // กรองวันที่
+          let repPicks = repDate
+            ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
+            : allPicks;
+
+          if (!repPicks.length) {
+            await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + repKw + '"' + (repDate ? ' วันที่ ' + repDm[1] : '') + ' ครับ');
+            res.status(200).json({ ok: true }); return;
+          }
+
+          // เจอหลายใบ → ถามให้เลือก
+          if (repPicks.length > 1) {
+            const opts = repPicks.slice(0, 8).map((p, i) => (i+1) + '. ' + (p.name || '-')).join('\n');
+            if (db) {
+              await db.from('tg_report_select').upsert({
+                chat_id: String(chatId),
+                picks: repPicks.slice(0, 8),
+                target: repTarget,
+                keyword: repKw,
+                created_at: new Date().toISOString()
+              }, { onConflict: 'chat_id' });
+            }
+            await sendTelegramReply(chatId, '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts + '\n\nตอบเลขที่ต้องการครับ');
+            res.status(200).json({ ok: true }); return;
+          }
+
+          // เจอใบเดียว → ส่งรายงานเลย
+          await sendReport(chatId, repPicks[0], repTarget, LINE_GROUPS, db);
+        } catch(e) {
+          await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
+      // ── รับตัวเลขตอบ session เลือกใบ ──────────────────────────────────────
+      if (/^\d+$/.test(cmdText.trim()) && db) {
+        const { data: selSess } = await db.from('tg_report_select')
+          .select('*').eq('chat_id', String(chatId)).maybeSingle();
+        const selAge = selSess ? (Date.now() - new Date(selSess.created_at).getTime()) / 60000 : 999;
+        if (selSess && selAge < 5) {
+          const idx = parseInt(cmdText.trim()) - 1;
+          const picks = selSess.picks || [];
+          const LINE_GROUPS2 = {
+            'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+            'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+          };
+          if (idx < 0 || idx >= picks.length) {
+            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+          } else {
+            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
+            await sendReport(chatId, picks[idx], selSess.target, LINE_GROUPS2, db);
+          }
+          res.status(200).json({ ok: true }); return;
+        }
+      }
 
       // ── /ลงรูป → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
       if (cmdText.startsWith('/ลงรูป') || lc.startsWith('/uploadphoto')) {
