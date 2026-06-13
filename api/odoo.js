@@ -414,6 +414,14 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
     return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
   }
 
+  if (docType === 'pr') {
+    const rows = await safeSearchRead('purchase.request',
+      [['name', 'ilike', keyword]],
+      ['id', 'name'], 5);
+    if (!rows.length) return null;
+    return { id: rows[0].id, name: rows[0].name, model: 'purchase.request' };
+  }
+
   // picking — ค้นแบบ odooDelivery + กรองวันที่
   const buildDomain = (level) => {
     const oneWord = (w) => {
