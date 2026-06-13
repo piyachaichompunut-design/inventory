@@ -325,11 +325,17 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
       const groupId = lineGroups[target];
       if (!groupId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบกลุ่ม LINE "' + target + '"'); return; }
       const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
-      await fetch('https://api.line.me/v2/bot/message/push', {
+      const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
         body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
       });
+      const lineResJson = await lineRes.json();
+      console.log('LINE_PUSH_RESULT:', JSON.stringify({ groupId, status: lineRes.status, body: lineResJson }));
+      if (!lineRes.ok) {
+        await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่ง LINE ไม่สำเร็จ: ' + JSON.stringify(lineResJson));
+        return;
+      }
       await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า LINE กลุ่ม "' + target + '" เรียบร้อยครับ');
     }
   } catch(e) {
