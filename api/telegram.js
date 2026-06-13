@@ -3,6 +3,7 @@
 // - @botname → ถาม Groq AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
 // - กลุ่มใหม่: Reply ข้อความ แล้ว @บอท → บันทึกงานอัตโนมัติ
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat, sendDeliveryPDF } from './rpc.js';
+import { odooFindDoc, odooUploadAttachment } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
 
 const GROQ_KEY     = process.env.GROQ_API_KEY || '';
@@ -272,6 +273,48 @@ export default async function handler(req, res) {
   try {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const msg = update.message || update.channel_post;
+
+    // ── ถ้าเป็นรูป → เช็ค session รายงาน → อัปเข้า Odoo อัตโนมัติ ────────────
+    if (msg && (msg.photo || (msg.document && /^image\//.test(msg.document?.mime_type || '')))) {
+      const photoChatId = msg.chat && msg.chat.id;
+      if (photoChatId && db) {
+        const { data: sess } = await db.from('tg_report_session')
+          .select('*').eq('chat_id', String(photoChatId)).maybeSingle();
+        // session ต้องไม่เกิน 10 นาที
+        const sessionAge = sess ? (Date.now() - new Date(sess.updated_at).getTime()) / 60000 : 999;
+        if (sess && sessionAge < 10) {
+          const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
+          try {
+            let fileId2, mime2;
+            if (msg.photo && msg.photo.length > 0) {
+              const ph = msg.photo[msg.photo.length - 1];
+              fileId2 = ph.file_id; mime2 = 'image/jpeg';
+            } else if (msg.document) {
+              fileId2 = msg.document.file_id; mime2 = msg.document.mime_type || 'image/jpeg';
+            }
+            if (fileId2 && tgTok) {
+              const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${fileId2}`);
+              const info = await infoR.json();
+              if (info.ok) {
+                const fileUrl = `https://api.telegram.org/file/bot${tgTok}/${info.result.file_path}`;
+                const fileR = await fetch(fileUrl);
+                const rawBuf = Buffer.from(await fileR.arrayBuffer());
+                const { buffer: compBuf, contentType: compMime } = await compressIfImage(rawBuf, mime2);
+                const fname = info.result.file_path.split('/').pop();
+                await odooUploadAttachment(sess.doc_model, sess.doc_id, compBuf, compMime, fname);
+                // อัปเดต counter
+                await db.from('tg_report_session').update({
+                  uploaded: (sess.uploaded || 0) + 1,
+                  updated_at: new Date().toISOString()
+                }).eq('chat_id', String(photoChatId));
+              }
+            }
+          } catch(e) { /* เงียบ ไม่ตอบกลับทุกรูป */ }
+          res.status(200).json({ ok: true }); return;
+        }
+      }
+    }
+
     if (!msg || !msg.text) { res.status(200).json({ ok: true }); return; }
 
     // ── กัน Telegram retry ส่ง update เดิมซ้ำ (สาเหตุบอทค้าง/ตอบซ้ำ) ──
@@ -308,6 +351,80 @@ export default async function handler(req, res) {
 
       // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
       var lc = cmdText.toLowerCase();
+      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
+      var lc = cmdText.toLowerCase();
+
+      // ── /รายงาน → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
+      if (cmdText.startsWith('/รายงาน') || lc.startsWith('/report')) {
+        var rawArg = cmdText.replace(/^\/รายงาน/, '').replace(/^\/report/i, '').trim();
+        if (!rawArg) {
+          await sendTelegramReply(chatId,
+            'ระบุเอกสารด้วยครับ เช่น:\n' +
+            '/รายงาน กท.1002 12/6\n' +
+            '/รายงาน po PO2606001\n' +
+            '/รายงาน so 2606007'
+          );
+          res.status(200).json({ ok: true }); return;
+        }
+
+        // แยก docType
+        var docType = 'picking', docKeyword = rawArg;
+        var docDateFilter = null;
+        if (/^po\s+/i.test(rawArg)) { docType = 'po'; docKeyword = rawArg.replace(/^po\s+/i,'').trim(); }
+        else if (/^so\s+/i.test(rawArg)) { docType = 'so'; docKeyword = rawArg.replace(/^so\s+/i,'').trim(); }
+        else {
+          // picking — ดึงวันที่ออก
+          var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
+          if (dmR) { docDateFilter = parseDate(dmR[1]); docKeyword = docKeyword.replace(dmR[0],'').trim(); }
+        }
+
+        await sendTelegramReply(chatId, '🔍 กำลังค้นหาเอกสารใน Odoo...');
+        try {
+          const doc = await odooFindDoc(docType, docKeyword, docDateFilter);
+          if (!doc) {
+            await sendTelegramReply(chatId, '⚠️⚠️⚠️ ไม่พบเอกสาร "' + rawArg + '" ใน Odoo ครับ');
+            res.status(200).json({ ok: true }); return;
+          }
+          // บันทึก session
+          if (db) {
+            await db.from('tg_report_session').upsert({
+              chat_id: String(chatId),
+              doc_type: docType,
+              doc_id: doc.id,
+              doc_name: doc.name,
+              doc_model: doc.model,
+              uploaded: 0,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'chat_id' });
+          }
+          await sendTelegramReply(chatId,
+            '✅ พบเอกสารแล้วครับ!\n📋 ' + doc.name +
+            '\n\nส่งรูปเข้ากลุ่มได้เลยครับ (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งครบ'
+          );
+        } catch(e) {
+          await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
+      // ── /จบรายงาน → สรุปจำนวนรูปที่อัป ──────────────────────────────────
+      if (cmdText.startsWith('/จบรายงาน') || lc.startsWith('/endreport')) {
+        if (db) {
+          const { data: sess } = await db.from('tg_report_session')
+            .select('*').eq('chat_id', String(chatId)).maybeSingle();
+          if (!sess) {
+            await sendTelegramReply(chatId, '⚠️ ไม่มี session รายงานที่เปิดอยู่ครับ');
+          } else {
+            await sendTelegramReply(chatId,
+              '✅ จบรายงานแล้วครับ!\n📋 ' + sess.doc_name +
+              '\n📷 อัปรูปทั้งหมด ' + sess.uploaded + ' รูป'
+            );
+            await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
+          }
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
       if (cmdText.startsWith('/ส่งของ') || cmdText.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
         var kw = cmdText.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
         if (!kw) {
