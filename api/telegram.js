@@ -312,7 +312,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
 
     if (target === 'เทเลแกรม') {
       // ส่งเข้า Telegram กลุ่ม 2
-      const TG_SUB = process.env.TELEGRAM_SUB_CHAT_ID || process.env.TG_SUB_CHAT_ID || '';
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
       if (!TG_SUB) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_SUB_CHAT_ID ใน env'); return; }
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST',
