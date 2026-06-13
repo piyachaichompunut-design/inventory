@@ -3,7 +3,6 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
 import { odooConfigured, odooDelivery, parseCompany, odooCompare } from './odoo.js';
-import { buildDeliveryPDF, buildComparePDF } from './pdfgen.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -594,31 +593,43 @@ export default async function handler(req, res) {
           continue;
         }
         if (!odooConfigured()) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ'); continue; }
-        await replyLine(replyToken, '⏳ กำลังดึงข้อมูลและสร้าง PDF เปรียบเทียบ...');
+        await replyLine(replyToken, '⏳ กำลังดึงข้อมูลเปรียบเทียบ...');
         if (pushTarget) {
-          (async () => {
+          await (async () => {
             try {
               const compareData = await odooCompare(refA.type, refA.num, refB.type, refB.num, cmp.id);
-              const pdfBytes = await buildComparePDF(compareData);
               const labelA = refA.type.toUpperCase() + refA.num;
               const labelB = refB.type.toUpperCase() + refB.num;
-              const fname = 'compare/' + Date.now() + '.pdf';
-              const { error: upErr } = await db.storage.from('attachments')
-                .upload(fname, Buffer.from(pdfBytes), { contentType: 'application/pdf', upsert: true });
-              if (upErr) { await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message }]); return; }
-              const { data: pub } = db.storage.from('attachments').getPublicUrl(fname);
+
               // สรุปตัวเลข
               const rows = compareData.rows || [];
               const cntOk   = rows.filter(r=>r.status==='ok').length;
               const cntDiff = rows.filter(r=>r.status==='diff').length;
-              const cntMis  = rows.filter(r=>r.status.startsWith('missing')).length;
+              const cntMis  = rows.filter(r=>r.status==='missing_a' || r.status==='missing_b').length;
+
+              // บันทึกลง delivery_views → ได้ลิงก์หน้าเว็บเปรียบเทียบ
+              const viewId = 'C' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+              const { error: insErr } = await db.from('delivery_views').insert({
+                id: viewId,
+                title: 'เปรียบเทียบ ' + labelA + ' vs ' + labelB,
+                company: cmp.name || '',
+                status_label: cmp.name || '',
+                data: {
+                  typeA: refA.type, numA: refA.num, typeB: refB.type, numB: refB.num,
+                  docA: compareData.docA, docB: compareData.docB,
+                  rows
+                }
+              });
+              if (insErr) { await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ บันทึกข้อมูลไม่สำเร็จ: ' + insErr.message }]); return; }
+
+              const webLink = 'https://inventory-rho-hazel.vercel.app/compare.html?id=' + viewId;
               await pushLine(pushTarget, [{
                 type: 'text',
                 text: '📊 เปรียบเทียบ ' + labelA + ' vs ' + labelB + ' (' + cmp.name + ')\n\n' +
-                      '✅ ตรง: ' + cntOk + ' รายการ\n' +
-                      (cntDiff ? '⚠️ ต่าง: ' + cntDiff + ' รายการ\n' : '') +
-                      (cntMis  ? '⚠️⚠️⚠️ ขาด: ' + cntMis  + ' รายการ\n' : '') +
-                      '\n📎 เปิด PDF:\n' + pub.publicUrl
+                      '✅ ตรงกัน: ' + cntOk + ' รายการ\n' +
+                      (cntDiff ? '⚠️ ต่างกัน: ' + cntDiff + ' รายการ\n' : '') +
+                      (cntMis  ? '❌ ขาด: ' + cntMis  + ' รายการ\n' : '') +
+                      '\n📎 เปิดดูรายละเอียด:\n' + webLink
               }]);
             } catch (e) {
               await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
