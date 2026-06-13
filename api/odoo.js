@@ -1,728 +1,542 @@
-// Telegram Webhook   
-// - /คำสั่ง → คำสั่งสำเร็จรูป (ดูข้อมูลจาก Supabase)
-// - @botname → ถาม Groq AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
-// - กลุ่มใหม่: Reply ข้อความ แล้ว @บอท → บันทึกงานอัตโนมัติ
-import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat, sendDeliveryPDF } from './rpc.js';
-import { odooFindDoc, odooUploadAttachment } from './odoo.js';
-import { createClient } from '@supabase/supabase-js';
+// ============================================================================
+//  api/odoo.js — ตัวเชื่อม Odoo ผ่าน JSON-RPC
+//  ใช้ fetch ล้วน ไม่ต้องลง npm package เพิ่ม
+//  ตั้งค่าใน Environment Variables ของ Vercel:
+//    ODOO_URL       = https://seterp.odoo.com
+//    ODOO_DB        = seterp
+//    ODOO_USERNAME  = อีเมลที่ล็อกอิน Odoo
+//    ODOO_API_KEY   = API Key ที่สร้างไว้
+// ============================================================================
+const ODOO_URL  = (process.env.ODOO_URL || '').replace(/\/+$/, ''); // ตัด / ท้าย
+const ODOO_DB   = process.env.ODOO_DB       || '';
+const ODOO_USER = process.env.ODOO_USERNAME || '';
+const ODOO_KEY  = process.env.ODOO_API_KEY  || '';
 
-const GROQ_KEY     = process.env.GROQ_API_KEY || '';
-const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
-const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
-const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+let _uid = null; // cache uid ไว้ใช้ซ้ำใน request เดียว
 
-const SUPABASE_URL  = process.env.SUPABASE_URL;
-const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const db = (SUPABASE_URL && SERVICE_KEY)
-  ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
-  : null;
+// ── แผนที่ตัวย่อบริษัท → company_id ──────────────────────────────────────────
+//   ไม่ใส่ตัวย่อ = อาคเนย์ทร้าฟฟิค (id 1) เป็นค่าเริ่มต้น
+//   md = เมิร์ค (2) | cg = ซิลิกัล (4) | sep = ศรีอาคเนย์ (5)
+const COMPANY_ALIAS = {
+  md:  { id: 2, name: 'เมิร์ค' },
+  cg:  { id: 4, name: 'ซิลิกัล' },
+  sep: { id: 5, name: 'ศรีอาคเนย์' },
+  akn: { id: 1, name: 'อาคเนย์' },  // เผื่ออยากระบุอาคเนย์ชัดๆ
+  set: { id: 1, name: 'อาคเนย์' },
+};
+const DEFAULT_COMPANY = { id: 1, name: 'อาคเนย์' };
 
-const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,5).toUpperCase();
-const todayStr = () => new Date().toISOString().slice(0,10);
-
-// ── ย่อรูปก่อนเก็บ (ประหยัด Storage) — ไม่ใช่รูปหรือย่อไม่ได้ คืนของเดิม ──
-async function compressIfImage(buffer, contentType) {
-  if (!/^image\/(jpe?g|png|webp)/i.test(contentType || '')) {
-    return { buffer, contentType };
+// แยกตัวย่อบริษัทออกจากคำค้น เช่น "ภูเก็ต 4+570 md" → { keyword:'ภูเก็ต 4+570', company:{id:2} }
+export function parseCompany(text) {
+  const parts = String(text).trim().split(/\s+/);
+  const last = (parts[parts.length - 1] || '').toLowerCase();
+  if (COMPANY_ALIAS[last]) {
+    parts.pop(); // เอาตัวย่อออก
+    return { keyword: parts.join(' ').trim(), company: COMPANY_ALIAS[last] };
   }
-  try {
-    const sharp = (await import('sharp')).default;
-    const out = await sharp(buffer)
-      .rotate()
-      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 72 })
-      .toBuffer();
-    if (out.length < buffer.length) return { buffer: out, contentType: 'image/jpeg' };
-    return { buffer, contentType };
-  } catch (e) {
-    return { buffer, contentType };
-  }
+  return { keyword: String(text).trim(), company: DEFAULT_COMPANY };
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
-const SYSTEM = `คุณคือ "Odoo Bot" ผู้ช่วย AI ประจำทีมงานในประเทศไทย
-บุคลิก: กันเอง อบอุ่น ขี้เล่น เหมือนเพื่อนสนิทที่ฉลาด พูดภาษาไทยเป็นธรรมชาติ ใช้ "ครับ" ลงท้าย
-สไตล์: ถามง่าย → ตอบสั้นกระชับสนุกสนาน | ถามซับซ้อน → ตอบละเอียดเป็นขั้นตอน
-คุณตอบได้ทุกเรื่องเลยครับ ไม่มีข้อจำกัด เช่น:
-- 🔮 ดูดวง เช็คดวง ราศี โหราศาสตร์ไทย/จีน ไพ่ทาโร่ → ตอบแบบสนุก อบอุ่น ให้กำลังใจ
-- 💬 คุยเรื่องทั่วไป ความรัก ครอบครัว เพื่อน ปัญหาชีวิต → ตอบด้วยความเข้าใจ
-- 🍜 อาหาร สุขภาพ ออกกำลังกาย → ให้คำแนะนำที่ดี
-- 📰 ข่าวสาร เหตุการณ์ปัจจุบัน → สรุปให้เข้าใจง่าย
-- 💡 ความรู้ทั่วไป วิทยาศาสตร์ ประวัติศาสตร์ → อธิบายสนุก
-- 🏭 เรื่องงานในระบบ TMS → แนะนำใช้คำสั่ง /งานวันนี้ /สรุป /kpi
-เมื่อได้รับผลการค้นหาเว็บ (ขึ้นต้นด้วย [ข้อมูลจากเว็บ]):
-- สรุปให้กระชับ เข้าใจง่าย ภาษาไทย
-- บอกแหล่งที่มาด้วยถ้าสำคัญ`;
-
-// ── parse วันที่ ──────────────────────────────────────────────────────────────
-function parseDate(s) {
-  if (!s) return null;
-  const m = s.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
-  if (!m) return null;
-  let [, d, mo, y] = m;
-  if (y === undefined) {
-    y = new Date().getFullYear();
-  } else {
-    y = parseInt(y);
-    if (y < 100) { if (y >= 50) y += 2500; else y += 2000; }
-    if (y >= 2400) y -= 543;
-  }
-  if (+mo < 1 || +mo > 12 || +d < 1 || +d > 31) return null;
-  return y + '-' + String(+mo).padStart(2,'0') + '-' + String(+d).padStart(2,'0');
+// ── ตรวจว่าตั้งค่าครบหรือยัง ─────────────────────────────────────────────────
+export function odooConfigured() {
+  return !!(ODOO_URL && ODOO_DB && ODOO_USER && ODOO_KEY);
 }
 
-// ── parse ข้อความ reply → งานใหม่ ──────────────────────────────────────────
-// รองรับ: "ส่งของ บริษัท ABC วันที่ 10/6" / "รับสินค้า XYZ 10/6/2026 @สมชาย"
-// keyword → ชื่อหมวดหมู่เต็ม
-const CAT_MAP = {
-  'so':         'ใบสั่งซื้อ( so )',
-  'ป้าย':       'งานป้าย',
-  'ป้ายเฟรม':   'งานป้าย+เฟรม',
-  'เฟรม':       'งานเฟรม',
-  'mast':       'งาน mast arm',
-  'ผลิต':       'วัถุดิบเพื่อการผลิต',
-  'สิ้นเปลือง': 'วัถุดิบสิ้นเปลือง',
-  'ชุบ':        'บริการชุบกัลวาไนซ์',
-  'เสา':        'งานเสาไฟฟ้า',
-  'เสาอุปกรณ์': 'งานเสาไฟฟ้าและอุปกรณ์',
-  'ไฟฟ้า':      'งานอุปกรณ์ไฟฟ้า',
-  'ฐาน':        'งานรากฐาน',
-  'พัสดุ':      'งานส่งพัสดุ',
-  'ซ่อม':       'ซ่อมบำรุง',
-  'แผง':        'แผนกไฟฟ้า',
-  'ชิลิ':       'ซิลิกัล',
-  'การ์ดเรล':   'งานการ์ดเรล',
-  'อื่น':       'งานอื่นๆ',
+// ── เรียก JSON-RPC พื้นฐาน ───────────────────────────────────────────────────
+async function jsonRpc(service, method, args) {
+  const res = await fetch(ODOO_URL + '/jsonrpc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: { service, method, args },
+      id: Date.now()
+    })
+  });
+  const data = await res.json();
+  if (data.error) {
+    const m = data.error.data?.message || data.error.message || 'Odoo error';
+    throw new Error(m);
+  }
+  return data.result;
+}
+
+// ── ล็อกอินเอา uid ──────────────────────────────────────────────────────────
+async function odooAuth() {
+  if (_uid) return _uid;
+  _uid = await jsonRpc('common', 'authenticate', [ODOO_DB, ODOO_USER, ODOO_KEY, {}]);
+  if (!_uid) throw new Error('authenticate ล้มเหลว — เช็ค DB / Username / API Key');
+  return _uid;
+}
+
+// ── search_read แบบทั่วไป ────────────────────────────────────────────────────
+async function searchRead(model, domain, fields, limit = 20, context = null) {
+  const uid = await odooAuth();
+  const kwargs = { fields, limit };
+  if (context) kwargs.context = context;
+  return await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY,
+    model, 'search_read',
+    [domain],
+    kwargs
+  ]);
+}
+
+// ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
+// ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
+function withCompany(domain, companyId) {
+  if (!companyId) return domain;
+  return ['&', ['company_id', '=', companyId], ...domain];
+}
+
+// ── แยกคำอัตโนมัติ ───────────────────────────────────────────────────────────
+// แยกตรงรอยต่อ ไทย↔ตัวเลข + ตัด . , - / ออก เพื่อค้นกว้างขึ้น
+// เช่น "สป.1001" → ["สป","1001"] | "กท 1002" → ["กท","1002"] | "ภูเก็ต4+570" → ["ภูเก็ต","4+570"]
+function smartWords(keyword) {
+  let s = String(keyword).trim();
+  // แทรกช่องว่างตรงรอยต่อไทย↔ตัวเลข
+  s = s.replace(/([\u0E00-\u0E7F])(\d)/g, '$1 $2');
+  s = s.replace(/(\d)([\u0E00-\u0E7F])/g, '$1 $2');
+  // แทนจุด/คอมม่า/ขีด ด้วยช่องว่าง (แต่เก็บ + ไว้ เพราะ 4+570 เป็นชื่อจริง)
+  s = s.replace(/[.,\-]/g, ' ');
+  return s.split(/\s+/).filter(w => w.length > 0);
+}
+
+// ── parse keyword ก่อนค้น: รองรับ [รหัส], ---, ชื่อสินค้า ─────────────────────
+// ตัวอย่าง:
+//   "[07RP-016-00-00-02] แบตเตอรี่---12V 7.5Ah" → code="07RP-016-00-00-02", name="แบตเตอรี่ 12V 7.5Ah"
+//   "[07RP-016-00-00-02]"                         → code="07RP-016-00-00-02", name=""
+//   "แบตเตอรี่---12V 7.5Ah"                       → code="", name="แบตเตอรี่ 12V 7.5Ah"
+function parseStockKeyword(raw) {
+  let s = String(raw).trim();
+  // ดึงรหัสจาก [...] ถ้ามี
+  let code = '';
+  const bracketMatch = s.match(/\[([^\]]+)\]/);
+  if (bracketMatch) {
+    code = bracketMatch[1].trim();
+    s = s.replace(/\[[^\]]+\]/, '').trim();
+  }
+  // ทำความสะอาดชื่อสินค้า: แทน --- หรือ ----- ด้วยช่องว่าง
+  s = s.replace(/-{2,}/g, ' ').trim();
+  return { code, name: s };
+}
+
+// ── ค้นหาสต็อกสินค้า ─────────────────────────────────────────────────────────
+export async function odooStock(keyword, companyId) {
+  const { code, name } = parseStockKeyword(keyword);
+
+  // context: ให้ qty_available คำนวณเฉพาะบริษัทที่เลือก (ไม่รวมทุกบริษัท)
+  const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
+  const fields = ['name', 'default_code', 'qty_available', 'virtual_available', 'uom_id'];
+
+  // ถ้ามีรหัส → ค้นรหัสตรงๆ ก่อน (แม่นที่สุด)
+  if (code && !name) {
+    const domain = ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]];
+    return await searchRead('product.product', domain, fields, 15, ctx);
+  }
+
+  // ถ้ามีทั้งรหัสและชื่อ → ค้นรหัสก่อน ถ้าไม่เจอค่อยค้นชื่อ (หลายชั้น)
+  if (code && name) {
+    const byCode = await searchRead('product.product',
+      ['|', ['default_code', 'ilike', code], ['name', 'ilike', code]],
+      fields, 15, ctx);
+    if (byCode.length) return byCode;
+    return await stockSearchByName(name, fields, ctx);
+  }
+
+  // ค้นชื่อล้วน (หลายชั้น)
+  return await stockSearchByName(name || keyword, fields, ctx);
+}
+
+// ── ค้นชื่อสินค้าแบบหลายชั้น (ยืดหยุ่นสูง) ────────────────────────────────────
+// คำประสมที่คนพิมพ์ติดกันบ่อย → แตกเป็นคำย่อย (เพราะ Odoo เก็บแบบมีขีด/เว้นวรรค)
+const COMPOUND_SPLIT = {
+  'แผ่นการ์ดเรล': ['แผ่น','การ์ดเรล'],
+  'เหล็กชุบ': ['เหล็ก','ชุบ'],
+  'ท่อชุบ': ['ท่อ','ชุบ'],
+  'เสาไฟ': ['เสา','ไฟ'],
+  'น็อตตัวผู้': ['น็อต','ตัวผู้'],
+  'น็อตตัวเมีย': ['น็อต','ตัวเมีย'],
 };
 
-function parseTaskFromText(text, catKeyword) {
-  const t = text.trim();
-  const kw = (catKeyword || '').trim();
-
-  // ── วันที่ — ดึงจาก catKeyword ก่อน (สิ่งที่พิมพ์ต่อจาก @บอท) แล้วค่อย fallback ไปหาในข้อความ ──
-  const dateRe = /(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/;
-  const dateFromKw = kw.match(dateRe);
-  const dateFromText = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-  const rawDate = dateFromKw ? dateFromKw[1] : (dateFromText ? dateFromText[1] : null);
-  const actionDate = rawDate ? (parseDate(rawDate) || todayStr()) : todayStr();
-
-  // ── ส่ง/รับ — เช็คจาก catKeyword ก่อน แล้ว fallback ไปหาในข้อความ ──
-  const kwLower = kw.toLowerCase();
-  let duration = 'รับ';
-  if (/^ส่ง/.test(kwLower) || /ส่งของ|นัดส่ง|จัดส่ง|ออกของ/.test(kwLower)) duration = 'ส่ง';
-  else if (/ส่งของ|นัดส่ง|จัดส่ง|ออกของ|นำส่ง/.test(t)) duration = 'ส่ง';
-  else if (/รับของ|รับเข้า|รับสินค้า/.test(t)) duration = 'รับ';
-
-  // ── ชื่องาน = ข้อความต้นฉบับ (reply) ──
-  const taskText = t.slice(0, 300);
-
-  // ── หมวดหมู่ — ตัดวันที่และ ส่ง/รับ ออกจาก kw แล้วหาหมวด ──
-  const kwClean = kw
-    .replace(dateRe, '')
-    .replace(/^(ส่ง|รับ)\s*/i, '')
-    .trim()
-    .toLowerCase();
-  const categories = CAT_MAP[kwClean] || (kwClean ? 'งานอื่นๆ' : 'งานอื่นๆ');
-
-  // ── ชื่อคน — ถ้าพิมพ์มาหลังหมวด เช่น "ส่ง 16/6/69 ชุบ พี่เต้ย" ──
-  // ตัดทุกอย่างออก เหลือแค่คำท้าย
-  const kwWords = kw.replace(dateRe, '').replace(/^(ส่ง|รับ)\s*/i, '').trim().split(/\s+/).filter(Boolean);
-  let salesName = '';
-  if (kwWords.length >= 2 && CAT_MAP[kwWords[0].toLowerCase()]) {
-    salesName = kwWords.slice(1).join(' ');
+function expandWords(words) {
+  const out = [];
+  for (const w of words) {
+    if (COMPOUND_SPLIT[w]) out.push(...COMPOUND_SPLIT[w]);
+    else out.push(w);
   }
-
-  return { task: taskText, duration, actionDate, salesName, categories };
+  return out;
 }
 
-// ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
-async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null) {
-  if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
+async function stockSearchByName(name, fields, ctx) {
+  let words = smartWords(name);
+  words = expandWords(words); // แตกคำประสมที่รู้จัก
 
-  const taskData = parseTaskFromText(text, catKeyword);
-  const id = rid();
-  const attachments = attachmentObj ? [attachmentObj] : [];
+  // ชั้น 1: ทุกคำต้องเจอ (AND)
+  let result = await searchRead('product.product', buildWordsDomain(words), fields, 15, ctx);
+  if (result.length) return result;
 
-  const { error } = await db.from('tasks').insert({
-    id,
-    task: taskData.task,
-    duration: taskData.duration,
-    action_date: taskData.actionDate,
-    sales_name: taskData.salesName || '',
-    task_status: 'To Do',
-    notification: 'แจ้งล่วงหน้า',
-    categories: taskData.categories || '',
-    note: '',
-    doing: false,
-    done: false,
-    attachments,
-    tg_message_id: messageId ? String(messageId) : null
+  // ชั้น 2: แทรก % ระหว่างคำ จับกรณีมีขีด/อักขระแทรก เช่น "แผ่น-การ์ดเรล"
+  if (words.length >= 2) {
+    const pattern = '%' + words.join('%') + '%';
+    result = await searchRead('product.product',
+      ['|', ['name', 'ilike', pattern], ['default_code', 'ilike', pattern]], fields, 15, ctx);
+    if (result.length) return result;
+  }
+
+  // ชั้น 3: ค้นด้วยคำที่ยาวที่สุดคำเดียว
+  const longest = words.slice().sort((a,b) => b.length - a.length)[0];
+  if (longest && longest.length >= 3) {
+    result = await searchRead('product.product',
+      ['|', ['name', 'ilike', longest], ['default_code', 'ilike', longest]], fields, 15, ctx);
+    if (result.length) return result;
+  }
+
+  return [];
+}
+
+// helper: สร้าง domain จากหลายคำ (AND ของแต่ละคำ, OR ระหว่าง name กับ code)
+function buildWordsDomain(words) {
+  if (!words.length) return [['name', 'ilike', '']];
+  if (words.length === 1) {
+    return ['|', ['name', 'ilike', words[0]], ['default_code', 'ilike', words[0]]];
+  }
+  const domain = [];
+  for (let i = 0; i < words.length - 1; i++) domain.push('&');
+  words.forEach(w => {
+    domain.push('|');
+    domain.push(['name', 'ilike', w]);
+    domain.push(['default_code', 'ilike', w]);
+  });
+  return domain;
+}
+
+// ── ดูใบสั่งซื้อ (PO) พร้อมรายการสินค้า ──────────────────────────────────────
+export async function odooPO(poNumber, companyId) {
+  const orders = await searchRead(
+    'purchase.order',
+    withCompany(['|', ['name', 'ilike', poNumber], ['partner_ref', 'ilike', poNumber]], companyId),
+    ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'partner_ref'],
+    5
+  );
+  // ดึงรายการสินค้าของแต่ละ PO
+  for (const o of orders) {
+    o.lines = await searchRead(
+      'purchase.order.line',
+      [['order_id', '=', o.id]],
+      ['product_id', 'product_qty', 'qty_received', 'price_unit', 'price_subtotal'],
+      50
+    );
+  }
+  return orders;
+}
+
+// ── search_read แบบปลอดภัย: ถ้า field/model ไม่มี จะไม่พังทั้งหมด ──────────────
+async function safeSearchRead(model, domain, fields, limit) {
+  try {
+    return await searchRead(model, domain, fields, limit);
+  } catch (e) {
+    // ถ้า field บางตัวไม่มีในระบบนี้ ลองใหม่ด้วย field พื้นฐานสุด
+    try {
+      return await searchRead(model, domain, ['name'], limit);
+    } catch (e2) {
+      throw e; // โยน error เดิมกลับไป
+    }
+  }
+}
+
+// ── ดูใบสั่งขาย (SO) พร้อมรายการสินค้า ───────────────────────────────────────
+export async function odooSO(soNumber, companyId) {
+  const orders = await safeSearchRead(
+    'sale.order',
+    withCompany(['|', ['name', 'ilike', soNumber], ['client_order_ref', 'ilike', soNumber]], companyId),
+    ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'client_order_ref'],
+    5
+  );
+  for (const o of orders) {
+    try {
+      o.lines = await searchRead(
+        'sale.order.line',
+        [['order_id', '=', o.id]],
+        ['product_id', 'product_uom_qty', 'qty_delivered', 'price_unit', 'price_subtotal'],
+        50
+      );
+    } catch (e) { o.lines = []; }
+  }
+  return orders;
+}
+
+// ── ดูใบขอซื้อ (PR — Purchase Request, โมดูล OCA: purchase.request) ───────────
+export async function odooPR(prNumber, companyId) {
+  const reqs = await safeSearchRead(
+    'purchase.request',
+    withCompany([['name', 'ilike', prNumber]], companyId),
+    ['name', 'state', 'requested_by', 'date_start', 'description'],
+    5
+  );
+  for (const r of reqs) {
+    try {
+      r.lines = await searchRead(
+        'purchase.request.line',
+        [['request_id', '=', r.id]],
+        ['product_id', 'name', 'product_qty', 'product_uom_id'],
+        50
+      );
+    } catch (e) { r.lines = []; }
+  }
+  return reqs;
+}
+
+// ── เทียบสินค้าระหว่าง 2 เอกสาร (SO/PO/SO vs SO ฯลฯ) ──────────────────────────
+// คืน { docA, docB, rows: [{code,name,qtyA,qtyB,diff,status}] }
+export async function odooCompare(typeA, numA, typeB, numB, companyId) {
+  const fetchDoc = async (type, num) => {
+    if (type === 'so') return await odooSO(num, companyId);
+    if (type === 'po') return await odooPO(num, companyId);
+    if (type === 'pr') return await odooPR(num, companyId);
+    throw new Error('ไม่รู้จักประเภทเอกสาร: ' + type);
+  };
+
+  const [docsA, docsB] = await Promise.all([fetchDoc(typeA, numA), fetchDoc(typeB, numB)]);
+  if (!docsA.length) throw new Error('ไม่พบ ' + typeA.toUpperCase() + numA);
+  if (!docsB.length) throw new Error('ไม่พบ ' + typeB.toUpperCase() + numB);
+
+  const docA = docsA[0];
+  const docB = docsB[0];
+
+  // normalize lines → { code, name, qty }
+  const normalizeLines = (doc, type) => {
+    const lines = doc.lines || [];
+    return lines.map(l => {
+      const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+      const code = prod[0] ? String(prod[0]) : '';
+      const name = prod[1] || l.name || '';
+      let qty = 0;
+      if (type === 'so') qty = l.product_uom_qty || 0;
+      else if (type === 'po') qty = l.product_qty || 0;
+      else if (type === 'pr') qty = l.product_qty || 0;
+      return { code, name, qty: +qty };
+    });
+  };
+
+  const linesA = normalizeLines(docA, typeA);
+  const linesB = normalizeLines(docB, typeB);
+
+  // merge ตาม product_id (code) — ถ้าไม่มี code ใช้ชื่อแทน
+  const mapA = new Map();
+  linesA.forEach(l => mapA.set(l.code || l.name, l));
+  const mapB = new Map();
+  linesB.forEach(l => mapB.set(l.code || l.name, l));
+
+  const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+  const rows = [];
+  for (const k of allKeys) {
+    const a = mapA.get(k);
+    const b = mapB.get(k);
+    const qtyA = a ? a.qty : 0;
+    const qtyB = b ? b.qty : 0;
+    const diff = qtyA - qtyB;
+    let status = 'ok';
+    if (!a) status = 'missing_a';
+    else if (!b) status = 'missing_b';
+    else if (diff !== 0) status = 'diff';
+    rows.push({
+      code: (a || b).code,
+      name: (a || b).name,
+      qtyA, qtyB, diff, status
+    });
+  }
+  // เรียง: ผิดก่อน ถูกทีหลัง
+  rows.sort((a, b) => {
+    const order = { missing_a: 0, missing_b: 1, diff: 2, ok: 3 };
+    return (order[a.status] || 3) - (order[b.status] || 3);
   });
 
-  if (error) return { ok: false, error: error.message };
-
-  const dur = taskData.duration === 'รับ' ? '📦 รับ' : '🚚 ส่ง';
-  const [y, m, d] = taskData.actionDate.split('-');
-  const dateDisplay = `${+d}/${+m}/${+y+543}`;
-
-  const confirmMsg =
-    `✅ <b>บันทึกงานใหม่แล้วครับ!</b>\n\n` +
-    `📋 ${taskData.task}\n` +
-    `${dur}\n` +
-    `📅 ${dateDisplay}\n` +
-    (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
-    `\n🔗 ดูในระบบ: inventory-rho-hazel.vercel.app`;
-
-  const mainMsg =
-    `🔔 <b>งานใหม่จาก Telegram</b>\n\n` +
-    `📋 ${taskData.task}\n` +
-    `${dur} · 📅 ${dateDisplay}\n` +
-    (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
-    (fromUser ? `✍️ บันทึกโดย: ${fromUser}\n` : '');
-
-  return { ok: true, confirmMsg, mainMsg, taskId: id, taskName: taskData.task.slice(0, 100) };
+  return { docA, docB, typeA, typeB, numA, numB, rows };
 }
 
-// ── แก้วันที่ของงานที่ผูกกับ message_id ──────────────────────────────────────
-async function updateTaskDateByMessage(messageId, newDate) {
-  if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
-  // หางานที่ผูกกับ message_id นี้
-  const { data: rows } = await db.from('tasks').select('*').eq('tg_message_id', String(messageId)).limit(1);
-  if (!rows || !rows.length) return { ok: false, notFound: true };
-  const task = rows[0];
-  const { error } = await db.from('tasks').update({ action_date: newDate }).eq('id', task.id);
-  if (error) return { ok: false, error: error.message };
-  const [y, m, d] = newDate.split('-');
-  const dateDisplay = `${+d}/${+m}/${+y+543}`;
-  return { ok: true, task, dateDisplay };
+// ── ดึงรูป attachment เดียวตาม ID → คืน { buffer, mimetype } ──────────────────
+export async function odooGetAttachmentImage(attId) {
+  const rows = await searchRead(
+    'ir.attachment',
+    [['id', '=', +attId], ['mimetype', 'ilike', 'image']],
+    ['datas', 'mimetype'],
+    1
+  );
+  if (!rows || !rows.length || !rows[0].datas) return null;
+  return {
+    buffer: Buffer.from(rows[0].datas, 'base64'),
+    mimetype: rows[0].mimetype || 'image/jpeg'
+  };
 }
 
-// ── needsWebSearch ────────────────────────────────────────────────────────────
-function needsWebSearch(text) {
-  const t = text.toLowerCase();
-  return ['วันนี้','ตอนนี้','ล่าสุด','ปัจจุบัน','ราคา','หุ้น','ค่าเงิน',
-    'สภาพอากาศ','ฝน','น้ำท่วม','รถติด','ข่าว','เหตุการณ์',
-    'today','now','latest','current','news','price','weather'].some(k => t.includes(k));
+// ── อัปรูปเข้า Odoo ir.attachment ─────────────────────────────────────────────
+// resModel = 'stock.picking' | 'purchase.order' | 'sale.order'
+// resId = id ของเอกสาร
+// buffer = Buffer ของรูป, mimetype = 'image/jpeg' เป็นต้น, name = ชื่อไฟล์
+export async function odooUploadAttachment(resModel, resId, buffer, mimetype, name) {
+  const uid = await odooAuth();
+  const base64 = buffer.toString('base64');
+  const attId = await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY,
+    'ir.attachment', 'create',
+    [{
+      name: name || 'image.jpg',
+      datas: base64,
+      res_model: resModel,
+      res_id: resId,
+      mimetype: mimetype || 'image/jpeg',
+      type: 'binary'
+    }]
+  ]);
+  return attId;
 }
 
-// ── searchWeb ─────────────────────────────────────────────────────────────────
-async function searchWeb(query) {
-  if (!TAVILY_KEY) return null;
-  try {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: TAVILY_KEY, query, search_depth: 'basic', max_results: 3, include_answer: true })
-    });
-    const data = await res.json();
-    if (!res.ok) return null;
-    let result = '';
-    if (data.answer) result += data.answer + '\n\n';
-    (data.results || []).slice(0,3).forEach(r => {
-      result += `📌 ${r.title}\n${(r.content||'').slice(0,200)}\n🔗 ${r.url}\n\n`;
-    });
-    return result.trim() || null;
-  } catch(e) { return null; }
-}
+// ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
+// คืน { id, name, model } หรือ null ถ้าไม่เจอ
+export async function odooFindDoc(docType, keyword, dateFilter) {
+  const words = smartWords(keyword);
 
-// ── askGroq ───────────────────────────────────────────────────────────────────
-async function askGroq(userMessage, history = [], webContext = null) {
-  if (!GROQ_KEY) return '❌ ยังไม่ได้ตั้งค่า GROQ_API_KEY ครับ';
-  try {
-    const finalMessage = webContext
-      ? `[ข้อมูลจากเว็บ]\n${webContext}\n\n[คำถาม]\n${userMessage}`
-      : userMessage;
-    const messages = [
-      { role: 'system', content: SYSTEM },
-      ...history.map(h => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: h.content })),
-      { role: 'user', content: finalMessage }
-    ];
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
-      body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: 1024, temperature: 0.7 })
-    });
-    const data = await res.json();
-    if (!res.ok) return '⚠️ ขอโทษครับ มีปัญหาเกิดขึ้น ลองใหม่อีกทีนะครับ';
-    return data?.choices?.[0]?.message?.content || '🤔 ไม่มีคำตอบครับ';
-  } catch(e) { return '⚠️ เชื่อมต่อไม่ได้ครับ ลองใหม่นะครับ'; }
-}
-
-// ── extractMention ────────────────────────────────────────────────────────────
-function extractMention(text, botUsername) {
-  if (!text) return null;
-  const pattern = new RegExp('@' + (botUsername || '[\\w]+') + '\\b', 'i');
-  if (!pattern.test(text)) return null;
-  return text.replace(new RegExp('@' + (botUsername || '[\\w]+') + '\\b', 'gi'), '').trim();
-}
-
-// ── History ───────────────────────────────────────────────────────────────────
-const chatHistory = new Map();
-function getHistory(chatId) { return chatHistory.get(String(chatId)) || []; }
-function addHistory(chatId, role, content) {
-  const key = String(chatId);
-  const h = chatHistory.get(key) || [];
-  h.push({ role, content });
-  if (h.length > 10) h.splice(0, h.length - 10);
-  chatHistory.set(key, h);
-}
-
-// ── Main handler ──────────────────────────────────────────────────────────────
-export default async function handler(req, res) {
-  if (req.method !== 'POST') { res.status(200).json({ ok: true }); return; }
-  try {
-    const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
-    const msg = update.message || update.channel_post;
-
-    // ── ถ้าเป็นรูป → เช็ค session รายงาน → อัปเข้า Odoo อัตโนมัติ ────────────
-    if (msg && (msg.photo || (msg.document && /^image\//.test(msg.document?.mime_type || '')))) {
-      const photoChatId = msg.chat && msg.chat.id;
-      if (photoChatId && db) {
-        const { data: sess } = await db.from('tg_report_session')
-          .select('*').eq('chat_id', String(photoChatId)).maybeSingle();
-        // session ต้องไม่เกิน 10 นาที
-        const sessionAge = sess ? (Date.now() - new Date(sess.updated_at).getTime()) / 60000 : 999;
-        if (sess && sessionAge < 10) {
-          const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
-          try {
-            let fileId2, mime2;
-            if (msg.photo && msg.photo.length > 0) {
-              const ph = msg.photo[msg.photo.length - 1];
-              fileId2 = ph.file_id; mime2 = 'image/jpeg';
-            } else if (msg.document) {
-              fileId2 = msg.document.file_id; mime2 = msg.document.mime_type || 'image/jpeg';
-            }
-            if (fileId2 && tgTok) {
-              const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${fileId2}`);
-              const info = await infoR.json();
-              if (info.ok) {
-                const fileUrl = `https://api.telegram.org/file/bot${tgTok}/${info.result.file_path}`;
-                const fileR = await fetch(fileUrl);
-                const rawBuf = Buffer.from(await fileR.arrayBuffer());
-                const { buffer: compBuf, contentType: compMime } = await compressIfImage(rawBuf, mime2);
-                const fname = info.result.file_path.split('/').pop();
-                await odooUploadAttachment(sess.doc_model, sess.doc_id, compBuf, compMime, fname);
-                // อัปเดต counter
-                await db.from('tg_report_session').update({
-                  uploaded: (sess.uploaded || 0) + 1,
-                  updated_at: new Date().toISOString()
-                }).eq('chat_id', String(photoChatId));
-              }
-            }
-          } catch(e) { /* เงียบ ไม่ตอบกลับทุกรูป */ }
-          res.status(200).json({ ok: true }); return;
-        }
-      }
-    }
-
-    if (!msg || !msg.text) { res.status(200).json({ ok: true }); return; }
-
-    // ── กัน Telegram retry ส่ง update เดิมซ้ำ (สาเหตุบอทค้าง/ตอบซ้ำ) ──
-    // ถ้าเคยเห็น update_id นี้แล้ว → ตอบ 200 ทันที ไม่ประมวลผลซ้ำ
-    if (update.update_id && db) {
-      try {
-        const { error: dupErr } = await db.from('tg_processed_updates')
-          .insert({ update_id: update.update_id });
-        if (dupErr) {
-          // insert ซ้ำ (duplicate key) = เคยทำแล้ว → ข้าม
-          res.status(200).json({ ok: true, dup: true });
-          return;
-        }
-      } catch (e) { /* ถ้าตารางมีปัญหา ปล่อยผ่านไปทำงานปกติ */ }
-    }
-
-    const chatId   = msg.chat && msg.chat.id;
-    const text     = msg.text;
-    const trimmed  = text.trim();
-    const chatType = getChatType(chatId); // 'main' | 'sub' | null
-
-    if (!isAllowedChat(chatId)) { res.status(200).json({ ok: true }); return; }
-
-    // ── เส้นทางที่ 1: คำสั่ง / (ใช้ได้ทุกกลุ่ม) ─────────────────────────────
-    if (trimmed.startsWith('/')) {
-      // ตัด @botname ที่ Telegram เติมท้ายคำสั่งในกลุ่ม เช่น /สรุป@OdooBot → /สรุป
-      var cmdText = trimmed;
-      if (BOT_USERNAME) {
-        cmdText = cmdText.replace(new RegExp('@' + BOT_USERNAME, 'gi'), '');
-      } else {
-        cmdText = cmdText.replace(/@\w+/g, '');
-      }
-      cmdText = cmdText.trim();
-
-      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
-      var lc = cmdText.toLowerCase();
-      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
-      var lc = cmdText.toLowerCase();
-
-      // ── /ลงรูป → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
-      if (cmdText.startsWith('/ลงรูป') || lc.startsWith('/uploadphoto')) {
-        var rawArg = cmdText.replace(/^\/ลงรูป/, '').replace(/^\/uploadphoto/i, '').trim();
-        if (!rawArg) {
-          await sendTelegramReply(chatId,
-            'ระบุเอกสารด้วยครับ เช่น:\n' +
-            '/ลงรูป กท.1002 12/6\n' +
-            '/ลงรูป po PO2606001\n' +
-            '/ลงรูป so 2606007'
-          );
-          res.status(200).json({ ok: true }); return;
-        }
-
-        // แยก docType
-        var docType = 'picking', docKeyword = rawArg;
-        var docDateFilter = null;
-        if (/^po\s+/i.test(rawArg)) { docType = 'po'; docKeyword = rawArg.replace(/^po\s+/i,'').trim(); }
-        else if (/^so\s+/i.test(rawArg)) { docType = 'so'; docKeyword = rawArg.replace(/^so\s+/i,'').trim(); }
-        else {
-          // picking — ดึงวันที่ออก
-          var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
-          if (dmR) { docDateFilter = parseDate(dmR[1]); docKeyword = docKeyword.replace(dmR[0],'').trim(); }
-        }
-
-        await sendTelegramReply(chatId, '🔍 กำลังค้นหาเอกสารใน Odoo...');
-        try {
-          const doc = await odooFindDoc(docType, docKeyword, docDateFilter);
-          if (!doc) {
-            await sendTelegramReply(chatId, '⚠️⚠️⚠️ ไม่พบเอกสาร "' + rawArg + '" ใน Odoo ครับ');
-            res.status(200).json({ ok: true }); return;
-          }
-          // บันทึก session
-          if (db) {
-            await db.from('tg_report_session').upsert({
-              chat_id: String(chatId),
-              doc_type: docType,
-              doc_id: doc.id,
-              doc_name: doc.name,
-              doc_model: doc.model,
-              uploaded: 0,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'chat_id' });
-          }
-          await sendTelegramReply(chatId,
-            '✅ พบเอกสารแล้วครับ!\n📋 ' + doc.name +
-            '\n\nส่งรูปเข้ากลุ่มได้เลยครับ (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งครบ'
-          );
-        } catch(e) {
-          await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
-        }
-        res.status(200).json({ ok: true }); return;
-      }
-
-      // ── /จบรายงาน → สรุปจำนวนรูปที่อัป ──────────────────────────────────
-      if (cmdText.startsWith('/จบรายงาน') || lc.startsWith('/endreport')) {
-        if (db) {
-          const { data: sess } = await db.from('tg_report_session')
-            .select('*').eq('chat_id', String(chatId)).maybeSingle();
-          if (!sess) {
-            await sendTelegramReply(chatId, '⚠️ ไม่มี session รายงานที่เปิดอยู่ครับ');
-          } else {
-            await sendTelegramReply(chatId,
-              '✅ จบรายงานแล้วครับ!\n📋 ' + sess.doc_name +
-              '\n📷 อัปรูปทั้งหมด ' + sess.uploaded + ' รูป'
-            );
-            await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
-          }
-        }
-        res.status(200).json({ ok: true }); return;
-      }
-
-      if (cmdText.startsWith('/ส่งของ') || cmdText.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
-        var kw = cmdText.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
-        if (!kw) {
-          await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
-        } else {
-          // ดึง statusFilter จากคำท้าย (default = รอส่ง) รองรับ status ก่อน company
-          var statusFilter = 'pending';
-          var statusGiven = false;
-          var statusRe = /\s+(ทั้งหมด|all|ส่งแล้ว|เสร็จแล้ว|done|รอส่ง|รอ|pending)(\s+(?:md|cg|sep|akn|set))?\s*$/i;
-          kw = kw.replace(statusRe, function(match, st, comp) {
-            statusGiven = true;
-            var ml = st.toLowerCase();
-            if (['ทั้งหมด','all'].includes(ml))                    statusFilter = 'all';
-            else if (['ส่งแล้ว','เสร็จแล้ว','done'].includes(ml)) statusFilter = 'done';
-            else                                                    statusFilter = 'pending';
-            return comp ? comp : '';
-          }).trim();
-
-          // ดึงวันที่ Scheduled (ถ้ามี) เช่น "กท.1002 12/6"
-          var dateFilter = null;
-          var dmTg = kw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
-          if (dmTg) {
-            dateFilter = parseDate(dmTg[1]);
-            kw = kw.replace(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/, '').trim();
-            if (!statusGiven) statusFilter = 'all';
-          }
-
-          var label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
-          var dateNote = dmTg ? ' วันที่ ' + dmTg[1] : '';
-          await sendTelegramReply(chatId, '⏳ กำลังสร้างใบส่งของ [' + label + ']' + dateNote + ' ของ "' + kw + '" ครับ...');
-          await sendDeliveryPDF(chatId, kw, statusFilter, dateFilter);
-          res.status(200).json({ ok: true });
-          return;
-        }
-        res.status(200).json({ ok: true });
-        return;
-      }
-
-      const reply = await handleTelegramCommand(cmdText);
-      if (reply) await sendTelegramReply(chatId, reply);
-      res.status(200).json({ ok: true });
-      return;
-    }
-
-    // ── เส้นทางที่ 2: กลุ่มย่อย + @บอท + Reply → บันทึกงาน ──────────────────
-    if (chatType === 'sub') {
-      // ตรวจว่ามีการ @บอท ในข้อความหรือ caption ไหม
-      const msgText    = msg.text || msg.caption || '';
-      const mentioned  = BOT_USERNAME
-        ? new RegExp('@' + BOT_USERNAME + '\\b', 'i').test(msgText)
-        : (msg.entities || msg.caption_entities || []).some(e => e.type === 'mention');
-
-      if (mentioned && msg.reply_to_message) {
-        const replyMsg = msg.reply_to_message;
-        // ดึงข้อความจาก reply (รองรับทั้ง text และ caption ของรูป/ไฟล์)
-        const originalText = replyMsg.text || replyMsg.caption || '';
-        if (!originalText) {
-          await sendTelegramReply(chatId, '❌ ไม่พบข้อความในข้อความที่ Reply ครับ');
-          res.status(200).json({ ok: true }); return;
-        }
-        const fromUser = msg.from
-          ? (msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')
-          : '';
-        // ดึง keyword หมวดหมู่จากข้อความที่พิมพ์ต่อจาก @บอท เช่น "@บอท so" → catKeyword = "so"
-        const botMentionText = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
-        const catKeyword = botMentionText.toLowerCase();
-
-        // ── ตรวจว่าเป็นการ "แก้วันที่" หรือไม่ ──
-        var hasEditWord = botMentionText.indexOf('แก้')>=0 || botMentionText.indexOf('เปลี่ยน')>=0 || botMentionText.indexOf('เลื่อน')>=0;
-        var dmEdit = botMentionText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-        if (hasEditWord && dmEdit) {
-          const newDate = parseDate(dmEdit[1]);
-          if (!newDate) {
-            await sendTelegramReply(chatId, '❌ ไม่เข้าใจวันที่ครับ ลองพิมพ์ เช่น "แก้เป็น 15/6"');
-            res.status(200).json({ ok: true }); return;
-          }
-          const upd = await updateTaskDateByMessage(replyMsg.message_id, newDate);
-          if (upd.ok) {
-            await sendTelegramReply(chatId, '✅ แก้ไขเรียบร้อยครับ\n📅 เปลี่ยนเป็น ' + upd.dateDisplay);
-            await notifyMainChat('✏️ <b>แก้ไขวันที่งาน</b>\n\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (fromUser ? '\n✍️ โดย: ' + fromUser : ''));
-          } else if (upd.notFound) {
-            await sendTelegramReply(chatId, '❌ ไม่พบงานเดิมที่ผูกกับข้อความนี้ครับ\n(งานอาจถูกบันทึกก่อนเปิดระบบแก้ไข)');
-          } else {
-            await sendTelegramReply(chatId, '❌ แก้ไขไม่สำเร็จ: ' + (upd.error || ''));
-          }
-          res.status(200).json({ ok: true }); return;
-        }
-
-        // ── ดึง file_id จากรูป/ไฟล์ — ดูทั้งจาก msg ปัจจุบัน และ replyMsg ──
-        let fileUrl = null;
-        let fileName = null;
-        const tgToken = process.env.TELEGRAM_BOT_TOKEN || '';
-
-        // หาไฟล์จาก msg ปัจจุบัน หรือ replyMsg (อันไหนมีก่อนใช้อันนั้น)
-        const fileSource = (msg.photo || msg.document) ? msg : replyMsg;
-
-        // รูปภาพ
-        if (fileSource.photo && fileSource.photo.length > 0 && tgToken) {
-          const photo = fileSource.photo[fileSource.photo.length - 1];
-          try {
-            const infoRes = await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${photo.file_id}`);
-            const info = await infoRes.json();
-            if (info.ok) {
-              fileUrl = `https://api.telegram.org/file/bot${tgToken}/${info.result.file_path}`;
-              fileName = info.result.file_path.split('/').pop();
-            }
-          } catch(e) { console.error('photo fetch error:', e.message); }
-        }
-        // ไฟล์เอกสาร
-        else if (fileSource.document && tgToken) {
-          try {
-            const infoRes = await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${fileSource.document.file_id}`);
-            const info = await infoRes.json();
-            if (info.ok) {
-              fileUrl = `https://api.telegram.org/file/bot${tgToken}/${info.result.file_path}`;
-              fileName = fileSource.document.file_name || info.result.file_path.split('/').pop();
-            }
-          } catch(e) { console.error('document fetch error:', e.message); }
-        }
-
-        // ── อัปโหลดไฟล์ไปยัง Supabase Storage ───────────────────────────
-        let attachmentObj = null;
-        if (fileUrl && db) {
-          try {
-            const fileRes = await fetch(fileUrl);
-            const arrayBuffer = await fileRes.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const ext = fileName ? fileName.split('.').pop() : 'jpg';
-            const storageName = 'tg_' + Date.now() + '.' + ext;
-            const { data: upData, error: upErr } = await db.storage
-              .from('attachments')
-              .upload(storageName, buffer, { contentType: fileRes.headers.get('content-type') || 'application/octet-stream', upsert: false });
-            if (!upErr) {
-              const { data: urlData } = db.storage.from('attachments').getPublicUrl(storageName);
-              attachmentObj = { name: fileName || storageName, wl: urlData?.publicUrl || '', source: 'telegram' };
-            }
-          } catch(e) { console.error('upload error:', e.message); }
-        }
-
-        // ── บันทึกงานพร้อมไฟล์แนบ ────────────────────────────────────────
-        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword, replyMsg.message_id);
-
-        if (result.ok) {
-          // จำงานล่าสุดของกลุ่มนี้ (สำหรับ +1 +2 แนบไฟล์)
-          try {
-            await db.from('tg_last_task').upsert({
-              chat_id: String(chatId),
-              task_id: result.taskId,
-              task_name: result.taskName,
-              created_at: new Date().toISOString()
-            }, { onConflict: 'chat_id' });
-          } catch(e) {}
-
-          const fileNote = attachmentObj ? '\n📎 แนบไฟล์: ' + attachmentObj.name : '';
-          await sendTelegramReply(chatId, '✅ บันทึกเรียบร้อยครับ' + fileNote);
-          const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
-          await notifyMainChat(result.mainMsg + fileLink);
-        } else {
-          await sendTelegramReply(chatId, `❌ บันทึกไม่สำเร็จครับ: ${result.error}`);
-        }
-        res.status(200).json({ ok: true });
-        return;
-      }
-
-      // ── @บอท +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด ──────────────
-      if (mentioned && msg.reply_to_message) {
-        const msgText2 = msg.text || msg.caption || '';
-        const botMentionText2 = msgText2.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
-        if (/^\+\d+$/.test(botMentionText2)) {
-          const replyMsg2 = msg.reply_to_message;
-          const tgToken2 = process.env.TELEGRAM_BOT_TOKEN || '';
-
-          // หางานล่าสุดของกลุ่ม
-          const { data: last } = await db.from('tg_last_task')
-            .select('task_id, task_name').eq('chat_id', String(chatId)).maybeSingle();
-          if (!last || !last.task_id) {
-            await sendTelegramReply(chatId, '⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาบันทึกงานก่อนแนบไฟล์');
-            res.status(200).json({ ok: true }); return;
-          }
-
-          // ดึงไฟล์จาก reply
-          let fileUrl2 = null, fileName2 = null, contentType2 = 'application/octet-stream';
-          const fileSource2 = (msg.photo || msg.document) ? msg : replyMsg2;
-
-          if (fileSource2.photo && fileSource2.photo.length > 0 && tgToken2) {
-            const photo = fileSource2.photo[fileSource2.photo.length - 1];
-            try {
-              const infoRes = await fetch(`https://api.telegram.org/bot${tgToken2}/getFile?file_id=${photo.file_id}`);
-              const info = await infoRes.json();
-              if (info.ok) {
-                fileUrl2 = `https://api.telegram.org/file/bot${tgToken2}/${info.result.file_path}`;
-                fileName2 = info.result.file_path.split('/').pop();
-                contentType2 = 'image/jpeg';
-              }
-            } catch(e) {}
-          } else if (fileSource2.document && tgToken2) {
-            try {
-              const infoRes = await fetch(`https://api.telegram.org/bot${tgToken2}/getFile?file_id=${fileSource2.document.file_id}`);
-              const info = await infoRes.json();
-              if (info.ok) {
-                fileUrl2 = `https://api.telegram.org/file/bot${tgToken2}/${info.result.file_path}`;
-                fileName2 = fileSource2.document.file_name || info.result.file_path.split('/').pop();
-                contentType2 = fileSource2.document.mime_type || 'application/octet-stream';
-              }
-            } catch(e) {}
-          }
-
-          if (!fileUrl2) {
-            await sendTelegramReply(chatId, '⚠️ ไม่พบรูป/ไฟล์ใน reply นั้นครับ');
-            res.status(200).json({ ok: true }); return;
-          }
-
-          // อัปโหลดไปยัง Supabase Storage
-          try {
-            const fileRes2 = await fetch(fileUrl2);
-            const arrayBuffer2 = await fileRes2.arrayBuffer();
-            const compressed2 = await compressIfImage(Buffer.from(arrayBuffer2), contentType2);
-            const buffer2 = compressed2.buffer;
-            const ctUp2 = compressed2.contentType;
-            const ext2 = (compressed2.contentType === 'image/jpeg' && contentType2 !== 'image/jpeg')
-              ? 'jpg' : (fileName2 ? fileName2.split('.').pop() : 'jpg');
-            const storagePath2 = last.task_id + '/' + Date.now() + '.' + ext2;
-
-            const { error: upErr2 } = await db.storage.from('attachments')
-              .upload(storagePath2, buffer2, { contentType: ctUp2, upsert: true });
-            if (upErr2) { await sendTelegramReply(chatId, '❌ อัปไฟล์ไม่สำเร็จ: ' + upErr2.message); res.status(200).json({ ok: true }); return; }
-
-            const { data: pub2 } = db.storage.from('attachments').getPublicUrl(storagePath2);
-
-            // อัปเดต attachments ของงาน
-            const { data: taskRow2 } = await db.from('tasks').select('attachments').eq('id', last.task_id).maybeSingle();
-            let atts2 = Array.isArray(taskRow2?.attachments) ? taskRow2.attachments : [];
-            atts2.push({ name: fileName2 || ('file.' + ext2), size: buffer2.length, fileId: storagePath2, mimeType: ctUp2, webViewLink: pub2.publicUrl, source: 'telegram' });
-
-            const { error: updErr2 } = await db.from('tasks').update({ attachments: atts2 }).eq('id', last.task_id);
-            if (updErr2) { await sendTelegramReply(chatId, '❌ บันทึกไฟล์ไม่สำเร็จ: ' + updErr2.message); res.status(200).json({ ok: true }); return; }
-
-            await sendTelegramReply(chatId, '📎 แนบไฟล์เข้างานแล้วครับ!\n📋 ' + last.task_name + '\n📁 ไฟล์ทั้งหมด: ' + atts2.length + ' ไฟล์');
-          } catch(e) {
-            await sendTelegramReply(chatId, '❌ แนบไฟล์ไม่สำเร็จ: ' + e.message);
-          }
-          res.status(200).json({ ok: true }); return;
-        }
-      }
-
-      // ── @บอท โดยไม่ได้ Reply → ค้นหางาน / ถาม AI ──────
-      if (mentioned) {
-        const userMsg = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
-        if (userMsg) {
-          // ค้นหางานในระบบ ถ้าขึ้นต้นด้วย "ค้นหา"
-          const lc = userMsg.toLowerCase();
-          if (userMsg.startsWith('ค้นหา') || userMsg.startsWith('/ค้นหา') || lc.startsWith('search')) {
-            const kw = userMsg.replace(/^\/?(ค้นหา|search)\s*/i, '').trim();
-            const reply = await handleTelegramCommand('/ค้นหา ' + kw);
-            if (reply) await sendTelegramReply(chatId, reply);
-            res.status(200).json({ ok: true });
-            return;
-          }
-          // ไม่งั้นถาม AI
-          const history = getHistory(chatId);
-          let webContext = null;
-          if (needsWebSearch(userMsg) && TAVILY_KEY) webContext = await searchWeb(userMsg);
-          const reply = await askGroq(userMsg, history, webContext);
-          addHistory(chatId, 'user', userMsg);
-          addHistory(chatId, 'assistant', reply);
-          await sendTelegramReply(chatId, reply);
-        }
-        res.status(200).json({ ok: true });
-        return;
-      }
-
-      res.status(200).json({ ok: true });
-      return;
-    }
-
-    // ── เส้นทางที่ 3: กลุ่มหลัก @บอท → ถาม Groq ────────────────────────────
-    let userMsg = null;
-    if (BOT_USERNAME) {
-      userMsg = extractMention(trimmed, BOT_USERNAME);
-    } else {
-      const entities = msg.entities || [];
-      if (entities.some(e => e.type === 'mention'))
-        userMsg = trimmed.replace(/@\w+/g, '').trim();
-    }
-
-    if (userMsg !== null && userMsg !== '') {
-      const history = getHistory(chatId);
-      let webContext = null;
-      if (needsWebSearch(userMsg) && TAVILY_KEY) webContext = await searchWeb(userMsg);
-      const reply = await askGroq(userMsg, history, webContext);
-      addHistory(chatId, 'user', userMsg);
-      addHistory(chatId, 'assistant', reply);
-      await sendTelegramReply(chatId, reply);
-    }
-
-    res.status(200).json({ ok: true });
-  } catch(e) {
-    console.error('webhook error:', e.message);
-    res.status(200).json({ ok: true });
+  if (docType === 'po') {
+    const rows = await safeSearchRead('purchase.order',
+      ['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]],
+      ['id', 'name', 'partner_id'], 5);
+    if (!rows.length) return null;
+    return { id: rows[0].id, name: rows[0].name, model: 'purchase.order' };
   }
+
+  if (docType === 'so') {
+    const rows = await safeSearchRead('sale.order',
+      ['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]],
+      ['id', 'name', 'partner_id'], 5);
+    if (!rows.length) return null;
+    return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
+  }
+
+  // picking — ค้นแบบ odooDelivery + กรองวันที่
+  const buildDomain = (level) => {
+    const oneWord = (w) => {
+      if (level === 'full') {
+        return ['|', '|', '|', '|',
+          ['name', 'ilike', w], ['origin', 'ilike', w],
+          ['partner_id.name', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
+        ];
+      }
+      return ['|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]];
+    };
+    let domain = words.length <= 1 ? oneWord(words[0] || '') : [];
+    if (words.length > 1) {
+      for (let i = 0; i < words.length - 1; i++) domain.push('&');
+      words.forEach(w => domain.push(...oneWord(w)));
+    }
+    return domain;
+  };
+
+  let rows = [];
+  try { rows = await searchRead('stock.picking', buildDomain('full'), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
+    try { rows = await searchRead('stock.picking', buildDomain('simple'), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
+  }
+
+  // กรองวันที่ถ้าระบุ
+  if (dateFilter && rows.length) {
+    const filtered = rows.filter(p => String(p.scheduled_date || '').slice(0, 10) === dateFilter);
+    if (filtered.length) rows = filtered;
+  }
+
+  if (!rows.length) return null;
+  return { id: rows[0].id, name: rows[0].name, model: 'stock.picking' };
+}
+
+// ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
+// ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
+export async function odooDelivery(keyword, companyId) {
+  const words = smartWords(keyword);
+
+  // ค้นทุก field ที่ชื่อโครงการอาจอยู่:
+  //   name = เลขเอกสาร | origin = เอกสารต้นทาง | partner = ลูกค้า
+  //   location_dest_id.complete_name = ปลายทาง (มีชื่อโครงการเต็ม)
+  //   group_id.name = Reference ที่จัดกลุ่ม (เช่น "ถนนสาย กท.1001 ถนนกัลปพฤกษ์")
+  const buildDomain = (level) => {
+    const oneWord = (w) => {
+      if (level === 'full') {
+        return ['|', '|', '|', '|',
+          ['name', 'ilike', w],
+          ['origin', 'ilike', w],
+          ['partner_id.name', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
+        ];
+      }
+      if (level === 'dest') {
+        return ['|', '|',
+          ['origin', 'ilike', w],
+          ['location_dest_id.complete_name', 'ilike', w],
+          ['group_id.name', 'ilike', w]
+        ];
+      }
+      // simple
+      return ['|', '|',
+        ['name', 'ilike', w],
+        ['origin', 'ilike', w],
+        ['partner_id.name', 'ilike', w]
+      ];
+    };
+    let domain;
+    if (words.length <= 1) {
+      domain = oneWord(words[0] || '');
+    } else {
+      domain = [];
+      for (let i = 0; i < words.length - 1; i++) domain.push('&');
+      words.forEach(w => { domain.push(...oneWord(w)); });
+    }
+    return withCompany(domain, companyId);
+  };
+
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
+  let pickings = [];
+  // 1) ค้นแบบเต็ม (ทุก field)
+  try {
+    pickings = await searchRead('stock.picking', buildDomain('full'), fields, 40);
+  } catch (e) {
+    // 2) บาง field อาจไม่มี → ลองเฉพาะ dest/group
+    try {
+      pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40);
+    } catch (e2) {
+      pickings = [];
+    }
+  }
+  // 3) ถ้ายังไม่เจอ → ลอง dest/group อย่างเดียว (เผื่อชื่ออยู่แค่ปลายทาง)
+  if (!pickings.length) {
+    try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) {}
+  }
+  // 4) สุดท้าย fallback simple
+  if (!pickings.length) {
+    try { pickings = await searchRead('stock.picking', buildDomain('simple'), fields, 40); } catch (e) {}
+  }
+
+  for (const p of pickings) {
+    try {
+      p.lines = await searchRead(
+        'stock.move',
+        [['picking_id', '=', p.id]],
+        ['product_id', 'product_uom_qty', 'quantity', 'product_uom'],
+        50
+      );
+    } catch (e) { p.lines = []; }
+
+    // ดึงรายการรูปที่แนบ (เก็บแค่ ID + ชื่อ — รูปจริงโหลดผ่าน proxy ทีหลัง)
+    try {
+      const atts = await searchRead(
+        'ir.attachment',
+        ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
+        ['id', 'name', 'mimetype'],
+        20
+      );
+      p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
+    } catch (e) { p.images = []; }
+  }
+  return pickings;
 }
