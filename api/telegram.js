@@ -324,7 +324,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
       // ส่งเข้า LINE
       const groupId = lineGroups[target];
       if (!groupId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบกลุ่ม LINE "' + target + '"'); return; }
-      const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+      const LINE_TOKEN = process.env.LINE_CHANNEL_TOKEN || '';
       const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
