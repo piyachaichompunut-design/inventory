@@ -349,20 +349,17 @@ export default async function handler(req, res) {
       }
       cmdText = cmdText.trim();
 
-      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
-      var lc = cmdText.toLowerCase();
-      // ── /ส่งของ → ส่งไฟล์ PDF แทนข้อความ ──────────────────────────────
       var lc = cmdText.toLowerCase();
 
-      // ── /รายงาน → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
-      if (cmdText.startsWith('/รายงาน') || lc.startsWith('/report')) {
-        var rawArg = cmdText.replace(/^\/รายงาน/, '').replace(/^\/report/i, '').trim();
+      // ── /ลงรูป → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
+      if (cmdText.startsWith('/ลงรูป') || lc.startsWith('/uploadphoto')) {
+        var rawArg = cmdText.replace(/^\/ลงรูป/, '').replace(/^\/uploadphoto/i, '').trim();
         if (!rawArg) {
           await sendTelegramReply(chatId,
             'ระบุเอกสารด้วยครับ เช่น:\n' +
-            '/รายงาน กท.1002 12/6\n' +
-            '/รายงาน po PO2606001\n' +
-            '/รายงาน so 2606007'
+            '/ลงรูป กท.1002 12/6\n' +
+            '/ลงรูป po PO2606001\n' +
+            '/ลงรูป so 2606007'
           );
           res.status(200).json({ ok: true }); return;
         }
