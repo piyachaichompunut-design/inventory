@@ -367,6 +367,91 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
   }
 }
 
+// ── ส่งรายงาน PO/SO/PR เข้า LINE หรือ Telegram กลุ่ม 2 ──────────────────────
+async function sendReportDoc(fromChatId, doc, target, lineGroups) {
+  try {
+    const { odooDocDetail } = await import('./odoo.js');
+    const { createClient } = await import('@supabase/supabase-js');
+
+    const d = await odooDocDetail(doc.model, doc.id);
+    if (!d) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ดึงข้อมูลเอกสารไม่สำเร็จ'); return; }
+
+    const lines = (d.lines || []).slice(0, 5);
+    const totalLines = (d.lines || []).length;
+    const images = d.images || [];
+
+    let lineItems = lines.map((l, i) => {
+      const pname = (l.name || '').replace(/-{2,}/g, ' ').trim();
+      return (i+1) + '. ' + pname.slice(0, 50) + ' — ' + (l.qty || 0) + ' ' + (l.uom || '');
+    }).join('\n');
+    if (totalLines > 5) lineItems += '\n... และอีก ' + (totalLines-5) + ' รายการ';
+
+    // สร้าง delivery_views (ใช้โครงสร้างเดียวกับใบส่งของ)
+    const SB_URL = process.env.SUPABASE_URL;
+    const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const sbdb = createClient(SB_URL, SB_KEY, { auth: { persistSession: false } });
+
+    const picksData = [{
+      name: d.name,
+      origin: '',
+      partner: d.partner || '',
+      date: d.date || '',
+      statusText: '',
+      statusColor: 'green',
+      lines: (d.lines || []).map(l => ({ name: l.name, qty: l.qty, uom: l.uom })),
+      images: images
+    }];
+    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    await sbdb.from('delivery_views').insert({
+      id: viewId,
+      title: 'รายงาน — ' + d.name,
+      company: '',
+      status_label: 'รายงาน',
+      data: { summary: { total: 1 }, picks: picksData }
+    });
+    const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+
+    const msg =
+      '📊 รายงาน: ' + d.name + '\n' +
+      (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
+      '📅 วันที่: ' + (d.date || '-') + '\n' +
+      (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
+      '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
+      '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
+      lineItems + '\n\n' +
+      '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\n' +
+      'เรียบร้อยครับ ✅';
+
+    const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+    if (target === 'เทเลแกรม') {
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
+      if (!TG_SUB) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2'); return; }
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
+      });
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
+    } else {
+      const groupId = lineGroups[target];
+      if (!groupId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบกลุ่ม LINE "' + target + '"'); return; }
+      const LINE_TOKEN = process.env.LINE_CHANNEL_TOKEN || '';
+      const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+      });
+      if (!lineRes.ok) {
+        const j = await lineRes.json();
+        await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่ง LINE ไม่สำเร็จ: ' + JSON.stringify(j));
+        return;
+      }
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า LINE กลุ่ม "' + target + '" เรียบร้อยครับ');
+    }
+  } catch(e) {
+    await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่งรายงานไม่สำเร็จ: ' + e.message);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(200).json({ ok: true }); return; }
   try {
@@ -457,8 +542,9 @@ export default async function handler(req, res) {
           await sendTelegramReply(chatId,
             'ระบุให้ครบครับ เช่น:\n' +
             '/รายงาน กท.1002 12/6 ไลน์\n' +
-            '/รายงาน กท.1002 12/6 เทส\n' +
-            '/รายงาน กท.1002 12/6 เทเลแกรม'
+            '/รายงาน po2606025 เทส\n' +
+            '/รายงาน so2606011 เทเลแกรม\n' +
+            '/รายงาน pr00278 ไลน์'
           );
           res.status(200).json({ ok: true }); return;
         }
@@ -479,12 +565,34 @@ export default async function handler(req, res) {
           res.status(200).json({ ok: true }); return;
         }
 
-        // ดึงวันที่ออกจาก keyword
+        // ตรวจว่าเป็น po/so/pr หรือใบส่งของ
+        var repDocType = 'picking';
+        if (/^po\s*/i.test(repKw)) { repDocType = 'po'; repKw = repKw.replace(/^po\s*/i,'').trim(); }
+        else if (/^so\s*/i.test(repKw)) { repDocType = 'so'; repKw = repKw.replace(/^so\s*/i,'').trim(); }
+        else if (/^pr\s*/i.test(repKw)) { repDocType = 'pr'; repKw = repKw.replace(/^pr\s*/i,'').trim(); }
+
+        await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
+
+        // ── po/so/pr → ค้น + ส่งรายงานเลย (ไม่กรองวันที่) ──
+        if (repDocType !== 'picking') {
+          try {
+            const { odooFindDoc } = await import('./odoo.js');
+            const doc = await odooFindDoc(repDocType, repKw, null);
+            if (!doc) {
+              await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKw + '" ครับ');
+              res.status(200).json({ ok: true }); return;
+            }
+            await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
+          } catch(e) {
+            await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
+          }
+          res.status(200).json({ ok: true }); return;
+        }
+
+        // ดึงวันที่ออกจาก keyword (เฉพาะใบส่งของ)
         var repDate = null;
         var repDm = repKw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
         if (repDm) { repDate = parseDate(repDm[1]); repKw = repKw.replace(repDm[0], '').trim(); }
-
-        await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
 
         try {
           const { odooDelivery, parseCompany } = await import('./odoo.js');
