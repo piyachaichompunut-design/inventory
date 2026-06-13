@@ -458,6 +458,82 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
   return { id: rows[0].id, name: rows[0].name, model: 'stock.picking' };
 }
 
+// ── ดึงรายละเอียดเอกสาร + รูป สำหรับ /รายงาน ─────────────────────────────────
+// คืน { name, partner, date, total, lines:[{name,qty,uom}], images:[{id,name}] }
+export async function odooDocDetail(model, id) {
+  let doc = {};
+  if (model === 'purchase.order') {
+    const rows = await searchRead('purchase.order', [['id','=',id]],
+      ['name','partner_id','date_order','amount_total'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('purchase.order.line', [['order_id','=',id]],
+      ['product_id','name','product_qty','product_uom'], 50);
+    doc = {
+      name: 'PO ' + r.name,
+      partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
+      partnerLabel: 'ผู้ขาย',
+      date: String(r.date_order || '').slice(0,10),
+      total: r.amount_total || 0,
+      lines: lines.map(l => ({
+        name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
+        qty: l.product_qty || 0,
+        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+      }))
+    };
+  } else if (model === 'sale.order') {
+    const rows = await searchRead('sale.order', [['id','=',id]],
+      ['name','partner_id','date_order','amount_total'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('sale.order.line', [['order_id','=',id]],
+      ['product_id','name','product_uom_qty','product_uom'], 50);
+    doc = {
+      name: 'SO ' + r.name,
+      partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
+      partnerLabel: 'ลูกค้า',
+      date: String(r.date_order || '').slice(0,10),
+      total: r.amount_total || 0,
+      lines: lines.map(l => ({
+        name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
+        qty: l.product_uom_qty || 0,
+        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+      }))
+    };
+  } else if (model === 'purchase.request') {
+    const rows = await searchRead('purchase.request', [['id','=',id]],
+      ['name','requested_by','date_start'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('purchase.request.line', [['request_id','=',id]],
+      ['product_id','name','product_qty','product_uom_id'], 50);
+    doc = {
+      name: 'PR ' + r.name,
+      partner: Array.isArray(r.requested_by) ? r.requested_by[1] : '',
+      partnerLabel: 'ผู้ขอ',
+      date: String(r.date_start || '').slice(0,10),
+      total: 0,
+      lines: lines.map(l => ({
+        name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
+        qty: l.product_qty || 0,
+        uom: Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : ''
+      }))
+    };
+  } else {
+    return null;
+  }
+
+  // ดึงรูปที่แนบ (ir.attachment)
+  try {
+    const atts = await searchRead('ir.attachment',
+      ['&','&',['res_model','=',model],['res_id','=',id],['mimetype','ilike','image']],
+      ['id','name'], 20);
+    doc.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
+  } catch(e) { doc.images = []; }
+
+  return doc;
+}
+
 // ── ดูใบส่งของ/จัดส่ง (Delivery Order = stock.picking ประเภท outgoing) ────────
 // ค้นหลายคำ: "ภูเก็ต 4+570" → หาใบที่ origin/name/ลูกค้า มีทุกคำ (ไม่ต้องเรียงติดกัน)
 export async function odooDelivery(keyword, companyId) {
