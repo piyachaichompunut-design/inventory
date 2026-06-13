@@ -271,8 +271,7 @@ function addHistory(chatId, role, content) {
 // ── ส่งรายงานใบส่งของเข้า LINE หรือ Telegram กลุ่ม 2 ──────────────────────────
 async function sendReport(fromChatId, picking, target, lineGroups, db) {
   try {
-    const { odooDelivery, parseCompany, odooGetAttachmentImage } = await import('./odoo.js');
-    const { buildDeliveryPDF } = await import('./pdfgen.js');
+    const { odooDelivery, parseCompany } = await import('./odoo.js');
     const { createClient } = await import('@supabase/supabase-js');
 
     // ดึงข้อมูลครบจาก picking (มี lines + images)
@@ -286,7 +285,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     const date = String(p.scheduled_date || '').slice(0, 10);
     const images = p.images || [];
 
-    // สร้างข้อความรายงาน
+    // สร้างข้อความรายการ
     let lineItems = lines.map((l, i) => {
       const pname = (Array.isArray(l.product_id) ? l.product_id[1] : l.name || '').replace(/-{2,}/g, ' ').trim();
       const qty = (l.quantity || l.product_uom_qty || 0) + ' ' + (Array.isArray(l.product_uom) ? l.product_uom[1] : '');
@@ -294,9 +293,35 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     }).join('\n');
     if (totalLines > 5) lineItems += '\n... และอีก ' + (totalLines-5) + ' รายการ';
 
-    // สร้างลิงก์ Odoo โดยตรง
-    const ODOO_URL = (process.env.ODOO_URL || '').replace(/\/+$/, '');
-    const odooLink = ODOO_URL + '/web#id=' + p.id + '&model=stock.picking&view_type=form';
+    // สร้าง delivery_views → ได้ลิงก์หน้าเว็บ (พร้อมรูป เหมือน /ส่งของ)
+    const SB_URL = process.env.SUPABASE_URL;
+    const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const sbdb = createClient(SB_URL, SB_KEY, { auth: { persistSession: false } });
+
+    const stMap = { done: 'ส่งแล้ว', cancel: 'ยกเลิก' };
+    const picksData = [{
+      name: p.name,
+      origin: p.origin || '',
+      partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+      date: date,
+      statusText: stMap[p.state] || 'รอส่ง',
+      statusColor: p.state === 'done' ? 'red' : (p.state === 'cancel' ? 'gray' : 'green'),
+      lines: (p.lines || []).map(l => ({
+        name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+        qty: l.quantity || l.product_uom_qty || 0,
+        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+      })),
+      images: images
+    }];
+    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    await sbdb.from('delivery_views').insert({
+      id: viewId,
+      title: 'รายงาน — ' + name,
+      company: '',
+      status_label: 'รายงาน',
+      data: { summary: { total: 1, done: p.state==='done'?1:0, pending: p.state!=='done'?1:0 }, picks: picksData }
+    });
+    const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
     const msg =
       '📊 รายงาน: ' + name + '\n' +
@@ -305,7 +330,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
       lineItems + '\n\n' +
-      '🔗 ดูใน Odoo:\n' + odooLink + '\n\n' +
+      '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\n' +
       'เรียบร้อยครับ ✅';
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -330,9 +355,8 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
         body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
       });
-      const lineResJson = await lineRes.json();
-      console.log('LINE_PUSH_RESULT:', JSON.stringify({ groupId, status: lineRes.status, body: lineResJson }));
       if (!lineRes.ok) {
+        const lineResJson = await lineRes.json();
         await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่ง LINE ไม่สำเร็จ: ' + JSON.stringify(lineResJson));
         return;
       }
