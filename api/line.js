@@ -115,7 +115,7 @@ async function sendDeliveryPDFtoLine(to, keyword, statusFilter = 'pending', date
     if (!picks.length) {
       const label = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
       const dnote = dateFilter ? ' วันที่ ' + dateFilter : '';
-      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของสถานะ "' + label + '"' + dnote + ' ของ "' + dkw + '" ครับ\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)' }]);
+      await pushLine(to, [{ type:'text', text:'🔍 ไม่พบใบส่งของสถานะ "' + label + '"' + dnote + ' ของ "' + dkw + '" ครับ\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ใบส่งของ ' + dkw + ' ทั้งหมด)' }]);
       return;
     }
 
@@ -643,9 +643,9 @@ export default async function handler(req, res) {
 
       // ── /เทียบ so1234 po5678 [ตัวย่อบริษัท] → เปรียบเทียบ (เว็บ) ────────────
       // รองรับ 2 รูปแบบ:
-      //   1) /เทียบ so1234 po5678 [md]                      → เทียบ SO/PO/PR กันเอง
-      //   2) /เทียบ po2606025 ส่งของ กท.1002 12/6 [md]      → เทียบกับใบส่งของ
-      //      /เทียบ ส่งของ กท.1002 12/6 po2606025 [md]      → (สลับลำดับได้)
+      //   1) /เทียบ so1234 po5678 [md]                          → เทียบ SO/PO/PR กันเอง
+      //   2) /เทียบ po2606025 ใบส่งของ กท.1002 12/6 [md]        → เทียบกับใบส่งของ
+      //      /เทียบ ใบส่งของ กท.1002 12/6 po2606025 [md]        → (สลับลำดับได้)
       if (tt.startsWith('/เทียบ') || tt.toLowerCase().startsWith('/compare')) {
         const arg = tt.replace(/^\/เทียบ/,'').replace(/^\/compare/i,'').trim();
         const { keyword: argClean, company: cmp } = parseCompany(arg);
@@ -669,13 +669,13 @@ export default async function handler(req, res) {
           }
           if (!refOther) {
             await replyLine(replyToken,
-              'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/เทียบ po2606025 ส่งของ กท.1002 12/6\nหรือ /เทียบ ส่งของ กท.1002 12/6 po2606025'
+              'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/เทียบ po2606025 ใบส่งของ กท.1002 12/6\nหรือ /เทียบ ใบส่งของ กท.1002 12/6 po2606025'
             );
             continue;
           }
           let deliveryKw = words.filter((w,i) => i !== sIdx && i !== refIdx).join(' ').trim();
           if (!deliveryKw) {
-            await replyLine(replyToken, 'พิมพ์ชื่อโครงการของใบส่งของด้วยครับ เช่น /เทียบ po2606025 ส่งของ กท.1002');
+            await replyLine(replyToken, 'พิมพ์ชื่อโครงการของใบส่งของด้วยครับ เช่น /เทียบ po2606025 ใบส่งของ กท.1002');
             continue;
           }
           // ดึงวันที่จากท้าย deliveryKw (ถ้ามี)
@@ -727,7 +727,7 @@ export default async function handler(req, res) {
         // ── mode 1: เทียบ SO/PO/PR กันเอง (แบบเดิม) ──────────────────────────
         const parts = words;
         if (parts.length < 2) {
-          await replyLine(replyToken, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md\nหรือ /เทียบ po2606025 ส่งของ กท.1002 12/6');
+          await replyLine(replyToken, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md\nหรือ /เทียบ po2606025 ใบส่งของ กท.1002 12/6');
           continue;
         }
         const refA = parseDocRef(parts[0]);
@@ -783,11 +783,11 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // ── /ส่งของ → สร้าง PDF อัป Storage แล้วส่งลิงก์ ─────────────────────
-      if (tt.startsWith('/ส่งของ') || tt.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
-        let kw = tt.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+      // ── /ใบส่งของ → สร้าง PDF อัป Storage แล้วส่งลิงก์ (เดิม /ส่งของ — เก็บไว้เป็น alias) ──
+      if (tt.startsWith('/ใบส่งของ') || tt.startsWith('/ส่งของ') || tt.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
+        let kw = tt.replace(/^\/ใบส่งของ/, '').replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
         if (!kw) {
-          await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
+          await replyLine(replyToken, 'พิมพ์ชื่อโครงการด้วยครับ เช่น /ใบส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
           // ดึง statusFilter จากคำท้าย (default = รอส่ง)
           let statusFilter = 'pending';
@@ -845,7 +845,7 @@ export default async function handler(req, res) {
           '🧾 /po [เลขที่] — ใบสั่งซื้อ\n' +
           '🧾 /so [เลขที่] — ใบสั่งขาย\n' +
           '📄 /pr [เลขที่] — ใบขอซื้อ\n' +
-          '🚚 /ส่งของ [ชื่อโครงการ] — ใบส่งของ (PDF)\n\n' +
+          '🚚 /ใบส่งของ [ชื่อโครงการ] — ใบส่งของ (PDF)\n\n' +
           '🏢 เลือกบริษัท: เติม md/cg/sep ท้ายคำ\n' +
           'เช่น /สต็อก เหล็ก cg\n\n' +
           '━━━━━━━━━━\n' +
