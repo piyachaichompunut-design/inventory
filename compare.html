@@ -1,4 +1,4 @@
-<!-- compare.html v1.0 — หน้าเปรียบเทียบเอกสาร (อ่านจาก Supabase delivery_views) -->
+<!-- compare.html v2.0 — หน้าเปรียบเทียบเอกสาร (ตารางคู่ ซ้าย-ขวา) อ่านจาก Supabase delivery_views -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -15,7 +15,7 @@
     --band:#27344b; --band2:#324563;
     --ok:#15803d; --ok-bg:#e7f6ec;
     --diff:#b45309; --diff-bg:#fdf2e3;
-    --miss:#b91c1c; --miss-bg:#fceceb;
+    --miss:#b91c1c; --miss-bg:#fceceb; --miss-dot:#c7ccd6;
     --accent:#324563;
   }
   *{box-sizing:border-box}
@@ -27,7 +27,7 @@
     padding:16px;
   }
   .sheet{
-    max-width:880px; margin:0 auto; background:var(--paper);
+    max-width:920px; margin:0 auto; background:var(--paper);
     border-radius:14px; overflow:hidden;
     box-shadow:0 1px 2px rgba(20,30,50,.05),0 12px 32px rgba(20,30,50,.10);
   }
@@ -43,41 +43,50 @@
   .docs{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); }
   .doc{ background:var(--paper); padding:16px 18px; }
   .doc .lbl{ font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.04em; }
-  .doc .ref{ font-size:17px; font-weight:700; margin-top:2px; color:var(--accent); word-break:break-all; }
+  .doc .ref{ font-size:17px; font-weight:700; margin-top:2px; color:var(--accent); word-break:break-word; }
   .doc .meta{ margin-top:8px; font-size:13px; color:var(--muted); display:grid; gap:3px; }
   .doc .meta span b{ color:var(--ink); font-weight:500; }
 
   /* ── แถบสรุป ── */
-  .summary{ display:flex; flex-wrap:wrap; gap:10px; padding:16px 18px; border-top:1px solid var(--line); }
+  .summary{ display:flex; flex-wrap:wrap; gap:10px; padding:16px 18px 6px; border-top:1px solid var(--line); }
   .chip{ display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:10px; font-size:14px; font-weight:600; }
   .chip .n{ font-size:18px; font-weight:700; }
   .chip.ok{ background:var(--ok-bg); color:var(--ok); }
   .chip.diff{ background:var(--diff-bg); color:var(--diff); }
   .chip.miss{ background:var(--miss-bg); color:var(--miss); }
 
-  /* ── ตาราง ── */
-  .tablewrap{ padding:6px 12px 12px; overflow-x:auto; }
-  table{ width:100%; border-collapse:collapse; font-size:14px; }
-  thead th{
-    position:sticky; top:0; background:#f7f9fc; color:var(--muted);
-    font-weight:600; font-size:12.5px; text-align:left; padding:10px 10px;
-    border-bottom:2px solid var(--line); white-space:nowrap;
-  }
-  th.num,td.num{ text-align:right; font-variant-numeric:tabular-nums; }
-  tbody td{ padding:11px 10px; border-bottom:1px solid var(--line2); vertical-align:top; }
-  tbody tr:last-child td{ border-bottom:none; }
-  tbody tr.r-miss{ background:#fdf6f5; }
-  tbody tr.r-diff{ background:#fdfaf2; }
-  .code{ font-size:12px; color:var(--muted); font-family:ui-monospace,monospace; }
-  .pname{ font-weight:500; }
-  .badge{ display:inline-block; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; }
-  .badge.ok{ background:var(--ok-bg); color:var(--ok); }
-  .badge.diff{ background:var(--diff-bg); color:var(--diff); }
-  .badge.miss{ background:var(--miss-bg); color:var(--miss); }
-  .delta{ font-weight:600; }
-  .delta.up{ color:var(--miss); }
-  .delta.down{ color:var(--diff); }
-  .delta.zero{ color:var(--ok); }
+  /* ── สัญลักษณ์อธิบายจุดสี ── */
+  .legend{ display:flex; flex-wrap:wrap; gap:14px; padding:8px 18px 12px; font-size:12.5px; color:var(--muted); }
+  .legend .lg{ display:inline-flex; align-items:center; gap:6px; }
+  .dot{ width:10px; height:10px; border-radius:50%; display:inline-block; flex:none; }
+  .dot-ok{ background:var(--ok); }
+  .dot-diff{ background:var(--diff); }
+  .dot-miss{ background:var(--miss-dot); }
+
+  /* ── ตารางคู่ ซ้าย/ขวา ── */
+  .cmpwrap{ padding:0 12px 14px; overflow-x:auto; }
+  .cmp{ min-width:480px; }
+  .cmp-head{ display:grid; grid-template-columns:1fr 40px 1fr; gap:1px; background:var(--line); }
+  .cmp-head .h{ background:#f7f9fc; color:var(--muted); font-weight:600; font-size:12.5px;
+    padding:10px 12px; border-bottom:2px solid var(--line); word-break:break-word; }
+  .cmp-head .h.right{ text-align:right; }
+
+  .cmp-row{ display:grid; grid-template-columns:1fr 40px 1fr; gap:1px; background:var(--line); }
+  .cell{ background:var(--paper); padding:11px 12px; min-width:0; }
+  .cell.right{ text-align:right; }
+  .cell.mid{ display:flex; align-items:center; justify-content:center; padding:11px 4px; }
+  .cell.empty{ display:flex; align-items:center; color:#c3c8d2; font-size:12.5px; font-style:italic; }
+  .cell.empty.right{ justify-content:flex-end; text-align:right; }
+  .pname{ font-weight:500; word-break:break-word; }
+  .code{ font-size:11.5px; color:var(--muted); font-family:ui-monospace,monospace; }
+  .qty{ margin-top:4px; font-weight:700; font-variant-numeric:tabular-nums; font-size:15px; }
+  .qty .unit{ font-size:12px; font-weight:400; color:var(--muted); }
+  .qty-sub{ margin-top:2px; font-size:11.5px; color:var(--muted); font-weight:400; }
+
+  .row-diff .cell:not(.mid){ background:var(--diff-bg); }
+  .row-miss .cell:not(.mid){ background:var(--miss-bg); }
+
+  .cmp-empty{ padding:24px; text-align:center; color:var(--muted); background:var(--paper); }
 
   /* ── footer / ปุ่ม ── */
   .foot{ padding:14px 18px 18px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
@@ -99,15 +108,24 @@
     body{ padding:8px; }
     .docs{ grid-template-columns:1fr; }
     .band h1{ font-size:19px; }
-    thead th,tbody td{ padding:9px 7px; }
+    .cmp-head,.cmp-row{ grid-template-columns:1fr 28px 1fr; }
+    .cell{ padding:9px 8px; font-size:13px; }
+    .cell.mid{ padding:9px 2px; }
+    .qty{ font-size:14px; }
+    .legend{ font-size:11.5px; gap:10px; padding:6px 12px 10px; }
+    .cmp{ min-width:0; }
   }
   @media print{
     body{ background:#fff; padding:0; }
     .sheet{ box-shadow:none; border-radius:0; max-width:none; }
     .btn{ display:none; }
-    thead th{ position:static; }
-    tbody tr.r-miss,tbody tr.r-diff{ background:#fff; }
+    .cmpwrap{ overflow-x:visible; }
+    .cmp{ min-width:0; }
+    *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color-adjust:exact; }
+    .cmp-row,.docs,.band,.summary,.legend{ break-inside:avoid; }
+    .band{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
+  @page{ margin:12mm; }
 </style>
 </head>
 <body>
@@ -128,32 +146,11 @@ function showState(em, title, msg){
   app.innerHTML = `<div class="state"><div class="em">${em}</div><h2>${esc(title)}</h2><p>${esc(msg||'')}</p></div>`;
 }
 
-// ── ดึง field แรกที่มีค่า (ใช้รองรับชื่อ key ที่อาจต่างกันในโหมดใบส่งของ) ──
+// ── ดึง field แรกที่มีค่า (รองรับชื่อ key ได้หลายแบบ) ──
 function pick(obj, keys, dflt){
   for(const k of keys){ if(obj && obj[k]!=null && obj[k]!=='') return obj[k]; }
   return dflt;
 }
-
-function deltaCell(d){
-  if(d==null || d==='' || !isFinite(+d)) return '<td class="num">–</td>';
-  const v = +d;
-  if(v===0) return '<td class="num"><span class="delta zero">0</span></td>';
-  const cls = v>0 ? 'up' : 'down';
-  const arrow = v>0 ? '▲' : '▼';
-  return `<td class="num"><span class="delta ${cls}">${arrow} ${num(Math.abs(v))}</span></td>`;
-}
-
-function statusBadge(s, labelA, labelB){
-  switch(s){
-    case 'ok':        return '<span class="badge ok">ตรงกัน</span>';
-    case 'diff':      return '<span class="badge diff">ต่างกัน</span>';
-    case 'missing_a': return `<span class="badge miss">ไม่มีใน ${esc(labelA)}</span>`;
-    case 'missing_b': return `<span class="badge miss">ไม่มีใน ${esc(labelB)}</span>`;
-    case 'missing':   return '<span class="badge miss">ขาด</span>';
-    default:          return `<span class="badge">${esc(s||'-')}</span>`;
-  }
-}
-const rowClass = s => s==='ok' ? '' : (s==='diff' ? 'r-diff' : 'r-miss');
 
 function docCard(lbl, ref, doc){
   const m = [];
@@ -177,6 +174,12 @@ function chips(rows){
   return `<div class="summary">${h}</div>`;
 }
 
+const legend = `<div class="legend">
+  <span class="lg"><span class="dot dot-ok"></span> ตรงกัน</span>
+  <span class="lg"><span class="dot dot-diff"></span> จำนวนต่างกัน</span>
+  <span class="lg"><span class="dot dot-miss"></span> มีฝั่งเดียว</span>
+</div>`;
+
 function footer(rec){
   const when = new Date().toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'});
   return `<div class="foot">
@@ -185,19 +188,65 @@ function footer(rec){
   </div>`;
 }
 
-// ── โหมด 1: เทียบเอกสารกันเอง (SO/PO/PR) ──
+// ── helper: สถานะ → คลาสจุดสี / คำอธิบาย ──
+function dotClass(status){
+  if(status==='ok') return 'dot-ok';
+  if(status==='diff') return 'dot-diff';
+  return 'dot-miss';
+}
+function dotTitle(status, leftLbl, rightLbl){
+  if(status==='ok') return 'ตรงกัน';
+  if(status==='diff') return 'จำนวนต่างกัน';
+  if(status==='missing_a') return 'ไม่มีใน ' + leftLbl;
+  if(status==='missing_b') return 'ไม่มีใน ' + rightLbl;
+  return 'ไม่พบคู่เทียบ';
+}
+const rowCls = s => s==='diff' ? 'row-diff' : (s==='ok' ? '' : 'row-miss');
+
+// ── แยกรหัสสินค้า [XXXX] ออกจากชื่อ — ชื่อสินค้าจาก Odoo มักเป็น "[รหัส] ชื่อ" ──
+// (r.code ที่เก็บไว้คือ Odoo internal id ไม่ใช่รหัสที่คนอ่านรู้เรื่อง จึงดึงจากชื่อแทน)
+function splitCode(name){
+  const m = String(name||'').match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+  if(m && m[2]) return { code: m[1], name: m[2] };
+  return { code: '', name: name || '' };
+}
+
+// ── เซลล์ฝั่งหนึ่ง: รหัส + ชื่อสินค้า + จำนวน + หน่วย (+ บรรทัดรอง เช่น "วางแผน X") ──
+function dataCell(code, name, qtyMain, unit, subText, side){
+  const unitHtml = unit ? ` <span class="unit">${esc(unit)}</span>` : '';
+  const subHtml = subText ? `<div class="qty-sub">${esc(subText)}${unit?' '+esc(unit):''}</div>` : '';
+  return `<div class="cell ${side}">
+    <div class="pname">${code?`<span class="code">${esc(code)}</span><br>`:''}${esc(name||'-')}</div>
+    <div class="qty">${qtyMain}${unitHtml}</div>
+    ${subHtml}
+  </div>`;
+}
+function emptyCell(side){
+  return `<div class="cell empty ${side}"><span>— ไม่มีรายการนี้ —</span></div>`;
+}
+function gridRow(leftHtml, status, rightHtml, leftLbl, rightLbl){
+  return `<div class="cmp-row ${rowCls(status)}">
+    ${leftHtml}
+    <div class="cell mid"><span class="dot ${dotClass(status)}" title="${esc(dotTitle(status,leftLbl,rightLbl))}"></span></div>
+    ${rightHtml}
+  </div>`;
+}
+function cmpEmptyMsg(){
+  return `<div class="cmp-empty">ไม่มีรายการ</div>`;
+}
+
+// ── โหมด 1: เทียบเอกสารกันเอง (SO/PO/PR) — ซ้าย=เอกสาร A, ขวา=เอกสาร B ──
 function renderCompare(rec, d){
   const labelA = (d.typeA||'').toUpperCase() + (d.numA||'');
   const labelB = (d.typeB||'').toUpperCase() + (d.numB||'');
   const rows = d.rows || [];
-  const body = rows.map(r=>`
-    <tr class="${rowClass(r.status)}">
-      <td>${r.code?`<span class="code">${esc(r.code)}</span><br>`:''}<span class="pname">${esc(r.name||'-')}</span></td>
-      <td class="num">${num(r.qtyA)}</td>
-      <td class="num">${num(r.qtyB)}</td>
-      ${deltaCell(r.diff!=null?r.diff:( (+r.qtyA||0)-(+r.qtyB||0) ))}
-      <td>${statusBadge(r.status, labelA, labelB)}</td>
-    </tr>`).join('');
+
+  const body = rows.map(r=>{
+    const p = splitCode(r.name);
+    const left  = (r.status==='missing_a') ? emptyCell('left')  : dataCell(p.code, p.name, num(r.qtyA), r.unit, null, 'left');
+    const right = (r.status==='missing_b') ? emptyCell('right') : dataCell(p.code, p.name, num(r.qtyB), r.unit, null, 'right');
+    return gridRow(left, r.status, right, labelA, labelB);
+  }).join('');
 
   app.innerHTML = `<div class="sheet">
     <div class="band">
@@ -210,21 +259,20 @@ function renderCompare(rec, d){
       ${docCard(labelB, labelB, d.docB)}
     </div>
     ${chips(rows)}
-    <div class="tablewrap"><table>
-      <thead><tr>
-        <th>สินค้า</th>
-        <th class="num">${esc(labelA)}</th>
-        <th class="num">${esc(labelB)}</th>
-        <th class="num">ส่วนต่าง</th>
-        <th>สถานะ</th>
-      </tr></thead>
-      <tbody>${body || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
-    </table></div>
+    ${legend}
+    <div class="cmpwrap"><div class="cmp">
+      <div class="cmp-head">
+        <div class="h">${esc(labelA)}</div>
+        <div class="h"></div>
+        <div class="h right">${esc(labelB)}</div>
+      </div>
+      ${rows.length ? body : cmpEmptyMsg()}
+    </div></div>
     ${footer(rec)}
   </div>`;
 }
 
-// ── โหมด 2: เทียบเอกสารกับใบส่งของ (วางแผน vs ส่งจริง) ──
+// ── โหมด 2: เทียบเอกสารกับใบส่งของ — ซ้าย=PO/SO/PR, ขวา=ใบส่งของ (วางแผน/ส่งจริง) ──
 function renderDelivery(rec, d){
   const labelOther = (d.otherType||'').toUpperCase() + (d.otherNum||'');
   const pk = d.picking || {};
@@ -232,18 +280,20 @@ function renderDelivery(rec, d){
   const rows = d.rows || [];
 
   const body = rows.map(r=>{
-    // รองรับชื่อ key ได้หลายแบบ (วางแผน / ส่งจริง) เผื่อ odoo.js ใช้ชื่อต่างกัน
-    const plan   = pick(r, ['qtyPlan','qtyPlanned','planned','qtyOrder','qtyOther','qtyA','qty_planned'], null);
-    const actual = pick(r, ['qtyActual','qtyDone','qtyDelivered','delivered','qtyPicking','qtyB','qty_done'], null);
-    const diff   = (r.diff!=null) ? r.diff
-                  : ((actual!=null&&plan!=null) ? (+actual - +plan) : null);
-    return `<tr class="${rowClass(r.status)}">
-      <td>${r.code?`<span class="code">${esc(r.code)}</span><br>`:''}<span class="pname">${esc(r.name||'-')}</span></td>
-      <td class="num">${num(plan)}</td>
-      <td class="num">${num(actual)}</td>
-      ${deltaCell(diff)}
-      <td>${statusBadge(r.status, labelOther, labelPick)}</td>
-    </tr>`;
+    const p = splitCode(r.name);
+    const plan = pick(r, ['qtyPlanned','qtyPlan','planned','qty_planned'], 0);
+    const done = pick(r, ['qtyDone','qtyActual','qtyDelivered','qty_done'], 0);
+    const qtyLeft = pick(r, ['qtyOther','qtyA'], 0);
+
+    const left = (r.status==='missing_a') ? emptyCell('left') : dataCell(p.code, p.name, num(qtyLeft), r.unit, null, 'left');
+
+    let right;
+    if(r.status==='missing_b'){
+      right = emptyCell('right');
+    } else {
+      right = dataCell(p.code, p.name, num(done), r.unit, 'วางแผน ' + num(plan), 'right');
+    }
+    return gridRow(left, r.status, right, labelOther, labelPick);
   }).join('');
 
   app.innerHTML = `<div class="sheet">
@@ -260,16 +310,15 @@ function renderDelivery(rec, d){
     </div>
     ${pk.origin?`<div style="padding:10px 18px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)">อ้างอิง: <b style="color:var(--ink)">${esc(pk.origin)}</b></div>`:''}
     ${chips(rows)}
-    <div class="tablewrap"><table>
-      <thead><tr>
-        <th>สินค้า</th>
-        <th class="num">วางแผน</th>
-        <th class="num">ส่งจริง</th>
-        <th class="num">ส่วนต่าง</th>
-        <th>สถานะ</th>
-      </tr></thead>
-      <tbody>${body || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
-    </table></div>
+    ${legend}
+    <div class="cmpwrap"><div class="cmp">
+      <div class="cmp-head">
+        <div class="h">${esc(labelOther)}</div>
+        <div class="h"></div>
+        <div class="h right">ใบส่งของ ${esc(labelPick)}</div>
+      </div>
+      ${rows.length ? body : cmpEmptyMsg()}
+    </div></div>
     ${footer(rec)}
   </div>`;
 }
