@@ -274,10 +274,55 @@ function renderDelivery(rec, d){
   </div>`;
 }
 
+// ── PREVIEW MODE ─────────────────────────────────────────────────────────
+// ไฟล์นี้คือ "compare.html" เวอร์ชันตัวอย่าง — ใส่ข้อมูลจำลองตรงกับเคสจริง
+// (/เทียบ po2606025 ส่งของ กท.1002 12/6 → ตรงกัน 0 / ขาด 6) เพื่อดูหน้าตา
+// ก่อน deploy ไฟล์ compare.html จริง (ที่อ่านจาก Supabase) ขึ้น production
 // ── โหลดข้อมูล ──
 async function load(){
   const id = qp('id');
-  if(!id){ showState('🔎','ไม่พบรหัสเอกสาร','ลิงก์ไม่มีพารามิเตอร์ ?id='); return; }
+
+  // ── โหมดพรีวิว: ไม่มี ?id= → ใช้ข้อมูลจำลองแทนการดึงจาก Supabase ──
+  if(!id){
+    const rec = { title: 'เปรียบเทียบ PO2606025 vs ใบส่งของ', company: 'อาคเนย์' };
+    const d = {
+      mode: 'delivery',
+      otherType: 'po', otherNum: '2606025',
+      otherDoc: {
+        partner_id: [99,'บริษัท วัสดุก่อสร้าง จำกัด'],
+        date_order: '2026-06-08',
+        state: 'purchase',
+        amount_total: 184500
+      },
+      picking: {
+        name: '69 พรบ.กท.1002 กัลปพฤกษ์/11',
+        origin: 'กท.1002',
+        partner: 'คลังสินค้า กท.1002',
+        scheduled_date: '2026-06-12',
+        state: 'assigned'
+      },
+      rows: [
+        { code:'2101', name:'แผ่นการ์ดเรล', qtyPlanned:0, qtyDone:0, qtyOther:40, diff:40, status:'missing_b' },
+        { code:'2102', name:'เหล็กชุบ',       qtyPlanned:0, qtyDone:0, qtyOther:120, diff:120, status:'missing_b' },
+        { code:'2103', name:'ท่อชุบ',         qtyPlanned:0, qtyDone:0, qtyOther:60, diff:60, status:'missing_b' },
+        { code:'2104', name:'เสาไฟ',          qtyPlanned:0, qtyDone:0, qtyOther:24, diff:24, status:'missing_b' },
+        { code:'2105', name:'น็อตตัวผู้',     qtyPlanned:0, qtyDone:0, qtyOther:480, diff:480, status:'missing_b' },
+        { code:'2106', name:'น็อตตัวเมีย',    qtyPlanned:0, qtyDone:0, qtyOther:480, diff:480, status:'missing_b' }
+      ]
+    };
+    if(d.mode === 'delivery') renderDelivery(rec, d);
+    else renderCompare(rec, d);
+    document.title = 'พรีวิว: ' + rec.title;
+
+    // แจ้งว่านี่คือพรีวิว
+    const note = document.createElement('div');
+    note.style.cssText = 'max-width:880px;margin:10px auto 0;font-size:12px;color:#6b7686;text-align:center';
+    note.innerHTML = '⚠️ นี่คือ <b>หน้าตัวอย่าง</b> ใช้ข้อมูลจำลอง — ไม่ได้ดึงจากระบบจริง';
+    app.appendChild(note);
+    return;
+  }
+
+  // ── โหมดจริง: มี ?id= → ดึงจาก Supabase ──
   try{
     const url = `${SB_URL}/rest/v1/delivery_views?id=eq.${encodeURIComponent(id)}&select=id,title,company,status_label,data`;
     const res = await fetch(url, { headers:{ apikey:SB_KEY, Authorization:'Bearer '+SB_KEY } });
