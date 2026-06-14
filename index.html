@@ -1,372 +1,296 @@
+<!-- compare.html v1.0 — หน้าเปรียบเทียบเอกสาร (อ่านจาก Supabase delivery_views) -->
 <!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>เปรียบเทียบเอกสาร — Task Management System</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>เปรียบเทียบเอกสาร</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --ink:#1a1d29; --ink-soft:#5a6072; --line:#e4e7ef; --paper:#ffffff;
-    --bg:#eef1f7; --accent:#e8590c; --accent-soft:#fff1e8;
-    --green:#1f9d55; --green-soft:#e6f7ee; --red:#d6336c; --red-soft:#fff0f4;
-    --gray:#868e96; --gray-soft:#f1f3f5;
+    --ink:#1f2733; --muted:#6b7686; --line:#e3e7ee; --line2:#eef1f5;
+    --paper:#ffffff; --bg:#eceff3;
+    --band:#27344b; --band2:#324563;
+    --ok:#15803d; --ok-bg:#e7f6ec;
+    --diff:#b45309; --diff-bg:#fdf2e3;
+    --miss:#b91c1c; --miss-bg:#fceceb;
+    --accent:#324563;
   }
-  *{margin:0;padding:0;box-sizing:border-box}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
   body{
-    font-family:'IBM Plex Sans Thai','Sarabun',sans-serif;
-    background:var(--bg); color:var(--ink); line-height:1.6;
-    padding:24px 16px; -webkit-font-smoothing:antialiased;
+    font-family:'Sarabun',-apple-system,'Segoe UI',Tahoma,sans-serif;
+    background:var(--bg); color:var(--ink);
+    -webkit-font-smoothing:antialiased; line-height:1.5;
+    padding:16px;
   }
   .sheet{
-    max-width:780px; margin:0 auto; background:var(--paper);
-    border-radius:18px; overflow:hidden;
-    box-shadow:0 4px 24px rgba(26,29,41,.08), 0 1px 3px rgba(26,29,41,.06);
+    max-width:880px; margin:0 auto; background:var(--paper);
+    border-radius:14px; overflow:hidden;
+    box-shadow:0 1px 2px rgba(20,30,50,.05),0 12px 32px rgba(20,30,50,.10);
   }
-  /* header */
-  .head{
-    background:linear-gradient(135deg,#1a1d29 0%,#2d3142 100%);
-    color:#fff; padding:28px 32px; position:relative;
+
+  /* ── หัวกระดาษ ── */
+  .band{ background:linear-gradient(135deg,var(--band),var(--band2)); color:#fff; padding:20px 22px; }
+  .band .kicker{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; opacity:.72; font-weight:600; }
+  .band h1{ margin:4px 0 0; font-size:21px; font-weight:700; line-height:1.3; }
+  .band .co{ margin-top:8px; font-size:14px; opacity:.85; display:flex; gap:8px; flex-wrap:wrap; }
+  .band .co b{ font-weight:600; }
+
+  /* ── การ์ดเอกสาร 2 ฝั่ง ── */
+  .docs{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); }
+  .doc{ background:var(--paper); padding:16px 18px; }
+  .doc .lbl{ font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.04em; }
+  .doc .ref{ font-size:17px; font-weight:700; margin-top:2px; color:var(--accent); word-break:break-all; }
+  .doc .meta{ margin-top:8px; font-size:13px; color:var(--muted); display:grid; gap:3px; }
+  .doc .meta span b{ color:var(--ink); font-weight:500; }
+
+  /* ── แถบสรุป ── */
+  .summary{ display:flex; flex-wrap:wrap; gap:10px; padding:16px 18px; border-top:1px solid var(--line); }
+  .chip{ display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:10px; font-size:14px; font-weight:600; }
+  .chip .n{ font-size:18px; font-weight:700; }
+  .chip.ok{ background:var(--ok-bg); color:var(--ok); }
+  .chip.diff{ background:var(--diff-bg); color:var(--diff); }
+  .chip.miss{ background:var(--miss-bg); color:var(--miss); }
+
+  /* ── ตาราง ── */
+  .tablewrap{ padding:6px 12px 12px; overflow-x:auto; }
+  table{ width:100%; border-collapse:collapse; font-size:14px; }
+  thead th{
+    position:sticky; top:0; background:#f7f9fc; color:var(--muted);
+    font-weight:600; font-size:12.5px; text-align:left; padding:10px 10px;
+    border-bottom:2px solid var(--line); white-space:nowrap;
   }
-  .head::after{
-    content:''; position:absolute; left:0; bottom:0; width:100%; height:4px;
-    background:linear-gradient(90deg,var(--accent),#ffa94d);
+  th.num,td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+  tbody td{ padding:11px 10px; border-bottom:1px solid var(--line2); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr.r-miss{ background:#fdf6f5; }
+  tbody tr.r-diff{ background:#fdfaf2; }
+  .code{ font-size:12px; color:var(--muted); font-family:ui-monospace,monospace; }
+  .pname{ font-weight:500; }
+  .badge{ display:inline-block; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; }
+  .badge.ok{ background:var(--ok-bg); color:var(--ok); }
+  .badge.diff{ background:var(--diff-bg); color:var(--diff); }
+  .badge.miss{ background:var(--miss-bg); color:var(--miss); }
+  .delta{ font-weight:600; }
+  .delta.up{ color:var(--miss); }
+  .delta.down{ color:var(--diff); }
+  .delta.zero{ color:var(--ok); }
+
+  /* ── footer / ปุ่ม ── */
+  .foot{ padding:14px 18px 18px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .foot .gen{ font-size:12px; color:var(--muted); }
+  .btn{ appearance:none; border:1px solid var(--accent); background:var(--accent); color:#fff;
+    font-family:inherit; font-size:14px; font-weight:600; padding:9px 18px; border-radius:9px; cursor:pointer; }
+  .btn:active{ transform:translateY(1px); }
+
+  .state{ max-width:520px; margin:48px auto; text-align:center; background:var(--paper);
+    border-radius:14px; padding:40px 28px; box-shadow:0 10px 30px rgba(20,30,50,.08); }
+  .state .em{ font-size:40px; }
+  .state h2{ margin:12px 0 6px; font-size:19px; }
+  .state p{ margin:0; color:var(--muted); font-size:14px; }
+  .spin{ width:30px; height:30px; border:3px solid var(--line); border-top-color:var(--accent);
+    border-radius:50%; animation:sp 0.8s linear infinite; margin:0 auto; }
+  @keyframes sp{ to{ transform:rotate(360deg) } }
+
+  @media (max-width:560px){
+    body{ padding:8px; }
+    .docs{ grid-template-columns:1fr; }
+    .band h1{ font-size:19px; }
+    thead th,tbody td{ padding:9px 7px; }
   }
-  .head h1{font-size:24px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px}
-  .head .sub{font-size:13px; color:#aeb4c4; font-weight:400}
-  .head .proj{font-size:16px; font-weight:600; color:#ffd8a8; margin-top:10px}
-  /* summary bar */
-  .summary{
-    display:flex; flex-wrap:wrap; gap:10px; padding:18px 32px;
-    background:var(--gray-soft); border-bottom:1px solid var(--line);
-  }
-  .chip{
-    display:inline-flex; align-items:center; gap:6px;
-    padding:6px 14px; border-radius:999px; font-size:13px; font-weight:600;
-    background:#fff; border:1px solid var(--line);
-  }
-  .chip b{font-weight:700}
-  .chip.total{background:var(--ink); color:#fff; border-color:var(--ink)}
-  .chip.pending{background:var(--green-soft); color:var(--green); border-color:transparent}
-  .chip.done{background:var(--red-soft); color:var(--red); border-color:transparent}
-  /* body */
-  .body{padding:8px 32px 32px}
-  .card{
-    border:1px solid var(--line); border-radius:14px; margin-top:20px;
-    overflow:hidden;
-  }
-  .card-head{
-    display:flex; align-items:flex-start; justify-content:space-between;
-    gap:12px; padding:16px 18px; background:#fafbfc; border-bottom:1px solid var(--line);
-  }
-  .card-no{
-    flex:0 0 auto; width:30px; height:30px; border-radius:9px;
-    background:var(--ink); color:#fff; font-weight:700; font-size:14px;
-    display:flex; align-items:center; justify-content:center;
-  }
-  .card-title{flex:1; min-width:0}
-  .card-title .name{font-size:16px; font-weight:700; word-break:break-word}
-  .badge{
-    flex:0 0 auto; padding:5px 12px; border-radius:8px;
-    font-size:12.5px; font-weight:700; white-space:nowrap;
-  }
-  .badge.pending{background:var(--green-soft); color:var(--green)}
-  .badge.done{background:var(--red-soft); color:var(--red)}
-  .badge.gray{background:var(--gray-soft); color:var(--gray)}
-  .meta{padding:14px 18px; display:grid; gap:7px; border-bottom:1px solid var(--line)}
-  .meta-row{display:flex; gap:8px; font-size:14px}
-  .meta-row .k{color:var(--ink-soft); flex:0 0 auto; min-width:62px}
-  .meta-row .v{color:var(--ink); font-weight:500; word-break:break-word}
-  /* product table */
-  .items{padding:6px 0}
-  .items-h{
-    padding:10px 18px 6px; font-size:13px; font-weight:700;
-    color:var(--ink-soft); text-transform:none;
-  }
-  .item{
-    display:grid; grid-template-columns:1fr auto; gap:4px 14px;
-    padding:11px 18px; border-top:1px solid var(--line); align-items:start;
-  }
-  .item:first-of-type{border-top:none}
-  .item .pcode{
-    grid-column:1/-1; font-size:12px; color:var(--accent);
-    font-weight:600; font-family:'Sarabun',monospace; letter-spacing:.02em;
-  }
-  .item .pname{font-size:14px; color:var(--ink); word-break:break-word}
-  .item .pqty{
-    font-size:14px; font-weight:700; color:var(--ink);
-    white-space:nowrap; text-align:right; align-self:center;
-  }
-  /* footer */
-  .foot{
-    padding:20px 32px; text-align:center; color:var(--ink-soft);
-    font-size:12.5px; border-top:1px solid var(--line); background:#fafbfc;
-  }
-  .foot .print-btn{
-    display:inline-flex; align-items:center; gap:7px; margin-bottom:12px;
-    padding:10px 22px; border-radius:10px; border:none; cursor:pointer;
-    background:var(--accent); color:#fff; font-size:14px; font-weight:600;
-    font-family:inherit; transition:transform .12s, box-shadow .12s;
-  }
-  .foot .print-btn:hover{transform:translateY(-1px); box-shadow:0 4px 12px rgba(232,89,12,.3)}
-  /* states */
-  .loading,.error{
-    max-width:780px; margin:60px auto; text-align:center;
-    color:var(--ink-soft); font-size:15px;
-  }
-  .error{color:var(--red)}
-  .spinner{
-    width:32px; height:32px; margin:0 auto 16px; border-radius:50%;
-    border:3px solid var(--line); border-top-color:var(--accent);
-    animation:spin .8s linear infinite;
-  }
-  @keyframes spin{to{transform:rotate(360deg)}}
-  /* print */
   @media print{
-    body{background:#fff; padding:0}
-    .sheet{box-shadow:none; border-radius:0; max-width:100%}
-    .foot .print-btn{display:none}
-    .card{break-inside:avoid}
+    body{ background:#fff; padding:0; }
+    .sheet{ box-shadow:none; border-radius:0; max-width:none; }
+    .btn{ display:none; }
+    thead th{ position:static; }
+    tbody tr.r-miss,tbody tr.r-diff{ background:#fff; }
   }
-  @media(max-width:520px){
-    body{padding:12px 8px}
-    .head,.summary,.body,.foot{padding-left:18px; padding-right:18px}
-  }
-  /* doc info cards */
-  .docs{display:grid; grid-template-columns:1fr 1fr; gap:14px; padding:18px 32px 4px}
-  .doc-card{border:1px solid var(--line); border-radius:12px; padding:14px 16px}
-  .doc-card .dlabel{
-    display:inline-block; font-size:12px; font-weight:700; padding:3px 10px;
-    border-radius:6px; background:var(--ink); color:#fff; margin-bottom:8px;
-  }
-  .doc-card .dname{font-size:15px; font-weight:700; margin-bottom:6px; word-break:break-word}
-  .doc-card .drow{font-size:12.5px; color:var(--ink-soft); display:flex; gap:6px; margin-top:3px}
-  .doc-card .drow b{color:var(--ink); font-weight:600}
-  /* compare table */
-  .ctable-wrap{padding:18px 32px 4px; overflow-x:auto}
-  .note{
-    padding:0 32px 18px; font-size:12px; color:var(--ink-soft); line-height:1.7;
-  }
-  .note b{color:var(--ink)}  table.ctable{width:100%; border-collapse:collapse; font-size:13px; min-width:480px}
-  table.ctable th{
-    background:var(--ink); color:#fff; text-align:left; padding:10px 12px;
-    font-weight:600; font-size:12.5px; white-space:nowrap;
-  }
-  table.ctable th.num, table.ctable td.num{text-align:right}
-  table.ctable td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top}
-  table.ctable tr:last-child td{border-bottom:none}
-  table.ctable .pcode{font-size:11px; color:var(--accent); font-weight:600; display:block; margin-bottom:2px}
-  table.ctable tr.diff td{background:#fff9e8}
-  table.ctable tr.missing td{background:var(--red-soft)}
-  table.ctable .stt{font-weight:700; font-size:12px; white-space:nowrap}
-  table.ctable tr.ok .stt{color:var(--green)}
-  table.ctable tr.diff .stt{color:#e8a317}
-  table.ctable tr.missing .stt{color:var(--red)}
-  @media print{ .ctable-wrap{overflow-x:visible} }
-  @media(max-width:680px){ .docs{grid-template-columns:1fr} }
 </style>
 </head>
 <body>
-  <div id="app">
-    <div class="loading">
-      <div class="spinner"></div>
-      กำลังโหลดข้อมูลเปรียบเทียบ...
-    </div>
-  </div>
+<div id="app">
+  <div class="state"><div class="spin"></div><h2 style="margin-top:16px">กำลังโหลดข้อมูล…</h2></div>
+</div>
 
 <script>
-const SUPABASE_URL = 'https://rvdboyrusmrjzurukwja.supabase.co';
-const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZGJveXJ1c21yanp1cnVrd2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTQ3MDEsImV4cCI6MjA5NTgzMDcwMX0.UxP6ZlJ41DxxG_ofA6ge43XIfm6BMIOARvmsn1gDtrQ';
+const SB_URL = 'https://rvdboyrusmrjzurukwja.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZGJveXJ1c21yanp1cnVrd2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTQ3MDEsImV4cCI6MjA5NTgzMDcwMX0.UxP6ZlJ41DxxG_ofA6ge43XIfm6BMIOARvmsn1gDtrQ';
 
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const app = document.getElementById('app');
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num = n => (n==null||n==='') ? '–' : (isFinite(+n) ? (+n).toLocaleString('th-TH',{maximumFractionDigits:2}) : esc(n));
+const qp  = k => new URLSearchParams(location.search).get(k);
 
-function fmtNum(n){ return (n||0).toLocaleString('th-TH', {maximumFractionDigits:2}); }
-
-
-function docCard(doc, label, type){
-  if(!doc) return '<div class="doc-card"><div class="dlabel">'+esc(label)+'</div><div class="dname">ไม่พบเอกสาร</div></div>';
-  const partner = Array.isArray(doc.partner_id) ? doc.partner_id[1]
-                : Array.isArray(doc.requested_by) ? doc.requested_by[1] : '';
-  const date = doc.date_order || doc.date_start || '';
-  let html = '<div class="doc-card">'+
-    '<div class="dlabel">'+esc(label)+'</div>'+
-    '<div class="dname">'+esc(doc.name||'-')+'</div>';
-  if(partner) html += '<div class="drow"><b>'+(type==='po'?'ผู้ขาย':type==='pr'?'ผู้ขอ':'ลูกค้า')+':</b> '+esc(partner)+'</div>';
-  if(date) html += '<div class="drow"><b>วันที่:</b> '+esc(String(date).slice(0,10))+'</div>';
-  if(doc.amount_total) html += '<div class="drow"><b>ยอดรวม:</b> '+fmtNum(doc.amount_total)+' บาท</div>';
-  html += '</div>';
-  return html;
+function showState(em, title, msg){
+  app.innerHTML = `<div class="state"><div class="em">${em}</div><h2>${esc(title)}</h2><p>${esc(msg||'')}</p></div>`;
 }
 
-function pickingCard(picking, label){
-  if(!picking) return '<div class="doc-card"><div class="dlabel">'+esc(label)+'</div><div class="dname">ไม่พบใบส่งของ</div></div>';
-  const stMap = {done:'ส่งแล้ว', cancel:'ยกเลิก', draft:'รอส่ง', confirmed:'รอส่ง', assigned:'พร้อมส่ง'};
-  const stLabel = stMap[picking.state] || 'รอส่ง';
-  let html = '<div class="doc-card">'+
-    '<div class="dlabel">'+esc(label)+'</div>'+
-    '<div class="dname">'+esc(picking.name||'-')+'</div>';
-  if(picking.origin) html += '<div class="drow"><b>โครงการ:</b> '+esc(picking.origin)+'</div>';
-  if(picking.partner) html += '<div class="drow"><b>ปลายทาง:</b> '+esc(picking.partner)+'</div>';
-  if(picking.scheduled_date) html += '<div class="drow"><b>วันที่:</b> '+esc(String(picking.scheduled_date).slice(0,10))+'</div>';
-  html += '<div class="drow"><b>สถานะ:</b> '+esc(stLabel)+'</div>';
-  html += '</div>';
-  return html;
+// ── ดึง field แรกที่มีค่า (ใช้รองรับชื่อ key ที่อาจต่างกันในโหมดใบส่งของ) ──
+function pick(obj, keys, dflt){
+  for(const k of keys){ if(obj && obj[k]!=null && obj[k]!=='') return obj[k]; }
+  return dflt;
 }
 
-function render(d){
-  const data = d.data || {};
-  if(data.mode === 'delivery') return renderDeliveryMode(d, data);
-  return renderSimpleMode(d, data);
+function deltaCell(d){
+  if(d==null || d==='' || !isFinite(+d)) return '<td class="num">–</td>';
+  const v = +d;
+  if(v===0) return '<td class="num"><span class="delta zero">0</span></td>';
+  const cls = v>0 ? 'up' : 'down';
+  const arrow = v>0 ? '▲' : '▼';
+  return `<td class="num"><span class="delta ${cls}">${arrow} ${num(Math.abs(v))}</span></td>`;
 }
 
-// ── เทียบ SO/PO/PR กับใบส่งของ ──────────────────────────────────────────────
-function renderDeliveryMode(d, data){
-  const rows = data.rows || [];
-  const labelOther = (data.otherType||'').toUpperCase() + (data.otherNum||'');
+function statusBadge(s, labelA, labelB){
+  switch(s){
+    case 'ok':        return '<span class="badge ok">ตรงกัน</span>';
+    case 'diff':      return '<span class="badge diff">ต่างกัน</span>';
+    case 'missing_a': return `<span class="badge miss">ไม่มีใน ${esc(labelA)}</span>`;
+    case 'missing_b': return `<span class="badge miss">ไม่มีใน ${esc(labelB)}</span>`;
+    case 'missing':   return '<span class="badge miss">ขาด</span>';
+    default:          return `<span class="badge">${esc(s||'-')}</span>`;
+  }
+}
+const rowClass = s => s==='ok' ? '' : (s==='diff' ? 'r-diff' : 'r-miss');
 
-  const cntOk   = rows.filter(r=>r.status==='ok').length;
-  const cntDiff = rows.filter(r=>r.status==='diff').length;
-  const cntMis  = rows.filter(r=>r.status==='missing_a' || r.status==='missing_b').length;
+function docCard(lbl, ref, doc){
+  const m = [];
+  const partner = Array.isArray(doc?.partner_id) ? doc.partner_id[1] : (doc?.partner||doc?.partner_id);
+  const date = doc?.date_order || doc?.date_start || doc?.scheduled_date;
+  if(partner) m.push(`<span>คู่ค้า: <b>${esc(partner)}</b></span>`);
+  if(date)    m.push(`<span>วันที่: <b>${esc(String(date).slice(0,10))}</b></span>`);
+  if(doc?.state) m.push(`<span>สถานะ: <b>${esc(doc.state)}</b></span>`);
+  if(doc?.amount_total!=null) m.push(`<span>ยอดรวม: <b>${num(doc.amount_total)}</b></span>`);
+  return `<div class="doc"><div class="lbl">${esc(lbl)}</div><div class="ref">${esc(ref)}</div>
+    <div class="meta">${m.join('')}</div></div>`;
+}
 
-  let chips = '<span class="chip total">รวม <b>'+rows.length+'</b> รายการ</span>';
-  chips += '<span class="chip pending">ตรงกัน <b>'+cntOk+'</b></span>';
-  if(cntDiff) chips += '<span class="chip" style="background:#fff9e8;color:#e8a317">ต่างกัน <b>'+cntDiff+'</b></span>';
-  if(cntMis)  chips += '<span class="chip done">ขาด <b>'+cntMis+'</b></span>';
+function chips(rows){
+  const ok = rows.filter(r=>r.status==='ok').length;
+  const df = rows.filter(r=>r.status==='diff').length;
+  const ms = rows.filter(r=>r.status==='missing_a'||r.status==='missing_b'||r.status==='missing').length;
+  let h = `<span class="chip ok">✅ ตรงกัน <span class="n">${ok}</span></span>`;
+  if(df) h += `<span class="chip diff">⚠️ ต่างกัน <span class="n">${df}</span></span>`;
+  if(ms) h += `<span class="chip miss">❌ ขาด <span class="n">${ms}</span></span>`;
+  return `<div class="summary">${h}</div>`;
+}
 
-  const statusLabel = (st) => {
-    if(st==='ok') return '✅ ตรงกัน';
-    if(st==='diff') return '⚠️ ต่างกัน';
-    if(st==='missing_a') return '❌ ไม่มีใน '+esc(labelOther);
-    if(st==='missing_b') return '❌ ไม่มีในใบส่งของ';
-    return st;
-  };
-  const trClass = (st) => st==='ok' ? 'ok' : (st==='diff' ? 'diff' : 'missing');
+function footer(rec){
+  const when = new Date().toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'});
+  return `<div class="foot">
+    <div class="gen">สร้างเมื่อเปิดหน้า ${esc(when)}${rec.company?' · '+esc(rec.company):''}</div>
+    <button class="btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>
+  </div>`;
+}
 
-  let tableRows = rows.map(r=>{
-    return '<tr class="'+trClass(r.status)+'">'+
-      '<td>'+(r.code?'<span class="pcode">'+esc(r.code)+'</span>':'')+esc(r.name||'-')+'</td>'+
-      '<td class="num">'+fmtNum(r.qtyOther)+'</td>'+
-      '<td class="num">'+fmtNum(r.qtyPlanned)+'</td>'+
-      '<td class="num">'+fmtNum(r.qtyDone)+'</td>'+
-      '<td class="num">'+(r.diff>0?'+':'')+fmtNum(r.diff)+'</td>'+
-      '<td class="stt">'+statusLabel(r.status)+'</td>'+
-    '</tr>';
+// ── โหมด 1: เทียบเอกสารกันเอง (SO/PO/PR) ──
+function renderCompare(rec, d){
+  const labelA = (d.typeA||'').toUpperCase() + (d.numA||'');
+  const labelB = (d.typeB||'').toUpperCase() + (d.numB||'');
+  const rows = d.rows || [];
+  const body = rows.map(r=>`
+    <tr class="${rowClass(r.status)}">
+      <td>${r.code?`<span class="code">${esc(r.code)}</span><br>`:''}<span class="pname">${esc(r.name||'-')}</span></td>
+      <td class="num">${num(r.qtyA)}</td>
+      <td class="num">${num(r.qtyB)}</td>
+      ${deltaCell(r.diff!=null?r.diff:( (+r.qtyA||0)-(+r.qtyB||0) ))}
+      <td>${statusBadge(r.status, labelA, labelB)}</td>
+    </tr>`).join('');
+
+  app.innerHTML = `<div class="sheet">
+    <div class="band">
+      <div class="kicker">เปรียบเทียบเอกสาร</div>
+      <h1>${esc(labelA)} <span style="opacity:.6">เทียบกับ</span> ${esc(labelB)}</h1>
+      ${rec.company?`<div class="co"><b>บริษัท:</b> ${esc(rec.company)}</div>`:''}
+    </div>
+    <div class="docs">
+      ${docCard(labelA, labelA, d.docA)}
+      ${docCard(labelB, labelB, d.docB)}
+    </div>
+    ${chips(rows)}
+    <div class="tablewrap"><table>
+      <thead><tr>
+        <th>สินค้า</th>
+        <th class="num">${esc(labelA)}</th>
+        <th class="num">${esc(labelB)}</th>
+        <th class="num">ส่วนต่าง</th>
+        <th>สถานะ</th>
+      </tr></thead>
+      <tbody>${body || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
+    </table></div>
+    ${footer(rec)}
+  </div>`;
+}
+
+// ── โหมด 2: เทียบเอกสารกับใบส่งของ (วางแผน vs ส่งจริง) ──
+function renderDelivery(rec, d){
+  const labelOther = (d.otherType||'').toUpperCase() + (d.otherNum||'');
+  const pk = d.picking || {};
+  const labelPick = pk.name || 'ใบส่งของ';
+  const rows = d.rows || [];
+
+  const body = rows.map(r=>{
+    // รองรับชื่อ key ได้หลายแบบ (วางแผน / ส่งจริง) เผื่อ odoo.js ใช้ชื่อต่างกัน
+    const plan   = pick(r, ['qtyPlan','qtyPlanned','planned','qtyOrder','qtyOther','qtyA','qty_planned'], null);
+    const actual = pick(r, ['qtyActual','qtyDone','qtyDelivered','delivered','qtyPicking','qtyB','qty_done'], null);
+    const diff   = (r.diff!=null) ? r.diff
+                  : ((actual!=null&&plan!=null) ? (+actual - +plan) : null);
+    return `<tr class="${rowClass(r.status)}">
+      <td>${r.code?`<span class="code">${esc(r.code)}</span><br>`:''}<span class="pname">${esc(r.name||'-')}</span></td>
+      <td class="num">${num(plan)}</td>
+      <td class="num">${num(actual)}</td>
+      ${deltaCell(diff)}
+      <td>${statusBadge(r.status, labelOther, labelPick)}</td>
+    </tr>`;
   }).join('');
 
-  document.getElementById('app').innerHTML =
-    '<div class="sheet">'+
-      '<div class="head">'+
-        '<h1>'+esc(d.title||'เปรียบเทียบเอกสาร')+'</h1>'+
-        '<div class="sub">Task Management System — ดึงข้อมูลจาก Odoo</div>'+
-        (d.status_label?'<div class="proj">บริษัท: '+esc(d.status_label)+'</div>':'')+
-      '</div>'+
-      '<div class="summary">'+chips+'</div>'+
-      '<div class="docs">'+
-        docCard(data.otherDoc, labelOther, data.otherType)+
-        pickingCard(data.picking, 'ใบส่งของ')+
-      '</div>'+
-      '<div class="ctable-wrap"><table class="ctable">'+
-        '<thead><tr>'+
-          '<th>สินค้า</th>'+
-          '<th class="num">'+esc(labelOther)+'</th>'+
-          '<th class="num">ส่งของ (วางแผน)</th>'+
-          '<th class="num">ส่งของ (ส่งจริง)</th>'+
-          '<th class="num">ผลต่าง</th>'+
-          '<th>สถานะ</th>'+
-        '</tr></thead>'+
-        '<tbody>'+(tableRows||'<tr><td colspan="6" style="text-align:center;color:var(--ink-soft)">ไม่มีรายการ</td></tr>')+'</tbody>'+
-      '</table></div>'+
-      '<div class="note">'+
-        'หมายเหตุ: คอลัมน์ <b>ผลต่าง</b> และ <b>สถานะ</b> คำนวณจากจำนวน <b>"ส่งจริง"</b> เทียบกับ '+esc(labelOther)+' '+
-        '(คอลัมน์ "วางแผน" แสดงไว้เพื่อเทียบเฉยๆ ไม่ได้ใช้คำนวณ)'+
-      '</div>'+
-      '<div class="foot">'+
-        '<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>'+
-        '<div>พิมพ์เมื่อ '+new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})+'</div>'+
-      '</div>'+
-    '</div>';
-  document.title = (d.title||'เปรียบเทียบเอกสาร')+' — TMS';
+  app.innerHTML = `<div class="sheet">
+    <div class="band">
+      <div class="kicker">เปรียบเทียบกับใบส่งของ</div>
+      <h1>${esc(labelOther)} <span style="opacity:.6">เทียบกับ</span> ใบส่งของ ${esc(labelPick)}</h1>
+      ${rec.company?`<div class="co"><b>บริษัท:</b> ${esc(rec.company)}</div>`:''}
+    </div>
+    <div class="docs">
+      ${docCard(labelOther, labelOther, d.otherDoc)}
+      ${docCard('ใบส่งของ', labelPick, {
+        partner: pk.partner, scheduled_date: pk.scheduled_date, state: pk.state
+      })}
+    </div>
+    ${pk.origin?`<div style="padding:10px 18px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)">อ้างอิง: <b style="color:var(--ink)">${esc(pk.origin)}</b></div>`:''}
+    ${chips(rows)}
+    <div class="tablewrap"><table>
+      <thead><tr>
+        <th>สินค้า</th>
+        <th class="num">วางแผน</th>
+        <th class="num">ส่งจริง</th>
+        <th class="num">ส่วนต่าง</th>
+        <th>สถานะ</th>
+      </tr></thead>
+      <tbody>${body || `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
+    </table></div>
+    ${footer(rec)}
+  </div>`;
 }
 
-// ── เทียบ SO/PO/PR กันเอง ────────────────────────────────────────────────────
-function renderSimpleMode(d, data){
-  const rows = data.rows || [];
-  const labelA = (data.typeA||'').toUpperCase() + (data.numA||'');
-  const labelB = (data.typeB||'').toUpperCase() + (data.numB||'');
-
-  const cntOk   = rows.filter(r=>r.status==='ok').length;
-  const cntDiff = rows.filter(r=>r.status==='diff').length;
-  const cntMis  = rows.filter(r=>r.status==='missing_a' || r.status==='missing_b').length;
-
-  let chips = '<span class="chip total">รวม <b>'+rows.length+'</b> รายการ</span>';
-  chips += '<span class="chip pending">ตรงกัน <b>'+cntOk+'</b></span>';
-  if(cntDiff) chips += '<span class="chip" style="background:#fff9e8;color:#e8a317">ต่างกัน <b>'+cntDiff+'</b></span>';
-  if(cntMis)  chips += '<span class="chip done">ขาด <b>'+cntMis+'</b></span>';
-
-  const statusLabel = (st) => {
-    if(st==='ok') return '✅ ตรงกัน';
-    if(st==='diff') return '⚠️ ต่างกัน';
-    if(st==='missing_a') return '❌ ไม่มีใน '+esc(labelA);
-    if(st==='missing_b') return '❌ ไม่มีใน '+esc(labelB);
-    return st;
-  };
-
-  const trClass = (st) => st==='ok' ? 'ok' : (st==='diff' ? 'diff' : 'missing');
-
-  let tableRows = rows.map(r=>{
-    return '<tr class="'+trClass(r.status)+'">'+
-      '<td>'+(r.code?'<span class="pcode">'+esc(r.code)+'</span>':'')+esc(r.name||'-')+'</td>'+
-      '<td class="num">'+fmtNum(r.qtyA)+'</td>'+
-      '<td class="num">'+fmtNum(r.qtyB)+'</td>'+
-      '<td class="num">'+(r.diff>0?'+':'')+fmtNum(r.diff)+'</td>'+
-      '<td class="stt">'+statusLabel(r.status)+'</td>'+
-    '</tr>';
-  }).join('');
-
-  document.getElementById('app').innerHTML =
-    '<div class="sheet">'+
-      '<div class="head">'+
-        '<h1>'+esc(d.title||'เปรียบเทียบเอกสาร')+'</h1>'+
-        '<div class="sub">Task Management System — ดึงข้อมูลจาก Odoo</div>'+
-        (d.status_label?'<div class="proj">บริษัท: '+esc(d.status_label)+'</div>':'')+
-      '</div>'+
-      '<div class="summary">'+chips+'</div>'+
-      '<div class="docs">'+
-        docCard(data.docA, labelA, data.typeA)+
-        docCard(data.docB, labelB, data.typeB)+
-      '</div>'+
-      '<div class="ctable-wrap"><table class="ctable">'+
-        '<thead><tr>'+
-          '<th>สินค้า</th>'+
-          '<th class="num">'+esc(labelA)+'</th>'+
-          '<th class="num">'+esc(labelB)+'</th>'+
-          '<th class="num">ผลต่าง</th>'+
-          '<th>สถานะ</th>'+
-        '</tr></thead>'+
-        '<tbody>'+(tableRows||'<tr><td colspan="5" style="text-align:center;color:var(--ink-soft)">ไม่มีรายการ</td></tr>')+'</tbody>'+
-      '</table></div>'+
-      '<div class="foot">'+
-        '<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>'+
-        '<div>พิมพ์เมื่อ '+new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})+'</div>'+
-      '</div>'+
-    '</div>';
-  document.title = (d.title||'เปรียบเทียบเอกสาร')+' — TMS';
-}
-
+// ── โหลดข้อมูล ──
 async function load(){
-  const id = new URLSearchParams(location.search).get('id');
-  if(!id){ document.getElementById('app').innerHTML='<div class="error">ไม่พบรหัสข้อมูลเปรียบเทียบ</div>'; return; }
+  const id = qp('id');
+  if(!id){ showState('🔎','ไม่พบรหัสเอกสาร','ลิงก์ไม่มีพารามิเตอร์ ?id='); return; }
   try{
-    const r = await fetch(SUPABASE_URL+'/rest/v1/delivery_views?id=eq.'+encodeURIComponent(id)+'&select=*',{
-      headers:{ apikey:SUPABASE_ANON, Authorization:'Bearer '+SUPABASE_ANON }
-    });
-    const rows = await r.json();
-    if(!rows || !rows.length){ document.getElementById('app').innerHTML='<div class="error">ไม่พบข้อมูลนี้ (อาจหมดอายุแล้ว)</div>'; return; }
-    render(rows[0]);
+    const url = `${SB_URL}/rest/v1/delivery_views?id=eq.${encodeURIComponent(id)}&select=id,title,company,status_label,data`;
+    const res = await fetch(url, { headers:{ apikey:SB_KEY, Authorization:'Bearer '+SB_KEY } });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const arr = await res.json();
+    if(!arr || !arr.length){ showState('📭','ไม่พบข้อมูล','เอกสารนี้อาจหมดอายุ (เก็บ 30 วัน) หรือรหัสไม่ถูกต้อง'); return; }
+    const rec = arr[0];
+    const d = rec.data || {};
+    if(d.mode === 'delivery') renderDelivery(rec, d);
+    else renderCompare(rec, d);
+    document.title = rec.title || 'เปรียบเทียบเอกสาร';
   }catch(e){
-    document.getElementById('app').innerHTML='<div class="error">โหลดไม่สำเร็จ: '+esc(e.message)+'</div>';
+    showState('⚠️','โหลดข้อมูลไม่สำเร็จ', e.message);
   }
 }
 load();
