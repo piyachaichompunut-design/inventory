@@ -231,7 +231,7 @@ export async function odooPO(poNumber, companyId) {
     o.lines = await searchRead(
       'purchase.order.line',
       [['order_id', '=', o.id]],
-      ['product_id', 'product_qty', 'qty_received', 'price_unit', 'price_subtotal'],
+      ['product_id', 'product_qty', 'qty_received', 'price_unit', 'price_subtotal', 'product_uom'],
       50
     );
   }
@@ -265,7 +265,7 @@ export async function odooSO(soNumber, companyId) {
       o.lines = await searchRead(
         'sale.order.line',
         [['order_id', '=', o.id]],
-        ['product_id', 'product_uom_qty', 'qty_delivered', 'price_unit', 'price_subtotal'],
+        ['product_id', 'product_uom_qty', 'qty_delivered', 'price_unit', 'price_subtotal', 'product_uom'],
         50
       );
     } catch (e) { o.lines = []; }
@@ -296,7 +296,7 @@ export async function odooPR(prNumber, companyId) {
 
 // ── เทียบสินค้าระหว่าง 2 เอกสาร (SO/PO/SO vs SO ฯลฯ) ──────────────────────────
 // คืน { docA, docB, rows: [{code,name,qtyA,qtyB,diff,status}] }
-// ── normalize รายการสินค้าของเอกสาร SO/PO/PR → { code, name, qty } ────────────
+// ── normalize รายการสินค้าของเอกสาร SO/PO/PR → { code, name, unit, qty } ──────
 export function normalizeDocLines(doc, type) {
   const lines = doc.lines || [];
   return lines.map(l => {
@@ -304,22 +304,25 @@ export function normalizeDocLines(doc, type) {
     const code = prod[0] ? String(prod[0]) : '';
     const name = prod[1] || l.name || '';
     let qty = 0;
-    if (type === 'so') qty = l.product_uom_qty || 0;
-    else if (type === 'po') qty = l.product_qty || 0;
-    else if (type === 'pr') qty = l.product_qty || 0;
-    return { code, name, qty: +qty };
+    let uomField = null;
+    if (type === 'so') { qty = l.product_uom_qty || 0; uomField = l.product_uom; }
+    else if (type === 'po') { qty = l.product_qty || 0; uomField = l.product_uom; }
+    else if (type === 'pr') { qty = l.product_qty || 0; uomField = l.product_uom_id; }
+    const unit = Array.isArray(uomField) ? (uomField[1] || '') : '';
+    return { code, name, unit, qty: +qty };
   });
 }
 
-// ── normalize รายการสินค้าของใบส่งของ (stock.picking) → { code, name, qtyPlanned, qtyDone } ──
+// ── normalize รายการสินค้าของใบส่งของ (stock.picking) → { code, name, unit, qtyPlanned, qtyDone } ──
 export function normalizePickingLines(picking) {
   const lines = picking.lines || [];
   return lines.map(l => {
     const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
     const code = prod[0] ? String(prod[0]) : '';
     const name = prod[1] || l.name || '';
+    const unit = Array.isArray(l.product_uom) ? (l.product_uom[1] || '') : '';
     return {
-      code, name,
+      code, name, unit,
       qtyPlanned: +(l.product_uom_qty || 0),
       qtyDone: +(l.quantity || 0)
     };
@@ -365,6 +368,7 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
     rows.push({
       code: (a || b).code,
       name: (a || b).name,
+      unit: (a || b).unit || '',
       qtyA, qtyB, diff, status
     });
   }
@@ -379,7 +383,7 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
 
 // ── เทียบเอกสาร SO/PO/PR กับใบส่งของ (stock.picking) ──────────────────────────
 // คืน { otherDoc, otherType, otherNum, picking, rows }
-// rows: { code, name, qtyOther, qtyPlanned, qtyDone, diff, status }
+// rows: { code, name, unit, qtyOther, qtyPlanned, qtyDone, diff, status }
 //   diff/status คำนวณจาก qtyOther เทียบ qtyDone (จำนวนที่ส่งจริง)
 export async function odooCompareWithDelivery(otherType, otherNum, picking, companyId) {
   const fetchDoc = async (type, num) => {
@@ -417,6 +421,7 @@ export async function odooCompareWithDelivery(otherType, otherNum, picking, comp
     rows.push({
       code: (o || p).code,
       name: (o || p).name,
+      unit: (o || p).unit || '',
       qtyOther, qtyPlanned, qtyDone, diff, status
     });
   }
