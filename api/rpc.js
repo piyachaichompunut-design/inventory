@@ -969,7 +969,7 @@ async function handleTelegramCommand(text) {
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '🧾 /so [เลข SO] — ดูใบสั่งขายจาก Odoo เช่น /so 2606007\n' +
       '📄 /pr [เลข PR] — ดูใบขอซื้อจาก Odoo เช่น /pr PR01881\n' +
-      '🚚 /ส่งของ [ชื่อโครงการ] — ดูใบส่งของจาก Odoo เช่น /ส่งของ อุตรดิตถ์\n' +
+      '🚚 /ใบส่งของ [ชื่อโครงการ] — ดูใบส่งของจาก Odoo เช่น /ใบส่งของ อุตรดิตถ์\n' +
       '👤 /ข้อมูล [ชื่อ] — วันลาคงเหลือ + รายการลาของพนักงาน เช่น /ข้อมูล สมชาย'
     );
   }
@@ -1565,10 +1565,10 @@ async function handleTelegramCommand(text) {
     }
   }
 
-  // ── /ส่งของ [ชื่อโครงการ/เลขใบ] — ดูใบส่งของจาก Odoo ──────────────────
-  if (cleaned.startsWith('/ส่งของ') || cleaned.startsWith('/จัดส่ง') || lower.startsWith('/delivery')) {
-    const kw = cleaned.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
-    if (!kw) return 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์';
+  // ── /ใบส่งของ [ชื่อโครงการ/เลขใบ] — ดูใบส่งของจาก Odoo (เดิม /ส่งของ — เก็บไว้เป็น alias) ──
+  if (cleaned.startsWith('/ใบส่งของ') || cleaned.startsWith('/ส่งของ') || cleaned.startsWith('/จัดส่ง') || lower.startsWith('/delivery')) {
+    const kw = cleaned.replace(/^\/ใบส่งของ/, '').replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+    if (!kw) return 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ใบส่งของ อุตรดิตถ์';
     if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
     try {
       const picks = await odooDelivery(kw);
@@ -2001,7 +2001,7 @@ const HANDLERS = {
 };
 
 // ── สร้าง PDF ใบส่งของจาก Odoo แล้วส่งเข้า Telegram ─────────────────────────
-// คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ส่งของpdf
+// คืน { ok, error } — เรียกจาก telegram.js เมื่อเจอคำสั่ง /ใบส่งของpdf
 export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending', dateFilter = null) {
   if (!TG_TOKEN) return { ok: false, error: 'ยังไม่ได้ตั้ง TELEGRAM_BOT_TOKEN' };
   if (!odooConfigured()) {
@@ -2028,7 +2028,7 @@ export async function sendDeliveryPDF(chatId, keyword, statusFilter = 'pending',
     if (!picks.length) {
       const lb = statusFilter === 'done' ? 'ส่งแล้ว' : statusFilter === 'all' ? 'ทั้งหมด' : 'รอส่ง';
       const dnote = dateFilter ? ' วันที่ ' + dateFilter : '';
-      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + lb + '"' + dnote + ' ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ส่งของ ' + dkw + ' ทั้งหมด)');
+      await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของสถานะ "' + lb + '"' + dnote + ' ของ "' + dkw + '"\n(มีทั้งหมด ' + allPicks.length + ' ใบ ลอง /ใบส่งของ ' + dkw + ' ทั้งหมด)');
       return { ok: false };
     }
     const stateMap = {
