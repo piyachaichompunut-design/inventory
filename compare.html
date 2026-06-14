@@ -88,6 +88,18 @@
 
   .cmp-empty{ padding:24px; text-align:center; color:var(--muted); background:var(--paper); }
 
+  /* ── แบนเนอร์เตือนเมื่อเปิดผ่านแอป LINE ── */
+  .line-banner{
+    background:#fff7e6; border-bottom:1px solid #ffe2a8; color:#92620a;
+    font-size:13px; padding:10px 18px; display:flex; align-items:center;
+    justify-content:space-between; gap:10px; flex-wrap:wrap;
+  }
+  .btn-mini{
+    appearance:none; border:1px solid #92620a; background:#92620a; color:#fff;
+    font-family:inherit; font-size:12.5px; font-weight:600; padding:6px 12px;
+    border-radius:8px; cursor:pointer; white-space:nowrap;
+  }
+
   /* ── footer / ปุ่ม ── */
   .foot{ padding:14px 18px 18px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
   .foot .gen{ font-size:12px; color:var(--muted); }
@@ -146,6 +158,29 @@ function showState(em, title, msg){
   app.innerHTML = `<div class="state"><div class="em">${em}</div><h2>${esc(title)}</h2><p>${esc(msg||'')}</p></div>`;
 }
 
+// ── ตรวจว่าเปิดผ่าน LINE in-app browser ไหม (window.print/บันทึกไฟล์ใช้ไม่ได้) ──
+function isLineInApp(){
+  return /\bLine\//i.test(navigator.userAgent || '');
+}
+// ── เปิดหน้านี้ในเบราว์เซอร์ของเครื่อง (Safari/Chrome) ผ่านพารามิเตอร์ที่ LINE รู้จัก ──
+function openInExternalBrowser(){
+  try{
+    const u = new URL(location.href);
+    u.searchParams.set('openExternalBrowser','1');
+    location.href = u.toString();
+  }catch(e){
+    location.href = location.href + (location.search ? '&' : '?') + 'openExternalBrowser=1';
+  }
+}
+// ── แบนเนอร์เตือนเมื่อเปิดผ่านแอป LINE ──
+function lineBanner(){
+  if(!isLineInApp()) return '';
+  return `<div class="line-banner">
+    📱 เปิดผ่านแอป LINE — พิมพ์/บันทึก PDF จะไม่ทำงานในนี้
+    <button class="btn-mini" onclick="openInExternalBrowser()">เปิดในเบราว์เซอร์</button>
+  </div>`;
+}
+
 // ── ดึง field แรกที่มีค่า (รองรับชื่อ key ได้หลายแบบ) ──
 function pick(obj, keys, dflt){
   for(const k of keys){ if(obj && obj[k]!=null && obj[k]!=='') return obj[k]; }
@@ -182,9 +217,12 @@ const legend = `<div class="legend">
 
 function footer(rec){
   const when = new Date().toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'});
+  const actionBtn = isLineInApp()
+    ? `<button class="btn" onclick="openInExternalBrowser()">🌐 เปิดในเบราว์เซอร์เพื่อพิมพ์/บันทึก PDF</button>`
+    : `<button class="btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>`;
   return `<div class="foot">
     <div class="gen">สร้างเมื่อเปิดหน้า ${esc(when)}${rec.company?' · '+esc(rec.company):''}</div>
-    <button class="btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>
+    ${actionBtn}
   </div>`;
 }
 
@@ -254,6 +292,7 @@ function renderCompare(rec, d){
       <h1>${esc(labelA)} <span style="opacity:.6">เทียบกับ</span> ${esc(labelB)}</h1>
       ${rec.company?`<div class="co"><b>บริษัท:</b> ${esc(rec.company)}</div>`:''}
     </div>
+    ${lineBanner()}
     <div class="docs">
       ${docCard(labelA, labelA, d.docA)}
       ${docCard(labelB, labelB, d.docB)}
@@ -302,6 +341,7 @@ function renderDelivery(rec, d){
       <h1>${esc(labelOther)} <span style="opacity:.6">เทียบกับ</span> ใบส่งของ ${esc(labelPick)}</h1>
       ${rec.company?`<div class="co"><b>บริษัท:</b> ${esc(rec.company)}</div>`:''}
     </div>
+    ${lineBanner()}
     <div class="docs">
       ${docCard(labelOther, labelOther, d.otherDoc)}
       ${docCard('ใบส่งของ', labelPick, {
