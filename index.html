@@ -145,8 +145,11 @@
   .doc-card .drow{font-size:12.5px; color:var(--ink-soft); display:flex; gap:6px; margin-top:3px}
   .doc-card .drow b{color:var(--ink); font-weight:600}
   /* compare table */
-  .ctable-wrap{padding:18px 32px 32px; overflow-x:auto}
-  table.ctable{width:100%; border-collapse:collapse; font-size:13px; min-width:480px}
+  .ctable-wrap{padding:18px 32px 4px; overflow-x:auto}
+  .note{
+    padding:0 32px 18px; font-size:12px; color:var(--ink-soft); line-height:1.7;
+  }
+  .note b{color:var(--ink)}  table.ctable{width:100%; border-collapse:collapse; font-size:13px; min-width:480px}
   table.ctable th{
     background:var(--ink); color:#fff; text-align:left; padding:10px 12px;
     font-weight:600; font-size:12.5px; white-space:nowrap;
@@ -197,8 +200,98 @@ function docCard(doc, label, type){
   return html;
 }
 
+function pickingCard(picking, label){
+  if(!picking) return '<div class="doc-card"><div class="dlabel">'+esc(label)+'</div><div class="dname">ไม่พบใบส่งของ</div></div>';
+  const stMap = {done:'ส่งแล้ว', cancel:'ยกเลิก', draft:'รอส่ง', confirmed:'รอส่ง', assigned:'พร้อมส่ง'};
+  const stLabel = stMap[picking.state] || 'รอส่ง';
+  let html = '<div class="doc-card">'+
+    '<div class="dlabel">'+esc(label)+'</div>'+
+    '<div class="dname">'+esc(picking.name||'-')+'</div>';
+  if(picking.origin) html += '<div class="drow"><b>โครงการ:</b> '+esc(picking.origin)+'</div>';
+  if(picking.partner) html += '<div class="drow"><b>ปลายทาง:</b> '+esc(picking.partner)+'</div>';
+  if(picking.scheduled_date) html += '<div class="drow"><b>วันที่:</b> '+esc(String(picking.scheduled_date).slice(0,10))+'</div>';
+  html += '<div class="drow"><b>สถานะ:</b> '+esc(stLabel)+'</div>';
+  html += '</div>';
+  return html;
+}
+
 function render(d){
   const data = d.data || {};
+  if(data.mode === 'delivery') return renderDeliveryMode(d, data);
+  return renderSimpleMode(d, data);
+}
+
+// ── เทียบ SO/PO/PR กับใบส่งของ ──────────────────────────────────────────────
+function renderDeliveryMode(d, data){
+  const rows = data.rows || [];
+  const labelOther = (data.otherType||'').toUpperCase() + (data.otherNum||'');
+
+  const cntOk   = rows.filter(r=>r.status==='ok').length;
+  const cntDiff = rows.filter(r=>r.status==='diff').length;
+  const cntMis  = rows.filter(r=>r.status==='missing_a' || r.status==='missing_b').length;
+
+  let chips = '<span class="chip total">รวม <b>'+rows.length+'</b> รายการ</span>';
+  chips += '<span class="chip pending">ตรงกัน <b>'+cntOk+'</b></span>';
+  if(cntDiff) chips += '<span class="chip" style="background:#fff9e8;color:#e8a317">ต่างกัน <b>'+cntDiff+'</b></span>';
+  if(cntMis)  chips += '<span class="chip done">ขาด <b>'+cntMis+'</b></span>';
+
+  const statusLabel = (st) => {
+    if(st==='ok') return '✅ ตรงกัน';
+    if(st==='diff') return '⚠️ ต่างกัน';
+    if(st==='missing_a') return '❌ ไม่มีใน '+esc(labelOther);
+    if(st==='missing_b') return '❌ ไม่มีในใบส่งของ';
+    return st;
+  };
+  const trClass = (st) => st==='ok' ? 'ok' : (st==='diff' ? 'diff' : 'missing');
+
+  let tableRows = rows.map(r=>{
+    return '<tr class="'+trClass(r.status)+'">'+
+      '<td>'+(r.code?'<span class="pcode">'+esc(r.code)+'</span>':'')+esc(r.name||'-')+'</td>'+
+      '<td class="num">'+fmtNum(r.qtyOther)+'</td>'+
+      '<td class="num">'+fmtNum(r.qtyPlanned)+'</td>'+
+      '<td class="num">'+fmtNum(r.qtyDone)+'</td>'+
+      '<td class="num">'+(r.diff>0?'+':'')+fmtNum(r.diff)+'</td>'+
+      '<td class="stt">'+statusLabel(r.status)+'</td>'+
+    '</tr>';
+  }).join('');
+
+  document.getElementById('app').innerHTML =
+    '<div class="sheet">'+
+      '<div class="head">'+
+        '<h1>'+esc(d.title||'เปรียบเทียบเอกสาร')+'</h1>'+
+        '<div class="sub">Task Management System — ดึงข้อมูลจาก Odoo</div>'+
+        (d.status_label?'<div class="proj">บริษัท: '+esc(d.status_label)+'</div>':'')+
+      '</div>'+
+      '<div class="summary">'+chips+'</div>'+
+      '<div class="docs">'+
+        docCard(data.otherDoc, labelOther, data.otherType)+
+        pickingCard(data.picking, 'ใบส่งของ')+
+      '</div>'+
+      '<div class="ctable-wrap"><table class="ctable">'+
+        '<thead><tr>'+
+          '<th>สินค้า</th>'+
+          '<th class="num">'+esc(labelOther)+'</th>'+
+          '<th class="num">ส่งของ (วางแผน)</th>'+
+          '<th class="num">ส่งของ (ส่งจริง)</th>'+
+          '<th class="num">ผลต่าง</th>'+
+          '<th>สถานะ</th>'+
+        '</tr></thead>'+
+        '<tbody>'+(tableRows||'<tr><td colspan="6" style="text-align:center;color:var(--ink-soft)">ไม่มีรายการ</td></tr>')+'</tbody>'+
+      '</table></div>'+
+      '<div class="note">'+
+        'หมายเหตุ: คอลัมน์ <b>ผลต่าง</b> และ <b>สถานะ</b> คำนวณจากจำนวน <b>"ส่งจริง"</b> เทียบกับ '+esc(labelOther)+' '+
+        '(คอลัมน์ "วางแผน" แสดงไว้เพื่อเทียบเฉยๆ ไม่ได้ใช้คำนวณ)'+
+      '</div>'+
+      '<div class="foot">'+
+        '<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>'+
+        '<div>พิมพ์เมื่อ '+new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})+'</div>'+
+      '</div>'+
+    '</div>';
+  document.title = (d.title||'เปรียบเทียบเอกสาร')+' — TMS';
+}
+
+// ── เทียบ SO/PO/PR กันเอง ────────────────────────────────────────────────────
+function renderSimpleMode(d, data){
   const rows = data.rows || [];
   const labelA = (data.typeA||'').toUpperCase() + (data.numA||'');
   const labelB = (data.typeB||'').toUpperCase() + (data.numB||'');
