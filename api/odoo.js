@@ -26,6 +26,12 @@ const COMPANY_ALIAS = {
 };
 const DEFAULT_COMPANY = { id: 1, name: 'อาคเนย์' };
 
+// แปลง company_id (เลข) กลับเป็น { id, name } — ใช้ตอน resume session ที่เก็บแค่ id
+export function companyById(id) {
+  const all = [DEFAULT_COMPANY, ...Object.values(COMPANY_ALIAS)];
+  return all.find(c => c.id === id) || DEFAULT_COMPANY;
+}
+
 // แยกตัวย่อบริษัทออกจากคำค้น เช่น "ภูเก็ต 4+570 md" → { keyword:'ภูเก็ต 4+570', company:{id:2} }
 export function parseCompany(text) {
   const parts = String(text).trim().split(/\s+/);
@@ -290,6 +296,36 @@ export async function odooPR(prNumber, companyId) {
 
 // ── เทียบสินค้าระหว่าง 2 เอกสาร (SO/PO/SO vs SO ฯลฯ) ──────────────────────────
 // คืน { docA, docB, rows: [{code,name,qtyA,qtyB,diff,status}] }
+// ── normalize รายการสินค้าของเอกสาร SO/PO/PR → { code, name, qty } ────────────
+export function normalizeDocLines(doc, type) {
+  const lines = doc.lines || [];
+  return lines.map(l => {
+    const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+    const code = prod[0] ? String(prod[0]) : '';
+    const name = prod[1] || l.name || '';
+    let qty = 0;
+    if (type === 'so') qty = l.product_uom_qty || 0;
+    else if (type === 'po') qty = l.product_qty || 0;
+    else if (type === 'pr') qty = l.product_qty || 0;
+    return { code, name, qty: +qty };
+  });
+}
+
+// ── normalize รายการสินค้าของใบส่งของ (stock.picking) → { code, name, qtyPlanned, qtyDone } ──
+export function normalizePickingLines(picking) {
+  const lines = picking.lines || [];
+  return lines.map(l => {
+    const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+    const code = prod[0] ? String(prod[0]) : '';
+    const name = prod[1] || l.name || '';
+    return {
+      code, name,
+      qtyPlanned: +(l.product_uom_qty || 0),
+      qtyDone: +(l.quantity || 0)
+    };
+  });
+}
+
 export async function odooCompare(typeA, numA, typeB, numB, companyId) {
   const fetchDoc = async (type, num) => {
     if (type === 'so') return await odooSO(num, companyId);
@@ -305,23 +341,8 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
   const docA = docsA[0];
   const docB = docsB[0];
 
-  // normalize lines → { code, name, qty }
-  const normalizeLines = (doc, type) => {
-    const lines = doc.lines || [];
-    return lines.map(l => {
-      const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
-      const code = prod[0] ? String(prod[0]) : '';
-      const name = prod[1] || l.name || '';
-      let qty = 0;
-      if (type === 'so') qty = l.product_uom_qty || 0;
-      else if (type === 'po') qty = l.product_qty || 0;
-      else if (type === 'pr') qty = l.product_qty || 0;
-      return { code, name, qty: +qty };
-    });
-  };
-
-  const linesA = normalizeLines(docA, typeA);
-  const linesB = normalizeLines(docB, typeB);
+  const linesA = normalizeDocLines(docA, typeA);
+  const linesB = normalizeDocLines(docB, typeB);
 
   // merge ตาม product_id (code) — ถ้าไม่มี code ใช้ชื่อแทน
   const mapA = new Map();
@@ -354,6 +375,57 @@ export async function odooCompare(typeA, numA, typeB, numB, companyId) {
   });
 
   return { docA, docB, typeA, typeB, numA, numB, rows };
+}
+
+// ── เทียบเอกสาร SO/PO/PR กับใบส่งของ (stock.picking) ──────────────────────────
+// คืน { otherDoc, otherType, otherNum, picking, rows }
+// rows: { code, name, qtyOther, qtyPlanned, qtyDone, diff, status }
+//   diff/status คำนวณจาก qtyOther เทียบ qtyDone (จำนวนที่ส่งจริง)
+export async function odooCompareWithDelivery(otherType, otherNum, picking, companyId) {
+  const fetchDoc = async (type, num) => {
+    if (type === 'so') return await odooSO(num, companyId);
+    if (type === 'po') return await odooPO(num, companyId);
+    if (type === 'pr') return await odooPR(num, companyId);
+    throw new Error('ไม่รู้จักประเภทเอกสาร: ' + type);
+  };
+
+  const docs = await fetchDoc(otherType, otherNum);
+  if (!docs.length) throw new Error('ไม่พบ ' + otherType.toUpperCase() + otherNum);
+  const otherDoc = docs[0];
+
+  const otherLines = normalizeDocLines(otherDoc, otherType);
+  const pickLines = normalizePickingLines(picking);
+
+  const mapOther = new Map();
+  otherLines.forEach(l => mapOther.set(l.code || l.name, l));
+  const mapPick = new Map();
+  pickLines.forEach(l => mapPick.set(l.code || l.name, l));
+
+  const allKeys = new Set([...mapOther.keys(), ...mapPick.keys()]);
+  const rows = [];
+  for (const k of allKeys) {
+    const o = mapOther.get(k);
+    const p = mapPick.get(k);
+    const qtyOther = o ? o.qty : 0;
+    const qtyPlanned = p ? p.qtyPlanned : 0;
+    const qtyDone = p ? p.qtyDone : 0;
+    const diff = qtyOther - qtyDone;
+    let status = 'ok';
+    if (!o) status = 'missing_a';      // ไม่มีใน SO/PO/PR
+    else if (!p) status = 'missing_b'; // ไม่มีในใบส่งของ
+    else if (diff !== 0) status = 'diff';
+    rows.push({
+      code: (o || p).code,
+      name: (o || p).name,
+      qtyOther, qtyPlanned, qtyDone, diff, status
+    });
+  }
+  rows.sort((a, b) => {
+    const order = { missing_a: 0, missing_b: 1, diff: 2, ok: 3 };
+    return (order[a.status] || 3) - (order[b.status] || 3);
+  });
+
+  return { otherDoc, otherType, otherNum, picking, rows };
 }
 
 // ── ดึงรูป attachment เดียวตาม ID → คืน { buffer, mimetype } ──────────────────
