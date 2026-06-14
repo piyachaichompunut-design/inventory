@@ -722,9 +722,9 @@ export default async function handler(req, res) {
 
       // ── /เทียบ so1234 po5678 [ตัวย่อบริษัท] → เปรียบเทียบ (เว็บ) ────────────
       // รองรับ 2 รูปแบบ:
-      //   1) /เทียบ so1234 po5678 [md]                      → เทียบ SO/PO/PR กันเอง
-      //   2) /เทียบ po2606025 ส่งของ กท.1002 12/6 [md]      → เทียบกับใบส่งของ
-      //      /เทียบ ส่งของ กท.1002 12/6 po2606025 [md]      → (สลับลำดับได้)
+      //   1) /เทียบ so1234 po5678 [md]                          → เทียบ SO/PO/PR กันเอง
+      //   2) /เทียบ po2606025 ใบส่งของ กท.1002 12/6 [md]        → เทียบกับใบส่งของ
+      //      /เทียบ ใบส่งของ กท.1002 12/6 po2606025 [md]        → (สลับลำดับได้)
       if (cmdText.startsWith('/เทียบ') || lc.startsWith('/compare')) {
         if (!db) { await sendTelegramReply(chatId, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); res.status(200).json({ ok: true }); return; }
 
@@ -750,13 +750,13 @@ export default async function handler(req, res) {
           }
           if (!refOther) {
             await sendTelegramReply(chatId,
-              'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/เทียบ po2606025 ส่งของ กท.1002 12/6\nหรือ /เทียบ ส่งของ กท.1002 12/6 po2606025'
+              'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/เทียบ po2606025 ใบส่งของ กท.1002 12/6\nหรือ /เทียบ ใบส่งของ กท.1002 12/6 po2606025'
             );
             res.status(200).json({ ok: true }); return;
           }
           let deliveryKw = words.filter((w,i) => i !== sIdx && i !== refIdx).join(' ').trim();
           if (!deliveryKw) {
-            await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการของใบส่งของด้วยครับ เช่น /เทียบ po2606025 ส่งของ กท.1002');
+            await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการของใบส่งของด้วยครับ เช่น /เทียบ po2606025 ใบส่งของ กท.1002');
             res.status(200).json({ ok: true }); return;
           }
           // ดึงวันที่จากท้าย deliveryKw (ถ้ามี)
@@ -802,7 +802,7 @@ export default async function handler(req, res) {
         // ── mode 1: เทียบ SO/PO/PR กันเอง (แบบเดิม) ──────────────────────────
         const parts = words;
         if (parts.length < 2) {
-          await sendTelegramReply(chatId, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md\nหรือ /เทียบ po2606025 ส่งของ กท.1002 12/6');
+          await sendTelegramReply(chatId, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md\nหรือ /เทียบ po2606025 ใบส่งของ กท.1002 12/6');
           res.status(200).json({ ok: true }); return;
         }
         const refA = parseDocRef(parts[0]);
@@ -924,10 +924,10 @@ export default async function handler(req, res) {
         res.status(200).json({ ok: true }); return;
       }
 
-      if (cmdText.startsWith('/ส่งของ') || cmdText.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
-        var kw = cmdText.replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
+      if (cmdText.startsWith('/ใบส่งของ') || cmdText.startsWith('/ส่งของ') || cmdText.startsWith('/จัดส่ง') || lc.startsWith('/delivery')) {
+        var kw = cmdText.replace(/^\/ใบส่งของ/, '').replace(/^\/ส่งของ/, '').replace(/^\/จัดส่ง/, '').replace(/^\/delivery/i, '').trim();
         if (!kw) {
-          await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
+          await sendTelegramReply(chatId, 'พิมพ์ชื่อโครงการหรือเลขใบด้วยครับ เช่น /ใบส่งของ อุตรดิตถ์\nพิมพ์ต่อท้ายได้: รอ / ส่งแล้ว / ทั้งหมด');
         } else {
           // ดึง statusFilter จากคำท้าย (default = รอส่ง) รองรับ status ก่อน company
           var statusFilter = 'pending';
