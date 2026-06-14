@@ -2,7 +2,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
-import { odooConfigured, odooDelivery, parseCompany, odooCompare } from './odoo.js';
+import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById } from './odoo.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -36,6 +36,52 @@ async function pushLine(to, messages) {
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LINE_TOKEN}` },
     body: JSON.stringify({ to, messages })
   });
+}
+
+// ── เทียบเอกสาร SO/PO/PR กับใบส่งของที่เลือกแล้ว → บันทึก delivery_views + ส่งลิงก์ ──
+async function sendDeliveryCompare(pushTarget, refOther, picking, cmp) {
+  try {
+    const result = await odooCompareWithDelivery(refOther.type, refOther.num, picking, cmp?.id);
+    const labelOther = refOther.type.toUpperCase() + refOther.num;
+    const rows = result.rows || [];
+    const cntOk   = rows.filter(r => r.status === 'ok').length;
+    const cntDiff = rows.filter(r => r.status === 'diff').length;
+    const cntMis  = rows.filter(r => r.status === 'missing_a' || r.status === 'missing_b').length;
+
+    const viewId = 'C' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const { error: insErr } = await db.from('delivery_views').insert({
+      id: viewId,
+      title: 'เปรียบเทียบ ' + labelOther + ' vs ใบส่งของ',
+      company: cmp?.name || '',
+      status_label: cmp?.name || '',
+      data: {
+        mode: 'delivery',
+        otherType: refOther.type, otherNum: refOther.num,
+        otherDoc: result.otherDoc,
+        picking: {
+          name: picking.name,
+          origin: picking.origin || '',
+          partner: Array.isArray(picking.partner_id) ? picking.partner_id[1] : '',
+          scheduled_date: picking.scheduled_date || '',
+          state: picking.state || ''
+        },
+        rows
+      }
+    });
+    if (insErr) { await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ บันทึกข้อมูลไม่สำเร็จ: ' + insErr.message }]); return; }
+
+    const webLink = 'https://inventory-rho-hazel.vercel.app/compare.html?id=' + viewId;
+    await pushLine(pushTarget, [{
+      type: 'text',
+      text: '📊 เปรียบเทียบ ' + labelOther + ' vs ใบส่งของ "' + (picking.name||'-') + '"' + (cmp?.name ? ' (' + cmp.name + ')' : '') + '\n\n' +
+            '✅ ตรงกัน: ' + cntOk + ' รายการ\n' +
+            (cntDiff ? '⚠️ ต่างกัน: ' + cntDiff + ' รายการ\n' : '') +
+            (cntMis  ? '❌ ขาด: ' + cntMis  + ' รายการ\n' : '') +
+            '\n📎 เปิดดูรายละเอียด:\n' + webLink
+    }]);
+  } catch (e) {
+    await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
+  }
 }
 
 // ── สร้าง PDF ใบส่งของ → อัปขึ้น Supabase Storage → ส่งลิงก์เข้าไลน์ ──────────
@@ -570,22 +616,117 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // ── /เทียบ so1234 po5678 [ตัวย่อบริษัท] → PDF เปรียบเทียบ ───────────────
-      if (tt.startsWith('/เทียบ') || tt.toLowerCase().startsWith('/compare')) {
-        const arg = tt.replace(/^\/เทียบ/,'').replace(/^\/compare/i,'').trim();
-        // parse: "so1234 po5678" หรือ "so1234 po5678 md"
-        const { keyword: argClean, company: cmp } = parseCompany(arg);
-        const parts = argClean.trim().split(/\s+/);
-        if (parts.length < 2) {
-          await replyLine(replyToken, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md');
+      // ── ตอบเลข 1-8 → เลือกใบส่งของสำหรับ /เทียบ (เมื่อเจอหลายใบ) ──────────────
+      if (/^\d+$/.test(tt) && db) {
+        const { data: sel } = await db.from('line_compare_select')
+          .select('*').eq('group_id', pushTarget).maybeSingle();
+        const age = sel ? (Date.now() - new Date(sel.created_at).getTime()) / 60000 : 999;
+        if (sel && age < 5) {
+          const idx = parseInt(tt, 10) - 1;
+          const picks = sel.picks || [];
+          if (idx < 0 || idx >= picks.length) {
+            await replyLine(replyToken, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+          } else {
+            await db.from('line_compare_select').delete().eq('group_id', pushTarget);
+            await replyLine(replyToken, '⏳ กำลังดึงข้อมูลเปรียบเทียบ...');
+            if (pushTarget) {
+              const cmpSel = companyById(sel.company_id);
+              await sendDeliveryCompare(pushTarget, sel.doc_ref, picks[idx], cmpSel);
+            }
+          }
           continue;
         }
-        // แยก type + เลขที่ เช่น "so1234" → type=so, num=1234
+      }
+
+      // ── /เทียบ so1234 po5678 [ตัวย่อบริษัท] → เปรียบเทียบ (เว็บ) ────────────
+      // รองรับ 2 รูปแบบ:
+      //   1) /เทียบ so1234 po5678 [md]                      → เทียบ SO/PO/PR กันเอง
+      //   2) /เทียบ po2606025 ส่งของ กท.1002 12/6 [md]      → เทียบกับใบส่งของ
+      //      /เทียบ ส่งของ กท.1002 12/6 po2606025 [md]      → (สลับลำดับได้)
+      if (tt.startsWith('/เทียบ') || tt.toLowerCase().startsWith('/compare')) {
+        const arg = tt.replace(/^\/เทียบ/,'').replace(/^\/compare/i,'').trim();
+        const { keyword: argClean, company: cmp } = parseCompany(arg);
+
         const parseDocRef = (s) => {
-          const m = s.match(/^(so|po|pr)(.+)$/i);
+          const m = s.match(/^(so|po|pr)(\w+)$/i);
           if (!m) return null;
           return { type: m[1].toLowerCase(), num: m[2] };
         };
+
+        const words = argClean.trim().split(/\s+/).filter(Boolean);
+        const sIdx = words.findIndex(w => w === 'ส่งของ' || w === 'ใบส่งของ');
+
+        // ── mode 2: เทียบกับใบส่งของ ─────────────────────────────────────────
+        if (sIdx !== -1) {
+          let refOther = null, refIdx = -1;
+          for (let i = 0; i < words.length; i++) {
+            if (i === sIdx) continue;
+            const r = parseDocRef(words[i]);
+            if (r) { refOther = r; refIdx = i; break; }
+          }
+          if (!refOther) {
+            await replyLine(replyToken,
+              'รูปแบบไม่ถูกต้องครับ ตัวอย่าง:\n/เทียบ po2606025 ส่งของ กท.1002 12/6\nหรือ /เทียบ ส่งของ กท.1002 12/6 po2606025'
+            );
+            continue;
+          }
+          let deliveryKw = words.filter((w,i) => i !== sIdx && i !== refIdx).join(' ').trim();
+          if (!deliveryKw) {
+            await replyLine(replyToken, 'พิมพ์ชื่อโครงการของใบส่งของด้วยครับ เช่น /เทียบ po2606025 ส่งของ กท.1002');
+            continue;
+          }
+          // ดึงวันที่จากท้าย deliveryKw (ถ้ามี)
+          let dateFilter = null;
+          const dm = deliveryKw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
+          if (dm) { dateFilter = parseDate(dm[1]); deliveryKw = deliveryKw.replace(dm[0],'').trim(); }
+
+          if (!odooConfigured()) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ'); continue; }
+          await replyLine(replyToken, '🔍 กำลังค้นหาใบส่งของ "' + deliveryKw + '"...');
+
+          if (pushTarget) {
+            await (async () => {
+              try {
+                const allPicks = await odooDelivery(deliveryKw, cmp.id);
+                let picks = allPicks;
+                if (dateFilter) {
+                  const f = picks.filter(p => String(p.scheduled_date || '').slice(0,10) === dateFilter);
+                  if (f.length) picks = f;
+                }
+                if (!picks.length) {
+                  await pushLine(pushTarget, [{ type:'text', text:'🔍 ไม่พบใบส่งของ "' + deliveryKw + '"' + (dateFilter ? ' วันที่ ' + dm[1] : '') + ' ครับ' }]);
+                  return;
+                }
+                if (picks.length > 1) {
+                  const opts = picks.slice(0,8).map((p,i) =>
+                    (i+1) + '. ' + (p.name || '-') + (p.scheduled_date ? ' (' + String(p.scheduled_date).slice(0,10) + ')' : '')
+                  ).join('\n');
+                  if (db) {
+                    await db.from('line_compare_select').upsert({
+                      group_id: pushTarget,
+                      picks: picks.slice(0,8),
+                      doc_ref: refOther,
+                      company_id: cmp.id,
+                      created_at: new Date().toISOString()
+                    }, { onConflict: 'group_id' });
+                  }
+                  await pushLine(pushTarget, [{ type:'text', text:'🔍 พบ ' + picks.length + ' ใบส่งของที่ตรงกับ "' + deliveryKw + '":\n' + opts + '\n\nตอบเลขที่ต้องการครับ' }]);
+                  return;
+                }
+                await sendDeliveryCompare(pushTarget, refOther, picks[0], cmp);
+              } catch (e) {
+                await pushLine(pushTarget, [{ type:'text', text:'⚠️⚠️⚠️ เปรียบเทียบไม่สำเร็จ: ' + e.message }]);
+              }
+            })();
+          }
+          continue;
+        }
+
+        // ── mode 1: เทียบ SO/PO/PR กันเอง (แบบเดิม) ──────────────────────────
+        const parts = words;
+        if (parts.length < 2) {
+          await replyLine(replyToken, 'พิมพ์ให้ครบครับ เช่น /เทียบ so1234 po5678\nหรือ /เทียบ so1234 po5678 md\nหรือ /เทียบ po2606025 ส่งของ กท.1002 12/6');
+          continue;
+        }
         const refA = parseDocRef(parts[0]);
         const refB = parseDocRef(parts[1]);
         if (!refA || !refB) {
