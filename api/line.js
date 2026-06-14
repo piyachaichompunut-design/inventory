@@ -571,9 +571,9 @@ export default async function handler(req, res) {
       const tt = text.trim();
       const lc = tt.toLowerCase();
 
-      // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด ─────────────
+      // ── +1 → reply รูป/ไฟล์ แล้วพิมพ์ +1 → แนบเข้างานล่าสุด (เงียบใน LINE) ──
       if (/^\+\d+$/.test(tt)) {
-        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) continue;
         try {
           if (!quotedId) continue;
           const { data: quotedMsg } = await db.from('line_messages')
@@ -584,8 +584,7 @@ export default async function handler(req, res) {
           const { data: last } = await db.from('line_last_task')
             .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
           if (!last || !last.task_id) {
-            await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่มีงานในกลุ่มนี้ครับ กรุณาสร้างงานก่อนแนบไฟล์');
-            continue;
+            continue; // ไม่มีงานให้แนบ — เงียบ ไม่ใช่ error การบันทึก
           }
 
           const raw = await getLineContent(quotedId);
@@ -597,7 +596,10 @@ export default async function handler(req, res) {
 
           const { error: upErr } = await db.storage.from('attachments')
             .upload(storagePath, buffer, { contentType, upsert: true });
-          if (upErr) { await replyLine(replyToken, '⚠️⚠️⚠️ อัปไฟล์ไม่สำเร็จ: ' + upErr.message); continue; }
+          if (upErr) {
+            try { await notifyMainChat('⚠️ <b>แนบไฟล์จากไลน์ไม่สำเร็จ</b> (อัปโหลด)\n📋 ' + (last.task_name || '') + '\n' + upErr.message); } catch (e) {}
+            continue;
+          }
 
           const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
           const { data: taskRow } = await db.from('tasks')
@@ -606,12 +608,13 @@ export default async function handler(req, res) {
           atts.push({ name: safeName, size: buffer.length, fileId: storagePath, mimeType: contentType, webViewLink: pub.publicUrl });
 
           const { error: updErr } = await db.from('tasks').update({ attachments: atts }).eq('id', last.task_id);
-          if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ บันทึกไฟล์ไม่สำเร็จ: ' + updErr.message); continue; }
-
-          const fileNum = tt.replace('+', '');
-          await replyLine(replyToken, 'รับทราบครับ ไฟล์ที่ ' + fileNum);
+          if (updErr) {
+            try { await notifyMainChat('⚠️ <b>แนบไฟล์จากไลน์ไม่สำเร็จ</b> (บันทึก)\n📋 ' + (last.task_name || '') + '\n' + updErr.message); } catch (e) {}
+            continue;
+          }
+          // สำเร็จ → เงียบ ไม่ตอบ LINE ไม่แจ้ง Telegram
         } catch (e) {
-          await replyLine(replyToken, '⚠️⚠️⚠️ แนบไฟล์ไม่สำเร็จ: ' + e.message);
+          try { await notifyMainChat('⚠️ <b>แนบไฟล์จากไลน์ไม่สำเร็จ</b>\n' + e.message); } catch (e2) {}
         }
         continue;
       }
@@ -870,14 +873,14 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // ── แก้ไฟล์ → reply ข้อความเดิม + แท็กบอท + "แก้ไฟล์" → ล้างไฟล์เก่า ──
+      // ── แก้ไฟล์ → reply ข้อความเดิม + แท็กบอท + "แก้ไฟล์" → ล้างไฟล์เก่า (เงียบใน LINE) ──
       if (botMentioned) {
         let cleanForCmd = tt;
         const sortedM2 = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a,b) => b.index - a.index);
         for (const m of sortedM2) { cleanForCmd = cleanForCmd.slice(0, m.index) + cleanForCmd.slice(m.index + m.length); }
         cleanForCmd = cleanForCmd.replace(/\s+/g, ' ').trim();
         if (/^แก้ไฟล์$/i.test(cleanForCmd)) {
-          if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          if (!db) continue;
 
           // หางานที่ reply มา — จาก task_id ที่ผูกกับ quotedId ก่อน (แม่นตรงงาน)
           let fTaskId = null, fTaskName = '';
@@ -892,7 +895,7 @@ export default async function handler(req, res) {
               .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
             if (last && last.task_id) { fTaskId = last.task_id; fTaskName = last.task_name; }
           }
-          if (!fTaskId) { await replyLine(replyToken, '⚠️ ไม่พบงานที่จะแก้ครับ ลอง reply ข้อความที่สร้างงานนั้น'); continue; }
+          if (!fTaskId) continue; // ไม่พบงาน — เงียบ ไม่ใช่ error การบันทึก
 
           if (!fTaskName) {
             const { data: trow } = await db.from('tasks').select('task').eq('id', fTaskId).maybeSingle();
@@ -909,13 +912,16 @@ export default async function handler(req, res) {
 
           const { error: clrErr } = await db.from('tasks')
             .update({ attachments: [] }).eq('id', fTaskId);
-          if (clrErr) { await replyLine(replyToken, '⚠️⚠️⚠️ ล้างไฟล์ไม่สำเร็จ: ' + clrErr.message); continue; }
-          await replyLine(replyToken, '🗑️ ล้างไฟล์เก่าแล้วครับ!\n📋 ' + fTaskName + '\n\nตอนนี้ reply ไฟล์ใหม่ แล้วพิมพ์ +1 ได้เลยครับ');
+          if (clrErr) {
+            try { await notifyMainChat('⚠️ <b>ล้างไฟล์ (จากไลน์) ไม่สำเร็จ</b>\n📋 ' + fTaskName + '\n' + clrErr.message); } catch (e) {}
+            continue;
+          }
+          // สำเร็จ → เงียบ ไม่ตอบ LINE ไม่แจ้ง Telegram
           continue;
         }
       }
 
-      // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" ──
+      // ── เปลี่ยนวัน → reply ข้อความเดิม + แท็กบอท + "เปลี่ยนวัน 20/6/69" (เงียบใน LINE) ──
       if (botMentioned) {
         // ตัด @mention ออกโดยใช้ตำแหน่งจริงจาก mentionees
         let cleanTT = tt;
@@ -926,7 +932,7 @@ export default async function handler(req, res) {
         cleanTT = cleanTT.replace(/\s+/g, ' ').trim();
         const isChangDate = /^เปลี่ยนวัน/.test(cleanTT);
         if (isChangDate) {
-          if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+          if (!db) continue;
           // ดึงวันที่จาก cleanTT ก่อน — ถ้า LINE แปลง 12/6 เป็น URL ให้ดึงจาก entities แทน
           let dateStr = null;
           const dmatch = cleanTT.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
@@ -942,12 +948,9 @@ export default async function handler(req, res) {
               }
             }
           }
-          if (!dateStr) {
-            await replyLine(replyToken, '⚠️⚠️⚠️ ระบุวันที่ด้วยครับ เช่น เปลี่ยนวัน 20-6-69\n(ใช้ - แทน / กันลิงก์)');
-            continue;
-          }
+          if (!dateStr) continue; // ไม่ได้ระบุวันที่ — เงียบ ไม่ใช่ error การบันทึก
           const newDate = parseDate(dateStr);
-          if (!newDate) { await replyLine(replyToken, '⚠️⚠️⚠️ ไม่เข้าใจวันที่ครับ เช่น เปลี่ยนวัน 20-6-69'); continue; }
+          if (!newDate) continue; // วันที่อ่านไม่ได้ — เงียบ ไม่ใช่ error การบันทึก
 
           // หางานที่ reply มา — จาก task_id ที่ผูกกับ quotedId ก่อน (แม่นยำตรงงาน)
           let targetTaskId = null, targetTaskName = '';
@@ -962,7 +965,7 @@ export default async function handler(req, res) {
               .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
             if (last && last.task_id) { targetTaskId = last.task_id; targetTaskName = last.task_name; }
           }
-          if (!targetTaskId) { await replyLine(replyToken, '⚠️ ไม่พบงานที่จะแก้ครับ ลอง reply ข้อความที่สร้างงานนั้น'); continue; }
+          if (!targetTaskId) continue; // ไม่พบงาน — เงียบ ไม่ใช่ error การบันทึก
 
           // ดึงชื่องานถ้ายังไม่มี
           if (!targetTaskName) {
@@ -972,11 +975,13 @@ export default async function handler(req, res) {
 
           const { error: updErr } = await db.from('tasks')
             .update({ action_date: newDate }).eq('id', targetTaskId);
-          if (updErr) { await replyLine(replyToken, '⚠️⚠️⚠️ แก้ไขไม่สำเร็จ: ' + updErr.message); continue; }
+          if (updErr) {
+            try { await notifyMainChat('⚠️ <b>แก้ไขวันที่ (จากไลน์) ไม่สำเร็จ</b>\n📋 ' + targetTaskName + '\n' + updErr.message); } catch (e) {}
+            continue;
+          }
           const [y2, m2, d2] = newDate.split('-');
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
-          await replyLine(replyToken, '✅ เปลี่ยนวันที่แล้วครับ!\n📋 ' + targetTaskName + '\n📅 ' + dateDisplay);
-          // แจ้งเข้ากลุ่ม Telegram หลัก
+          // แจ้งเข้ากลุ่ม Telegram หลัก (แทนการตอบ LINE)
           try {
             await notifyMainChat(
               '✏️ <b>แก้ไขวันที่งาน (จากไลน์)</b>\n' +
@@ -1015,7 +1020,7 @@ export default async function handler(req, res) {
       }
 
       if (taskData) {
-        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        if (!db) continue;
 
         const id = rid();
         const { error } = await db.from('tasks').insert({
@@ -1034,7 +1039,7 @@ export default async function handler(req, res) {
         });
 
         if (error) {
-          await replyLine(replyToken, `❌ บันทึกไม่สำเร็จครับ: ${error.message}`);
+          try { await notifyMainChat('⚠️ <b>บันทึกงานใหม่ (จากไลน์) ไม่สำเร็จ</b>\n📋 ' + taskData.task + '\n' + error.message); } catch (e) {}
         } else {
           // จำงานล่าสุดของกลุ่มนี้ (สำหรับแนบไฟล์ +1)
           try {
@@ -1057,16 +1062,7 @@ export default async function handler(req, res) {
           const dur = taskData.duration === 'รับ' ? '📦 รับ' : '🚚 ส่ง';
           const [y, m, d] = taskData.actionDate.split('-');
           const dateDisplay = `${+d}/${+m}/${+y+543}`;
-          await replyLine(replyToken,
-            `✅ บันทึกงานใหม่แล้วครับ!\n\n` +
-            `📋 ${taskData.task}\n` +
-            `${dur}\n` +
-            `📅 ${dateDisplay}\n` +
-            (taskData.salesName ? `👤 ${taskData.salesName}\n` : '') +
-            (taskData.categories ? `🏷️ ${taskData.categories}\n` : '') +
-            `\n🔗 ดูในระบบ: inventory-rho-hazel.vercel.app`
-          );
-          // แจ้งเข้ากลุ่ม Telegram หลักทันที
+          // แจ้งเข้ากลุ่ม Telegram หลักทันที (แทนการตอบ LINE)
           try {
             await notifyMainChat(
               `🆕 <b>งานใหม่จากไลน์</b>\n` +
