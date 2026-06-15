@@ -825,6 +825,7 @@ export default async function handler(req, res) {
 
       // ── คำสั่ง Odoo อื่นๆ (/สต็อก /po /so /pr /help) → เรียก rpc.js ──────
       if (tt.startsWith('/สต็อก') || tt.startsWith('/stock') ||
+          tt.startsWith('/อัพเดทสต็อกการ์ดเรล') || tt.startsWith('/อัปเดทสต็อกการ์ดเรล') || lc.startsWith('/guardrailstock') ||
           lc.startsWith('/po') || tt.startsWith('/พีโอ') ||
           lc.startsWith('/so') || tt.startsWith('/ขาย') ||
           lc.startsWith('/pr') || tt.startsWith('/ขอซื้อ')) {
@@ -842,6 +843,7 @@ export default async function handler(req, res) {
         await replyLine(replyToken,
           '🤖 TMS Bot — คำสั่งที่ใช้ได้\n\n' +
           '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อก\n' +
+          '🛣️ /อัพเดทสต็อกการ์ดเรล [md/cg/sep] — เช็คสต็อกการ์ดเรลทั้งหมด\n' +
           '🧾 /po [เลขที่] — ใบสั่งซื้อ\n' +
           '🧾 /so [เลขที่] — ใบสั่งขาย\n' +
           '📄 /pr [เลขที่] — ใบขอซื้อ\n' +
