@@ -297,7 +297,70 @@ export async function odooPR(prNumber, companyId) {
   return reqs;
 }
 
-// ── เทียบสินค้าระหว่าง 2 เอกสาร (SO/PO/SO vs SO ฯลฯ) ──────────────────────────
+// ── รายการสินค้าการ์ดเรล สำหรับคำสั่ง /อัพเดทสต็อกการ์ดเรล ────────────────────
+// group: 'plate' = แผ่น/บล็อก, 'post' = เสา, 'accessory' = นอต/ประกับ/ฐาน/เป้า
+export const GUARDRAIL_PRODUCTS = [
+  { code: '15FG-FG2-02-01-01-00-00-00-00', label: 'แผ่นการ์ดเรล หนา 3.2mm ยาว 4.32m',                    group: 'plate' },
+  { code: '15FG-FG2-02-01-02-00-00-00-00', label: 'แผ่นการ์ดเรล หนา 2.5mm ยาว 4.32m',                    group: 'plate' },
+  { code: '15FG-FG2-03-01-00-00-00-00-00', label: 'แผ่นประกับเฉียงการ์ดเรล',                              group: 'plate' },
+  { code: '15FG-FG2-04-01-02-00-00-00-00', label: 'แผ่นปลายการ์ดเรล หนา 3.2mm',                          group: 'plate' },
+  { code: '15FG-FG2-01-01-01-00-00-00-00', label: 'BLOCK OUT กลม 101.6x4x250mm',                          group: 'plate' },
+  { code: '15FG-FG2-04-01-02-01-00-00-00', label: 'แผ่นปลายการ์ดเรล หนา 3.2mm (Bull Nose)',               group: 'plate' },
+  { code: '15FG-FG2-05-01-00-00-00-00-00', label: 'แผ่นเสริมกำลังการ์ดเรล',                               group: 'plate' },
+  { code: '15FG-FG2-06-02-01-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 3.2mm',                           group: 'plate' },
+  { code: '15FG-FG2-06-02-02-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 2.5mm',                           group: 'plate' },
+
+  { code: '15FG-FG2-06-01-06-00-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2600mm เจาะ4รู (ทล.)', group: 'post' },
+  { code: '15FG-FG2-06-01-07-01-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2m เจาะ1รู (กทม.)',    group: 'post' },
+  { code: '15FG-FG2-07-01-01-00-00-00-00', label: 'เสาองศาการ์ดเรล 60° ยาว2000mm',                        group: 'post' },
+  { code: '15FG-FG2-07-01-02-00-00-00-00', label: 'เสาองศาการ์ดเรล 60° ยาว2500mm',                        group: 'post' },
+  { code: '15FG-FG2-08-01-01-00-00-00-00', label: 'เสาองศาการ์ดเรล 30° ยาว2000mm',                        group: 'post' },
+  { code: '15FG-FG2-08-01-02-00-00-00-00', label: 'เสาองศาการ์ดเรล 30° ยาว2500mm',                        group: 'post' },
+  { code: '15FG-GP1-00-01-01-01-00-00-00', label: 'เสาการ์ดเรล เจาะ2รู ยาว2000mm (ทล.)',                  group: 'post' },
+  { code: '15FG-GP1-01-02-01-01-00-00-00', label: 'เสาการ์ดเรล เจาะ2รู ยาว2000mm (กทม.)',                 group: 'post' },
+  { code: '15FG-GP1-02-02-01-01-00-00-00', label: 'เสาการ์ดเรล เจาะ2รู+เพลทฐาน ยาว920mm (กทม.)',          group: 'post' },
+  { code: '07RP-057-03-01-04-00-00-00-00', label: 'เสาการ์ดเรล 101.6mm ยาว2500mm เจาะ2รู (ทล.)',          group: 'post' },
+
+  { code: '07RP-037-17-01-01-00-00-00-00', label: 'นอตการ์ดเรล สั้น 5/8"x1-1/4"',                         group: 'accessory' },
+  { code: '07RP-037-15-01-01-00-00-00-00', label: 'นอตการ์ดเรล กลาง 5/8"x2-1/2"',                         group: 'accessory' },
+  { code: '07RP-037-16-01-02-00-00-00-00', label: 'นอตการ์ดเรล ยาว 5/8"x7-1/4"',                          group: 'accessory' },
+  { code: '07RP-040-01-01-01-00-00-00-00', label: 'BLOCK OUT ตัวซีการ์ดเรล 150x75x330mm',                 group: 'accessory' },
+  { code: '07RP-017-00-02-01-00-00-00-00', label: 'ประกับนอตยาวการ์ดเรล 60x60x15mm',                      group: 'accessory' },
+  { code: '07RP-017-02-02-01-00-00-00-00', label: 'ประกับนอตยาวการ์ดเรล 50x60x15mm',                      group: 'accessory' },
+  { code: '07RP-010-00-01-03-00-00-00-00', label: 'ฐานเสาการ์ดเรล ตอม่อ 0.70x0.70x0.80m (1 โบลท์)',       group: 'accessory' },
+  { code: '07RP-010-00-01-03-01-00-00-00', label: 'ฐานเสาการ์ดเรล ตอม่อ 0.70x0.70x0.80m (I-Bolt 2ตัว)',   group: 'accessory' },
+  { code: '07RP-018-02-01-01-00-00-00-00', label: 'เป้าคางหมู 100x150mm',                                 group: 'accessory' },
+  { code: '07RP-018-01-01-01-00-00-00-00', label: 'เป้ากลม 100mm',                                        group: 'accessory' },
+];
+
+// ── เช็คสต็อกสินค้าการ์ดเรลทุกรหัสในรายการด้านบน ทีเดียวในคำสั่งเดียว ─────────
+export async function odooGuardrailStock(companyId) {
+  const codes = GUARDRAIL_PRODUCTS.map(p => p.code);
+  // context: ให้ qty_available คำนวณเฉพาะบริษัทที่เลือก (เหมือน odooStock)
+  const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
+  const rows = await searchRead('product.product',
+    [['default_code', 'in', codes]],
+    ['default_code', 'name', 'qty_available', 'virtual_available', 'uom_id'],
+    codes.length + 5, ctx);
+
+  const byCode = new Map();
+  for (const r of rows) byCode.set(r.default_code, r);
+
+  return GUARDRAIL_PRODUCTS.map(p => {
+    const r = byCode.get(p.code);
+    return {
+      code: p.code,
+      label: p.label,
+      group: p.group,
+      found: !!r,
+      qty: r ? r.qty_available : null,
+      forecast: r ? r.virtual_available : null,
+      uom: (r && Array.isArray(r.uom_id)) ? r.uom_id[1] : '',
+    };
+  });
+}
+
+
 // คืน { docA, docB, rows: [{code,name,qtyA,qtyB,diff,status}] }
 // ── normalize รายการสินค้าของเอกสาร SO/PO/PR → { code, name, unit, qty } ──────
 export function normalizeDocLines(doc, type) {
