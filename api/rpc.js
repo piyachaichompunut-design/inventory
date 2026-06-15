@@ -1979,7 +1979,27 @@ async function deleteDocRSCompany(id) {
   return { success: true };
 }
 
+// ── นับผู้ใช้งานออนไลน์ (heartbeat) ──────────────────────────────────────────
+// ไม่มีระบบ user/login รายคน เลยใช้วิธี: หน้าเว็บฝั่ง browser สุ่ม session id
+// เก็บไว้ใน localStorage แล้วยิง heartbeat มาทุกๆ ~30 วินาที
+// "ออนไลน์" = session ที่ ping เข้ามาภายใน 2 นาทีที่ผ่านมา
+async function heartbeat(sessionId) {
+  if (!sessionId || typeof sessionId !== 'string') return { online: 0 };
+  const now = new Date().toISOString();
+  try {
+    await db.from('active_sessions').upsert({ session_id: String(sessionId).slice(0, 100), last_seen: now });
+  } catch (e) { /* ไม่ต้อง throw แม้ upsert ไม่สำเร็จ ยังคืน count ได้ */ }
+
+  const cutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const { count, error } = await db.from('active_sessions')
+    .select('session_id', { count: 'exact', head: true })
+    .gte('last_seen', cutoff);
+  if (error) return { online: 1 };
+  return { online: count || 0 };
+}
+
 const HANDLERS = {
+  heartbeat,
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
   getCategories, addCategory, deleteCategory, getDashboardData,
