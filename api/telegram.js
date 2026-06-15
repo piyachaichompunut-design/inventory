@@ -622,9 +622,11 @@ export default async function handler(req, res) {
         if (repDocType !== 'picking') {
           try {
             const { odooFindDoc } = await import('./odoo.js');
-            const doc = await odooFindDoc(repDocType, repKw, null);
+            // ตัดตัวย่อบริษัท (md/cg/sep/akn/set) ออกก่อนค้น เช่น "2606001 MD" → "2606001" + company=เมิร์ค
+            const { keyword: repKwClean, company: repCompany } = parseCompany(repKw);
+            const doc = await odooFindDoc(repDocType, repKwClean, null, repCompany.id);
             if (!doc) {
-              await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKw + '" ครับ');
+              await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKwClean + '" ครับ');
               res.status(200).json({ ok: true }); return;
             }
             await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
