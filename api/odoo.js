@@ -472,12 +472,12 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 
 // ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
-export async function odooFindDoc(docType, keyword, dateFilter) {
+export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const words = smartWords(keyword);
 
   if (docType === 'po') {
     const rows = await safeSearchRead('purchase.order',
-      ['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]],
+      withCompany(['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
     return { id: rows[0].id, name: rows[0].name, model: 'purchase.order' };
@@ -485,7 +485,7 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
 
   if (docType === 'so') {
     const rows = await safeSearchRead('sale.order',
-      ['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]],
+      withCompany(['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
     return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
@@ -493,7 +493,7 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
 
   if (docType === 'pr') {
     const rows = await safeSearchRead('purchase.request',
-      [['name', 'ilike', keyword]],
+      withCompany([['name', 'ilike', keyword]], companyId),
       ['id', 'name'], 5);
     if (!rows.length) return null;
     return { id: rows[0].id, name: rows[0].name, model: 'purchase.request' };
@@ -521,8 +521,8 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
   };
 
   let rows = [];
-  try { rows = await searchRead('stock.picking', buildDomain('full'), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
-    try { rows = await searchRead('stock.picking', buildDomain('simple'), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
+  try { rows = await searchRead('stock.picking', withCompany(buildDomain('full'), companyId), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
+    try { rows = await searchRead('stock.picking', withCompany(buildDomain('simple'), companyId), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
   }
 
   // กรองวันที่ถ้าระบุ
