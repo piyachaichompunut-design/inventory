@@ -472,6 +472,14 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 
 // ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
+// เลือกแถวที่ name ตรงกับ keyword แบบเป๊ะๆ (ไม่สนตัวพิมพ์เล็ก/ใหญ่) ก่อน ถ้าไม่มีค่อย fallback ไปตัวแรก
+// กันปัญหา ilike '2606001' ไปแมตช์ "M2606001" ก่อน "2606001"
+function pickExact(rows, keyword) {
+  const kw = String(keyword).trim().toLowerCase();
+  const exact = rows.find(r => String(r.name || '').trim().toLowerCase() === kw);
+  return exact || rows[0];
+}
+
 export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const words = smartWords(keyword);
 
@@ -480,7 +488,8 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany(['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    return { id: rows[0].id, name: rows[0].name, model: 'purchase.order' };
+    const best = pickExact(rows, keyword);
+    return { id: best.id, name: best.name, model: 'purchase.order' };
   }
 
   if (docType === 'so') {
@@ -488,7 +497,8 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany(['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
+    const best = pickExact(rows, keyword);
+    return { id: best.id, name: best.name, model: 'sale.order' };
   }
 
   if (docType === 'pr') {
@@ -496,7 +506,8 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany([['name', 'ilike', keyword]], companyId),
       ['id', 'name'], 5);
     if (!rows.length) return null;
-    return { id: rows[0].id, name: rows[0].name, model: 'purchase.request' };
+    const best = pickExact(rows, keyword);
+    return { id: best.id, name: best.name, model: 'purchase.request' };
   }
 
   // picking — ค้นแบบ odooDelivery + กรองวันที่
