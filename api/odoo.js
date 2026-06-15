@@ -226,6 +226,7 @@ export async function odooPO(poNumber, companyId) {
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'partner_ref'],
     5
   );
+  sortExactFirst(orders, poNumber);
   // ดึงรายการสินค้าของแต่ละ PO
   for (const o of orders) {
     o.lines = await searchRead(
@@ -260,6 +261,7 @@ export async function odooSO(soNumber, companyId) {
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'client_order_ref'],
     5
   );
+  sortExactFirst(orders, soNumber);
   for (const o of orders) {
     try {
       o.lines = await searchRead(
@@ -281,6 +283,7 @@ export async function odooPR(prNumber, companyId) {
     ['name', 'state', 'requested_by', 'date_start', 'description'],
     5
   );
+  sortExactFirst(reqs, prNumber);
   for (const r of reqs) {
     try {
       r.lines = await searchRead(
@@ -472,12 +475,16 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 
 // ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
-// เลือกแถวที่ name ตรงกับ keyword แบบเป๊ะๆ (ไม่สนตัวพิมพ์เล็ก/ใหญ่) ก่อน ถ้าไม่มีค่อย fallback ไปตัวแรก
-// กันปัญหา ilike '2606001' ไปแมตช์ "M2606001" ก่อน "2606001"
-function pickExact(rows, keyword) {
+// จัดเรียงผลลัพธ์: ถ้ามีรายการที่ name ตรงกับ keyword แบบเป๊ะๆ (ไม่สนตัวพิมพ์เล็ก/ใหญ่) ให้ขึ้นเป็นอันดับแรก
+// กันปัญหา ilike '2606001' ไปแมตช์ "M2606001" ก่อน "2606001" (ทำให้ docs[0] หรือ odooFindDoc หยิบใบผิด)
+function sortExactFirst(rows, keyword) {
   const kw = String(keyword).trim().toLowerCase();
-  const exact = rows.find(r => String(r.name || '').trim().toLowerCase() === kw);
-  return exact || rows[0];
+  const idx = rows.findIndex(r => String(r.name || '').trim().toLowerCase() === kw);
+  if (idx > 0) {
+    const [exact] = rows.splice(idx, 1);
+    rows.unshift(exact);
+  }
+  return rows;
 }
 
 export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
@@ -488,7 +495,7 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany(['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    const best = pickExact(rows, keyword);
+    const best = sortExactFirst(rows, keyword)[0];
     return { id: best.id, name: best.name, model: 'purchase.order' };
   }
 
@@ -497,7 +504,7 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany(['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    const best = pickExact(rows, keyword);
+    const best = sortExactFirst(rows, keyword)[0];
     return { id: best.id, name: best.name, model: 'sale.order' };
   }
 
@@ -506,7 +513,7 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
       withCompany([['name', 'ilike', keyword]], companyId),
       ['id', 'name'], 5);
     if (!rows.length) return null;
-    const best = pickExact(rows, keyword);
+    const best = sortExactFirst(rows, keyword)[0];
     return { id: best.id, name: best.name, model: 'purchase.request' };
   }
 
