@@ -2187,11 +2187,30 @@ export { checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport, handl
 export async function sendTelegramReply(chatId, text) {
   if (!TG_TOKEN) return;
   try {
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+    const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
     });
+    if (!r.ok) {
+      let body = '';
+      try { body = await r.text(); } catch (e2) {}
+      console.error('TG sendMessage failed (' + r.status + '):', body);
+      // เผื่อปัญหาคือ Telegram parse HTML ไม่ได้ (เช่นมี < > & หลุดมาในข้อความ)
+      // → ลองส่งใหม่แบบ plain text (ไม่ใส่ parse_mode) เพื่อไม่ให้เงียบไปเลย
+      if (r.status === 400) {
+        const r2 = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true })
+        });
+        if (!r2.ok) {
+          let body2 = '';
+          try { body2 = await r2.text(); } catch (e3) {}
+          console.error('TG sendMessage (plain) failed (' + r2.status + '):', body2);
+        }
+      }
+    }
   } catch (e) { console.error('TG reply failed:', e.message); }
 }
 // ให้ webhook เช็คว่า chat ที่ส่งมา ตรงกับกลุ่มที่ตั้งไว้ไหม
