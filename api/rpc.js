@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -966,6 +966,7 @@ async function handleTelegramCommand(text) {
       '📈 /kpi [ชื่อ] — KPI พนักงาน เช่น /kpi สมชาย หรือ /kpi สมชาย เดือน5/2026\n' +
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
       '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก แผ่น 3.2 ชุบ\n' +
+      '🛣️ /อัพเดทสต็อกการ์ดเรล [md/cg/sep] — เช็คสต็อกชิ้นส่วนการ์ดเรลทั้งหมดทีเดียว\n' +
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '🧾 /so [เลข SO] — ดูใบสั่งขายจาก Odoo เช่น /so 2606007\n' +
       '📄 /pr [เลข PR] — ดูใบขอซื้อจาก Odoo เช่น /pr PR01881\n' +
@@ -1405,6 +1406,70 @@ async function handleTelegramCommand(text) {
       msg += '\n';
     }
     return msg.trim();
+  }
+
+  // ── /อัพเดทสต็อกการ์ดเรล [md/cg/sep/akn] — เช็คสต็อกสินค้าการ์ดเรลทั้งหมด (สร้างหน้าเว็บ) ──
+  if (cleaned.startsWith('/อัพเดทสต็อกการ์ดเรล') || cleaned.startsWith('/อัปเดทสต็อกการ์ดเรล') ||
+      cleaned.startsWith('/สต็อกการ์ดเรล') || lower.startsWith('/guardrailstock')) {
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    if (!db) return '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อ Storage ครับ';
+    const grArg = cleaned
+      .replace(/^\/อัพเดทสต็อกการ์ดเรล/, '')
+      .replace(/^\/อัปเดทสต็อกการ์ดเรล/, '')
+      .replace(/^\/สต็อกการ์ดเรล/, '')
+      .replace(/^\/guardrailstock/i, '')
+      .trim();
+    // ไม่ใส่ตัวย่อ = อาคเนย์ (ค่าเริ่มต้นเหมือนคำสั่งอื่นๆ เช่น /สต็อก /po /so /pr)
+    const { company: grCo } = parseCompany(grArg);
+
+    try {
+      const items = await odooGuardrailStock(grCo.id);
+      const groupNames = { plate: '🟦 แผ่น/บล็อก', post: '🟩 เสา', accessory: '🟧 นอต/ประกับ/ฐาน/เป้า' };
+      const groupOrder = ['plate', 'post', 'accessory'];
+
+      const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+      const ts = now.toISOString().slice(0, 10) + ' ' + now.toISOString().slice(11, 16);
+
+      let foundCount = 0, notFoundCount = 0;
+      const picks = groupOrder.map(g => {
+        const list = items.filter(it => it.group === g);
+        const lines = list.map(it => {
+          if (it.found) {
+            foundCount++;
+            return { name: '[' + it.code + '] ' + it.label, qty: it.qty, uom: it.uom || '' };
+          }
+          notFoundCount++;
+          return { name: '[' + it.code + '] ' + it.label, qty: '-', uom: 'ไม่พบในระบบ' };
+        });
+        return {
+          name: groupNames[g] + ' (' + list.length + ' รายการ)',
+          origin: '', partner: '', date: ts,
+          lines
+        };
+      }).filter(p => p.lines.length);
+
+      const data = { summary: { total: picks.length }, picks };
+
+      // บันทึกลง delivery_views แล้วส่งลิงก์ (รูปแบบหน้าเว็บเดียวกับ /ใบส่งของ)
+      const viewId = 'S' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+      const { error: insErr } = await db.from('delivery_views').insert({
+        id: viewId,
+        title: 'สต็อกการ์ดเรล — ' + grCo.name,
+        company: grCo.name,
+        status_label: 'อัปเดต ' + ts + ' น.',
+        data
+      });
+      if (insErr) return '⚠️⚠️⚠️ บันทึกข้อมูลไม่สำเร็จ: ' + tgEsc(insErr.message);
+
+      const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+      let msg = '📦 สต็อกการ์ดเรล — ' + grCo.name + '\n';
+      msg += 'พบ ' + foundCount + ' / ' + (foundCount + notFoundCount) + ' รายการ';
+      if (notFoundCount) msg += ' (ไม่พบ ' + notFoundCount + ' รายการ)';
+      msg += '\n\n📎 เปิดดูสต็อกการ์ดเรล:\n' + viewUrl;
+      return msg;
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
   }
 
   // ── /สต็อก [คำค้น] — เช็คสต็อกสินค้าจาก Odoo ──────────────────────────
