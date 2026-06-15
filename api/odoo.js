@@ -340,7 +340,7 @@ export async function odooGuardrailStock(companyId) {
   const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
   const rows = await searchRead('product.product',
     [['default_code', 'in', codes]],
-    ['default_code', 'name', 'qty_available', 'virtual_available', 'uom_id'],
+    ['default_code', 'name', 'qty_available', 'uom_id'],
     codes.length + 5, ctx);
 
   const byCode = new Map();
@@ -354,7 +354,6 @@ export async function odooGuardrailStock(companyId) {
       group: p.group,
       found: !!r,
       qty: r ? r.qty_available : null,
-      forecast: r ? r.virtual_available : null,
       uom: (r && Array.isArray(r.uom_id)) ? r.uom_id[1] : '',
     };
   });
