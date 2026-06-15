@@ -59,6 +59,13 @@ async function cleanupTgUpdates(db) {
   return error ? { error: error.message } : { ok: true };
 }
 
+// ลบ active_sessions ที่ไม่ ping เกิน 1 วัน (กัน table โตจาก session เก่าๆ)
+async function cleanupActiveSessions(db) {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { error } = await db.from('active_sessions').delete().lt('last_seen', cutoff);
+  return error ? { error: error.message } : { ok: true };
+}
+
 export default async function handler(req, res) {
   try {
     const now = new Date();
@@ -84,6 +91,9 @@ export default async function handler(req, res) {
 
       // ลบ tg_processed_updates เก่ากว่า 7 วัน
       try { results.cleanupTg = await cleanupTgUpdates(db); } catch (e) { results.cleanupTg = { error: e.message }; }
+
+      // ลบ active_sessions ที่ไม่ ping เกิน 1 วัน
+      try { results.cleanupSessions = await cleanupActiveSessions(db); } catch (e) { results.cleanupSessions = { error: e.message }; }
     }
 
     // วันที่ 1 ของเดือน — KPI รายเดือน
