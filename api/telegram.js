@@ -865,12 +865,15 @@ export default async function handler(req, res) {
           res.status(200).json({ ok: true }); return;
         }
 
+        // แยกตัวย่อบริษัท (md/cg/sep/akn/set) ออกก่อน เช่น "po2606001 md" → keyword="po2606001", company=เมิร์ค
+        const { keyword: argNoCompany, company: docCompany } = parseCompany(rawArg);
+
         // แยก docType
-        var docType = 'picking', docKeyword = rawArg;
+        var docType = 'picking', docKeyword = argNoCompany;
         var docDateFilter = null;
-        if (/^po\s*/i.test(rawArg)) { docType = 'po'; docKeyword = rawArg.replace(/^po\s*/i,'').trim(); }
-        else if (/^so\s*/i.test(rawArg)) { docType = 'so'; docKeyword = rawArg.replace(/^so\s*/i,'').trim(); }
-        else if (/^pr\s*/i.test(rawArg)) { docType = 'pr'; docKeyword = rawArg.replace(/^pr\s*/i,'').trim(); }
+        if (/^po\s*/i.test(argNoCompany)) { docType = 'po'; docKeyword = argNoCompany.replace(/^po\s*/i,'').trim(); }
+        else if (/^so\s*/i.test(argNoCompany)) { docType = 'so'; docKeyword = argNoCompany.replace(/^so\s*/i,'').trim(); }
+        else if (/^pr\s*/i.test(argNoCompany)) { docType = 'pr'; docKeyword = argNoCompany.replace(/^pr\s*/i,'').trim(); }
         else {
           // picking — ดึงวันที่ออก
           var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
@@ -879,7 +882,7 @@ export default async function handler(req, res) {
 
         await sendTelegramReply(chatId, '🔍 กำลังค้นหาเอกสารใน Odoo...');
         try {
-          const doc = await odooFindDoc(docType, docKeyword, docDateFilter);
+          const doc = await odooFindDoc(docType, docKeyword, docDateFilter, docCompany.id);
           if (!doc) {
             await sendTelegramReply(chatId, '⚠️⚠️⚠️ ไม่พบเอกสาร "' + rawArg + '" ใน Odoo ครับ');
             res.status(200).json({ ok: true }); return;
