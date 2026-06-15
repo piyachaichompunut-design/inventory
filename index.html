@@ -58,6 +58,7 @@ body{font-family:'Segoe UI',-apple-system,'Noto Sans Thai',Arial,sans-serif;back
 .hdr-right{display:flex;align-items:center;gap:14px}
 .hdr-dt{font-size:12px;color:var(--muted);background:var(--bg);padding:5px 12px;border-radius:20px;border:1px solid var(--border)}
 .hdr-badge{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;font-size:12px;font-weight:700;padding:6px 14px;border-radius:20px;box-shadow:0 2px 8px rgba(249,115,22,.35)}
+@media(max-width:760px){#online-badge{display:none}}
 
 /* ── NAV ── */
 .nav{background:#fff;border-bottom:1px solid var(--border);padding:0 28px;display:flex;overflow-x:auto;position:sticky;top:62px;z-index:190}
@@ -1373,6 +1374,10 @@ body.dark-mode .task-date-txt{color:#93c5fd!important}
   </div>
   <div style="display:flex;align-items:center;gap:12px">
     <div style="font-size:12px;color:var(--muted);background:var(--bg);padding:5px 13px;border-radius:20px;border:1px solid var(--border)" id="hdr-dt"></div>
+    <div id="online-badge" title="จำนวนผู้ใช้งานที่ออนไลน์อยู่ตอนนี้" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--bg);padding:5px 13px;border-radius:20px;border:1px solid var(--border)">
+      <span style="width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;flex-shrink:0"></span>
+      <span id="online-count">-</span> คนใช้งานอยู่
+    </div>
     <div style="background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;font-size:12px;font-weight:700;padding:6px 14px;border-radius:20px;box-shadow:0 2px 8px rgba(249,115,22,.3)">TMS v2.0</div>
     <button class="dm-btn" id="dm-btn" onclick="toggleAppDark()" title="Dark / Light Mode">🌙</button>
     <button class="dm-btn dp-open-btn" onclick="toggleDisplayPanel()" title="ตั้งค่าการแสดงผล" id="dp-open-btn">🎨</button>
@@ -1384,6 +1389,34 @@ function appLogout(){
   try { localStorage.removeItem('app_token'); } catch(e){}
   window.location.href = '/login.html';
 }
+
+// ── นับผู้ใช้งานออนไลน์: สุ่ม session id เก็บใน localStorage แล้ว ping ทุก 30s ──
+(function(){
+  function getSessionId(){
+    var KEY = 'tms_session_id';
+    var id = '';
+    try { id = localStorage.getItem(KEY); } catch(e){}
+    if(!id){
+      id = 'sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem(KEY, id); } catch(e){}
+    }
+    return id;
+  }
+  function ping(){
+    var sid = getSessionId();
+    try{
+      google.script.run
+        .withSuccessHandler(function(r){
+          var el = document.getElementById('online-count');
+          if(el && r && typeof r.online === 'number') el.textContent = r.online;
+        })
+        .withFailureHandler(function(){ /* เงียบไว้ ไม่ต้องรบกวนผู้ใช้ */ })
+        .heartbeat(sid);
+    }catch(e){}
+  }
+  ping();
+  setInterval(ping, 30000);
+})();
 </script>
 
 <!-- NAV -->
