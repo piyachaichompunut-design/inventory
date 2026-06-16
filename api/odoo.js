@@ -576,39 +576,48 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
     codeMap = new Map(prodByCode.map(r => [String(r.default_code), r]));
   }
 
-  // ── จับคู่สินค้าแต่ละบรรทัด (fallback หลายชั้น) ────────────────────────────
+  // ── จับคู่สินค้าแต่ละบรรทัด ─────────────────────────────────────────────────
   const cleanName = (s) => String(s || '').replace(/-{2,}/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-  const results = [];
-  for (const line of lines) {
-    let prod = null, status = 'notfound';
 
-    // ชั้น 1: รหัสตรงเป๊ะ
+  // ชั้น 1: map จากรหัสก่อน
+  const results = lines.map(line => {
     if (line.productCode && codeMap.has(String(line.productCode))) {
-      prod = codeMap.get(String(line.productCode));
-      status = 'code';
+      return { line, status: 'code', product: codeMap.get(String(line.productCode)) };
     }
+    return { line, status: 'notfound', product: null };
+  });
 
-    // ชั้น 2: ค้นด้วยชื่อ (ตรงเป๊ะ → ใกล้เคียง)
-    if (!prod && line.productName) {
-      const nm = String(line.productName).trim();
-      // ตัด --- และช่องว่างซ้ำออกก่อนค้น เอาคำหลักมาค้น ilike
-      const searchName = nm.replace(/-{2,}/g, ' ').replace(/\s+/g, ' ').trim();
-      let nameRows = [];
-      try {
-        nameRows = await searchRead('product.product',
-          ['|', ['name', 'ilike', searchName], ['default_code', 'ilike', line.productCode || '___nomatch___']],
-          ['id', 'default_code', 'name', 'uom_id'], 10);
-      } catch (e) { nameRows = []; }
+  // ชั้น 2: รายการที่ยังไม่เจอ → batch ค้นชื่อทีเดียว
+  const needNameSearch = results.filter(r => r.status === 'notfound' && r.line.productName);
+  if (needNameSearch.length) {
+    const nameDomain = needNameSearch.map(r =>
+      ['name', 'ilike', String(r.line.productName).replace(/-{2,}/g, ' ').trim()]
+    );
+    // OR domain: ['|','|', cond1, cond2, cond3, ...]
+    let domain;
+    if (nameDomain.length === 1) {
+      domain = [nameDomain[0]];
+    } else {
+      domain = [];
+      for (let i = 0; i < nameDomain.length - 1; i++) domain.push('|');
+      domain = domain.concat(nameDomain);
+    }
+    const nameRows = await searchRead('product.product', domain,
+      ['id', 'default_code', 'name', 'uom_id'], needNameSearch.length * 3 + 5);
 
-      if (nameRows.length) {
-        // หาตัวที่ชื่อตรงเป๊ะ (หลัง normalize) ก่อน
-        const exact = nameRows.find(r => cleanName(r.name) === cleanName(nm));
-        prod = exact || nameRows[0];
-        status = 'name'; // เจอจากชื่อ = ต้องให้ user เช็ค
+    // จับคู่แต่ละบรรทัดกับผลลัพธ์
+    for (const r of needNameSearch) {
+      const nm = cleanName(r.line.productName);
+      const searchNm = nm.split(' ')[0]; // คำแรกเป็นตัวกรอง
+      const candidates = nameRows.filter(p =>
+        cleanName(p.name).includes(searchNm) || searchNm.includes(cleanName(p.name).split(' ')[0])
+      );
+      if (candidates.length) {
+        const exact = candidates.find(p => cleanName(p.name) === nm);
+        r.product = exact || candidates[0];
+        r.status = 'name';
       }
     }
-
-    results.push({ line, status, product: prod });
   }
 
   // สร้าง picking header
@@ -625,15 +634,13 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
     'stock.picking', 'create', [pickingVals]
   ]);
 
-  // สร้าง stock.move เฉพาะรายการที่เจอสินค้า
-  for (const r of results) {
-    if (!r.product) continue;
-    const prod = r.product;
-    const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
-    await jsonRpc('object', 'execute_kw', [
-      ODOO_DB, uid, ODOO_KEY,
-      'stock.move', 'create',
-      [{
+  // สร้าง stock.move ทีเดียวทั้งหมด (batch create) — เร็วกว่า loop มาก
+  const moveVals = results
+    .filter(r => r.product)
+    .map(r => {
+      const prod = r.product;
+      const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
+      return {
         name: prod.name || r.line.productCode || r.line.productName || '-',
         picking_id: pickingId,
         product_id: prod.id,
@@ -641,7 +648,13 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
         product_uom: uomId,
         location_id: srcLocId,
         location_dest_id: destLocId,
-      }]
+      };
+    });
+
+  if (moveVals.length) {
+    await jsonRpc('object', 'execute_kw', [
+      ODOO_DB, uid, ODOO_KEY,
+      'stock.move', 'create', [moveVals]
     ]);
   }
 
