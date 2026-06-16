@@ -657,17 +657,20 @@ export default async function handler(req, res) {
             const lines = [];
             for (let ri = 0; ri < rows.length; ri++) {
               const row = rows[ri];
-              const code = row[1] ? String(row[1]).trim() : '';
+              let code = row[1] ? String(row[1]).trim() : '';
               const name = row[2] ? String(row[2]).trim() : '';
               const qty  = row[5];
-              if (!code || !/^[A-Z0-9]{2,}-[A-Z0-9\-]{5,}/.test(code)) continue;
+              // รหัสต้องเป็นรูปแบบรหัสจริง (XX-XXX-...) ไม่งั้นถือว่าไม่มีรหัส
+              if (code && !/^[A-Z0-9]{2,}-[A-Z0-9\-]{5,}/.test(code)) code = '';
+              // รับแถวที่มี "รหัส หรือ ชื่อ" อย่างน้อยอย่างใดอย่างหนึ่ง + มีจำนวน
+              if (!code && !name) continue;
               const qtyNum = parseFloat(String(qty || '0').replace(/[^0-9.]/g, '')) || 0;
               if (qtyNum <= 0) continue;
               lines.push({ productCode: code, productName: name.slice(0, 120), qty: qtyNum });
             }
 
             if (!lines.length) {
-              await sendTelegramReply(xlsChatId, '⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nตรวจสอบว่ารหัสสินค้าอยู่ในรูปแบบ [XXXX-XXXX-...] ในไฟล์');
+              await sendTelegramReply(xlsChatId, '⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nต้องมีรหัสสินค้า (เช่น 08RO-127-...) หรือชื่อสินค้า พร้อมจำนวน');
               res.status(200).json({ ok: true }); return;
             }
 
@@ -675,7 +678,7 @@ export default async function handler(req, res) {
 
             const { odooCreatePickingFromLines: createPicking } = await import('./odoo.js');
             const sourceDoc = xlsSess.doc_name || '';
-            const { pickingId, notFound } = await createPicking(
+            const { pickingId, matchedCode, matchedName, notFound } = await createPicking(
               xlsSess.doc_id,        // picking_type_id
               lines,
               null,                  // scheduled_date (ใช้ค่า default)
@@ -686,15 +689,37 @@ export default async function handler(req, res) {
             // ลบ session
             await db.from('tg_report_session').delete().eq('chat_id', String(xlsChatId));
 
+            const addedCount = matchedCode.length + matchedName.length;
             let reply = '✅ สร้าง picking สำเร็จแล้วครับ!\n\n';
             reply += '📋 Picking ID: <b>' + pickingId + '</b>\n';
-            reply += '📦 รายการสินค้า: ' + (lines.length - notFound.length) + '/' + lines.length + ' รายการ\n';
+            reply += '📦 เพิ่มสินค้า: ' + addedCount + '/' + lines.length + ' รายการ\n';
             reply += '🏭 โครงการ: ' + tgEsc(sourceDoc) + '\n';
-            if (notFound.length) {
-              reply += '\n⚠️ ไม่พบรหัสสินค้าใน Odoo (' + notFound.length + ' รายการ):\n';
-              notFound.forEach(c => { reply += '• ' + tgEsc(c) + '\n'; });
-              reply += '\nรายการเหล่านี้ไม่ได้ถูกเพิ่มใน picking ครับ กรุณาเพิ่มเองใน Odoo';
+
+            // ⚠️ รายการที่จับคู่จากชื่อ (ไม่ใช่รหัส) → ต้องเช็ค
+            if (matchedName.length) {
+              reply += '\n⚠️ <b>ต้องตรวจสอบ ' + matchedName.length + ' รายการ</b> (จับคู่จากชื่อ ไม่ใช่รหัส):\n';
+              matchedName.forEach(r => {
+                const fromName = (r.line.productName || r.line.productCode || '-').slice(0, 35);
+                const toName = (r.product.name || '-').slice(0, 35);
+                reply += '• "' + tgEsc(fromName) + '"\n   → จับเป็น: ' + tgEsc(toName) + '\n';
+              });
+              reply += 'กรุณาเปิด picking ใน Odoo เช็คว่าตรงไหมครับ';
             }
+
+            // ❌ ไม่เจอเลย → ต้องเพิ่มเอง
+            if (notFound.length) {
+              reply += '\n\n❌ <b>ไม่พบใน Odoo ' + notFound.length + ' รายการ</b> (ไม่ได้เพิ่ม):\n';
+              notFound.forEach(r => {
+                const label = r.line.productCode || r.line.productName || '-';
+                reply += '• ' + tgEsc(String(label).slice(0, 45)) + '\n';
+              });
+              reply += 'กรุณาเพิ่มเองใน Odoo ครับ';
+            }
+
+            if (!matchedName.length && !notFound.length) {
+              reply += '\n✅ ทุกรายการจับคู่จากรหัสสินค้าตรงเป๊ะ';
+            }
+
             await sendTelegramReply(xlsChatId, reply);
           } catch (e) {
             await sendTelegramReply(msg.chat.id, '❌ สร้าง picking ไม่สำเร็จ: ' + tgEsc(e.message));
