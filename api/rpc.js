@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -967,6 +967,7 @@ async function handleTelegramCommand(text) {
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
       '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก แผ่น 3.2 ชุบ\n' +
       '🛣️ /อัพเดทสต็อกการ์ดเรล [md/cg/sep] — เช็คสต็อกชิ้นส่วนการ์ดเรลทั้งหมดทีเดียว\n' +
+      '📥 /นำเข้าใบส่งของ [คำค้นโครงการ] + แนบไฟล์ Excel — สร้าง picking ใน Odoo อัตโนมัติ\n' +
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '🧾 /so [เลข SO] — ดูใบสั่งขายจาก Odoo เช่น /so 2606007\n' +
       '📄 /pr [เลข PR] — ดูใบขอซื้อจาก Odoo เช่น /pr PR01881\n' +
@@ -1470,6 +1471,33 @@ async function handleTelegramCommand(text) {
     } catch (e) {
       return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
     }
+  }
+
+  // ── /นำเข้าใบส่งของ [คำค้น] + ไฟล์ Excel — สร้าง picking ใน Odoo ─────────────
+  // ขั้นตอน: พิมพ์คำสั่ง + แนบ Excel → บอทค้น Operation Type → ถ้าหลายตัวให้เลือก → สร้าง picking
+  if (cleaned.startsWith('/นำเข้าใบส่งของ') || lower.startsWith('/importdelivery')) {
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ครับ';
+    const kwRaw = cleaned.replace(/^\/นำเข้าใบส่งของ/, '').replace(/^\/importdelivery/i, '').trim();
+    const { keyword: kw, company: co } = parseCompany(kwRaw);
+    if (!kw) return '📥 พิมพ์คำค้นหาโครงการด้วยครับ เช่น\n/นำเข้าใบส่งของ กท.1002\n/นำเข้าใบส่งของ กท.1002 md';
+
+    // ค้นหา Operation Type ที่ชื่อมีคำค้นนี้
+    const opTypes = await odooFindOperationType(kw, co.id);
+    if (!opTypes.length) return '🔍 ไม่พบโครงการที่มีคำว่า "' + tgEsc(kw) + '" ใน Odoo ครับ\nลองค้นด้วยสายทาง เช่น /นำเข้าใบส่งของ 1002';
+
+    if (opTypes.length === 1) {
+      // เจอตัวเดียว → เก็บ session รอ Excel
+      const op = opTypes[0];
+      return '✅ พบโครงการ:\n<b>' + tgEsc(op.name) + '</b>\n\n📎 กรุณาแนบไฟล์ Excel ใบส่งของมาในข้อความถัดไปได้เลยครับ\n\n<i>(พิมพ์ /ยกเลิก เพื่อยกเลิก)</i>\n\n__PENDING_DELIVERY_IMPORT__:' + op.id + ':' + tgEsc(op.name) + ':' + co.id;
+    }
+
+    // เจอหลายตัว → ส่งตัวเลือก
+    let msg = '🔍 พบ ' + opTypes.length + ' โครงการที่ชื่อมีคำว่า "' + tgEsc(kw) + '" ครับ:\n\n';
+    opTypes.slice(0, 8).forEach((op, i) => {
+      msg += (i + 1) + '. ' + tgEsc(op.name) + '\n';
+    });
+    msg += '\n📌 ตอบด้วยตัวเลข 1-' + Math.min(opTypes.length, 8) + ' เพื่อเลือกโครงการ\nหรือพิมพ์คำค้นให้ละเอียดกว่านี้ เช่น /นำเข้าใบส่งของ กท.1002 ตลิ่งชัน\n\n__OPTYPE_LIST__:' + opTypes.slice(0, 8).map(op => op.id + '|' + op.name).join(';;') + '::CO:' + co.id;
+    return msg;
   }
 
   // ── /สต็อก [คำค้น] — เช็คสต็อกสินค้าจาก Odoo ──────────────────────────
