@@ -638,10 +638,10 @@ export default async function handler(req, res) {
           .select('*').eq('chat_id', String(xlsChatId)).maybeSingle();
         const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
         if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
-          // ตอบ Telegram ทันทีก่อน (กัน timeout) แล้วค่อยทำงานต่อใน background
+          // ตอบ Telegram 200 OK ทันที (ก่อน 5 วินาที) กัน retry
           res.status(200).json({ ok: true });
-          // ทำงาน Odoo ต่อหลัง response ส่งไปแล้ว
-          setImmediate(async () => {
+          // process ต่อหลัง response — ใช้ Promise.resolve().then เพื่อให้ res.json() flush ก่อน
+          Promise.resolve().then(async () => {
           try {
             const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
             const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${msg.document.file_id}`);
@@ -728,7 +728,7 @@ export default async function handler(req, res) {
           } catch (e) {
             await sendTelegramReply(msg.chat.id, '❌ สร้าง picking ไม่สำเร็จ: ' + tgEsc(e.message));
           }
-          }); // end setImmediate
+          }).catch(() => {}); // end Promise.resolve().then
           return;
         }
       }
