@@ -816,22 +816,7 @@ export default async function handler(req, res) {
             res.status(200).json({ ok: true }); return;
           }
 
-          // ตรวจว่ามีการระบุ suffix /17 /19 เพื่อเลือกหลายใบพร้อมกัน
-          // เช่น /รายงาน พิษณุโลก บ้านกร่าง 16/6 /17 /19 เทส
-          var suffixMatches = repKw.match(/\/(\d+)/g);
-          if (suffixMatches && suffixMatches.length > 0) {
-            const suffixes = suffixMatches.map(s => s.slice(1)); // ['17', '19']
-            const selected = repPicks.filter(p =>
-              suffixes.some(s => String(p.name || '').endsWith('/' + s))
-            );
-            if (selected.length) {
-              // ส่งรายงานรวมหลายใบในข้อความเดียว
-              await sendReportMulti(chatId, selected, repTarget, LINE_GROUPS, db);
-              res.status(200).json({ ok: true }); return;
-            }
-          }
-
-          // เจอหลายใบ → ถามให้เลือก (พร้อมบอกว่าระบุ suffix ได้)
+          // เจอหลายใบ → ถามให้เลือก (ตอบเลข 1 หรือ 1 2)
           if (repPicks.length > 1) {
             const opts = repPicks.slice(0, 8).map((p, i) => (i+1) + '. ' + (p.name || '-')).join('\n');
             if (db) {
@@ -845,9 +830,9 @@ export default async function handler(req, res) {
             }
             await sendTelegramReply(chatId,
               '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts +
-              '\n\nตอบด้วย:\n' +
-              '• เลข เช่น <b>1</b> เพื่อเลือกใบเดียว\n' +
-              '• /suffix เช่น <b>/17 /19</b> เพื่อเลือกหลายใบพร้อมกัน'
+              '\n\n📌 ตอบเลขที่ต้องการครับ\n' +
+              '• ใบเดียว เช่น <b>1</b>\n' +
+              '• หลายใบ เช่น <b>1 2</b> (เว้นวรรค)'
             );
             res.status(200).json({ ok: true }); return;
           }
@@ -941,28 +926,6 @@ export default async function handler(req, res) {
           await sendTelegramReply(chatId, rawReply);
         }
         res.status(200).json({ ok: true }); return;
-      }
-
-      // ── รับตัวเลขตอบ session เลือกใบ ──────────────────────────────────────
-      if (/^\d+$/.test(cmdText.trim()) && db) {
-        const { data: selSess } = await db.from('tg_report_select')
-          .select('*').eq('chat_id', String(chatId)).maybeSingle();
-        const selAge = selSess ? (Date.now() - new Date(selSess.created_at).getTime()) / 60000 : 999;
-        if (selSess && selAge < 5) {
-          const idx = parseInt(cmdText.trim()) - 1;
-          const picks = selSess.picks || [];
-          const LINE_GROUPS2 = {
-            'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
-            'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
-          };
-          if (idx < 0 || idx >= picks.length) {
-            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
-          } else {
-            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
-            await sendReport(chatId, picks[idx], selSess.target, LINE_GROUPS2, db);
-          }
-          res.status(200).json({ ok: true }); return;
-        }
       }
 
       // ── รับตัวเลขตอบ session เลือกใบส่งของสำหรับ /เทียบ ───────────────────
@@ -1236,17 +1199,20 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── ตอบตัวเลข หรือ /suffix (/17 /19) → เช็ค session ต่างๆ ──────────────────
-    const isSingleNum = /^\d+$/.test(trimmed);
-    const isSuffixReply = /^(\/\d+\s*)+$/.test(trimmed); // เช่น "/17 /19" หรือ "/17"
-    if ((isSingleNum || isSuffixReply) && db) {
+    // ── ตอบเลือกใบ (1 หรือ 1 2 หรือ 1,2) → เช็ค session ต่างๆ ──────────────────
+    // แยกเลขทั้งหมดจากข้อความ เช่น "1 2" → [1,2] | "1,2" → [1,2] | "1 และ 2" → [1,2]
+    const pickedNums = trimmed.match(/\d+/g) ? trimmed.match(/\d+/g).map(n => parseInt(n)) : [];
+    // รับเฉพาะข้อความที่เป็นตัวเลข + ตัวคั่น (เว้นวรรค , และ "และ") เท่านั้น กันชนกับข้อความอื่น
+    const isNumberReply = /^[\d\s,และ]+$/.test(trimmed) && pickedNums.length > 0;
+    if (isNumberReply && db) {
+      const isSingleNum = pickedNums.length === 1;
 
       // session เลือก Operation Type สำหรับ /นำเข้าใบส่งของ
       const { data: impSess2 } = await db.from('tg_report_session')
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const impAge2 = impSess2 ? (Date.now() - new Date(impSess2.updated_at).getTime()) / 60000 : 999;
       if (impSess2 && impSess2.mode === 'import_optype_select' && impAge2 < 5 && isSingleNum) {
-        const idx = parseInt(trimmed) - 1;
+        const idx = pickedNums[0] - 1;
         const opts = impSess2.options || [];
         if (idx < 0 || idx >= opts.length) {
           await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + opts.length + ' ครับ');
@@ -1263,7 +1229,7 @@ export default async function handler(req, res) {
         res.status(200).json({ ok: true }); return;
       }
 
-      // session เลือกใบส่งของสำหรับ /รายงาน
+      // session เลือกใบส่งของสำหรับ /รายงาน — รองรับหลายเลข
       const { data: selSess2 } = await db.from('tg_report_select')
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const selAge2 = selSess2 ? (Date.now() - new Date(selSess2.created_at).getTime()) / 60000 : 999;
@@ -1273,31 +1239,17 @@ export default async function handler(req, res) {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
         };
-
-        if (isSuffixReply) {
-          // ตอบแบบ /17 /19 → กรองจาก picks ที่ชื่อลงท้ายตรง
-          const suffixes = trimmed.match(/\/(\d+)/g).map(s => s.slice(1));
-          const selected = picks.filter(p =>
-            suffixes.some(s => String(p.name || '').endsWith('/' + s))
-          );
-          if (!selected.length) {
-            await sendTelegramReply(chatId, '⚠️ ไม่พบใบที่ลงท้ายด้วย ' + suffixes.map(s=>'/'+s).join(', ') + ' ครับ\nลองตอบด้วยเลข 1-' + picks.length + ' แทน');
-          } else {
-            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
-            if (selected.length === 1) {
-              await sendReport(chatId, selected[0], selSess2.target, LINE_GROUPS3, db);
-            } else {
-              await sendReportMulti(chatId, selected, selSess2.target, LINE_GROUPS3, db);
-            }
-          }
+        // แปลงเลขที่เลือก → index (ตัดเลขซ้ำ + เลขเกินช่วงออก)
+        const validNums = [...new Set(pickedNums)].filter(n => n >= 1 && n <= picks.length);
+        if (!validNums.length) {
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ (เลือกหลายใบได้ เช่น 1 2)');
         } else {
-          // ตอบแบบตัวเลขปกติ → เลือกใบเดียว
-          const idx = parseInt(trimmed) - 1;
-          if (idx < 0 || idx >= picks.length) {
-            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+          const selected = validNums.map(n => picks[n - 1]);
+          await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
+          if (selected.length === 1) {
+            await sendReport(chatId, selected[0], selSess2.target, LINE_GROUPS3, db);
           } else {
-            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
-            await sendReport(chatId, picks[idx], selSess2.target, LINE_GROUPS3, db);
+            await sendReportMulti(chatId, selected, selSess2.target, LINE_GROUPS3, db);
           }
         }
         res.status(200).json({ ok: true }); return;
@@ -1308,7 +1260,7 @@ export default async function handler(req, res) {
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const cmpAge2 = cmpSess2 ? (Date.now() - new Date(cmpSess2.created_at).getTime()) / 60000 : 999;
       if (cmpSess2 && cmpAge2 < 5 && isSingleNum) {
-        const idx = parseInt(trimmed) - 1;
+        const idx = pickedNums[0] - 1;
         const picks = cmpSess2.picks || [];
         if (idx < 0 || idx >= picks.length) {
           await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
