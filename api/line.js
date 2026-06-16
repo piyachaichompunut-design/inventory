@@ -523,7 +523,7 @@ export default async function handler(req, res) {
       const botMentioned = mentionees.some(m => m.isSelf === true);
       const quotedId = event.message?.quotedMessageId || '';
 
-      // ══ กรณีไฟล์/รูป → เก็บ messageId ไว้ใน line_messages เพื่อให้ +1 ดึงได้ ══
+      // ══ กรณีไฟล์/รูป → เก็บ messageId + เช็ค session นำเข้าใบส่งของ ══
       if (msgType === 'image' || msgType === 'file') {
         if (db) {
           try {
@@ -536,6 +536,75 @@ export default async function handler(req, res) {
               file_name: event.message?.fileName || null
             }, { onConflict: 'message_id' });
           } catch (e) {}
+        }
+
+        // ── เช็ค session นำเข้าใบส่งของ (รับ Excel) ──────────────────────────
+        const fname = event.message?.fileName || '';
+        const isExcel = /\.xlsx$/i.test(fname) || msgType === 'file' && /xlsx/i.test(fname);
+        if (isExcel && db && pushTarget) {
+          const { data: xlsSess } = await db.from('tg_report_session')
+            .select('*').eq('chat_id', String(pushTarget)).maybeSingle();
+          const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
+          if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
+            try {
+              // ดาวน์โหลดไฟล์จาก LINE
+              const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+              const fileR = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
+                headers: { Authorization: 'Bearer ' + LINE_TOKEN }
+              });
+              const xlsBuf = Buffer.from(await fileR.arrayBuffer());
+
+              const XLSX = await import('xlsx');
+              const wb = XLSX.read(xlsBuf, { type: 'buffer' });
+              const ws = wb.Sheets[wb.SheetNames[0]];
+              const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+              // อ่านรายการสินค้า: หาบรรทัดที่มีรหัส [XXXX-...]
+              const lines = [];
+              for (const row of rows) {
+                const rowStr = row.join('\t');
+                const codeMatch = rowStr.match(/\[([A-Z0-9\-]{10,})\]/);
+                if (!codeMatch) continue;
+                const code = codeMatch[1];
+                const nums = row.filter((v, i) => i > 0 && /^\d+(\.\d+)?$/.test(String(v).trim()) && parseFloat(v) > 0);
+                const qty = nums.length ? parseFloat(nums[0]) : 1;
+                const nameRaw = rowStr.replace(/\[[A-Z0-9\-]+\]/, '').replace(/\d+(\.\d+)?/g, '').replace(/\t/g, ' ').trim();
+                lines.push({ productCode: code, productName: nameRaw.slice(0, 80), qty });
+              }
+
+              if (!lines.length) {
+                await pushLine(pushTarget, '⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nตรวจสอบว่ารหัสสินค้าอยู่ในรูปแบบ [XXXX-XXXX-...] ในไฟล์');
+                continue;
+              }
+
+              await pushLine(pushTarget, '⏳ พบ ' + lines.length + ' รายการ กำลังสร้าง picking ใน Odoo...');
+
+              const { odooCreatePickingFromLines: createPicking } = await import('./odoo.js');
+              const { pickingId, notFound } = await createPicking(
+                xlsSess.doc_id,
+                lines,
+                null,
+                xlsSess.doc_name || '',
+                xlsSess.company_id
+              );
+
+              await db.from('tg_report_session').delete().eq('chat_id', String(pushTarget));
+
+              let reply = '✅ สร้าง picking สำเร็จแล้วครับ!\n\n';
+              reply += '📋 Picking ID: ' + pickingId + '\n';
+              reply += '📦 รายการสินค้า: ' + (lines.length - notFound.length) + '/' + lines.length + ' รายการ\n';
+              reply += '🏭 โครงการ: ' + (xlsSess.doc_name || '');
+              if (notFound.length) {
+                reply += '\n\n⚠️ ไม่พบรหัสใน Odoo (' + notFound.length + ' รายการ):\n';
+                notFound.forEach(c => { reply += '• ' + c + '\n'; });
+                reply += 'กรุณาเพิ่มเองใน Odoo';
+              }
+              await pushLine(pushTarget, reply);
+            } catch (e) {
+              await pushLine(pushTarget, '❌ สร้าง picking ไม่สำเร็จ: ' + e.message);
+            }
+            continue;
+          }
         }
         continue;
       }
@@ -826,7 +895,6 @@ export default async function handler(req, res) {
       // ── คำสั่ง Odoo อื่นๆ (/สต็อก /po /so /pr /help) → เรียก rpc.js ──────
       if (tt.startsWith('/สต็อก') || tt.startsWith('/stock') ||
           tt.startsWith('/อัพเดทสต็อกการ์ดเรล') || tt.startsWith('/อัปเดทสต็อกการ์ดเรล') || lc.startsWith('/guardrailstock') ||
-          tt.startsWith('/นำเข้าใบส่งของ') || lc.startsWith('/importdelivery') ||
           lc.startsWith('/po') || tt.startsWith('/พีโอ') ||
           lc.startsWith('/so') || tt.startsWith('/ขาย') ||
           lc.startsWith('/pr') || tt.startsWith('/ขอซื้อ')) {
@@ -837,6 +905,89 @@ export default async function handler(req, res) {
           await replyLine(replyToken, '⚠️⚠️⚠️ ดึงข้อมูลไม่สำเร็จ: ' + e.message);
         }
         continue;
+      }
+
+      // ── /นำเข้าใบส่งของ → ค้น Operation Type + จัดการ session ─────────────
+      if (tt.startsWith('/นำเข้าใบส่งของ') || lc.startsWith('/importdelivery')) {
+        if (!db) { await replyLine(replyToken, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); continue; }
+        try {
+          const rawReply = await handleTelegramCommand(tt);
+          if (rawReply.includes('__OPTYPE_LIST__:')) {
+            const markerIdx = rawReply.indexOf('__OPTYPE_LIST__:');
+            const displayMsg = rawReply.slice(0, markerIdx).trim();
+            const markerStr = rawReply.slice(markerIdx + '__OPTYPE_LIST__:'.length);
+            const [listPart, coPart] = markerStr.split('::CO:');
+            const coId = parseInt(coPart) || 1;
+            const opts = listPart.split(';;').map(s => {
+              const [id, ...nameParts] = s.split('|');
+              return { id: parseInt(id), name: nameParts.join('|') };
+            });
+            await db.from('tg_report_session').upsert({
+              chat_id: String(pushTarget),
+              mode: 'import_optype_select',
+              options: opts,
+              company_id: coId,
+              updated_at: new Date().toISOString()
+            });
+            await replyLine(replyToken, displayMsg.replace(/<[^>]+>/g, ''));
+          } else if (rawReply.includes('__PENDING_DELIVERY_IMPORT__:')) {
+            const markerIdx = rawReply.indexOf('__PENDING_DELIVERY_IMPORT__:');
+            const displayMsg = rawReply.slice(0, markerIdx).trim();
+            const markerStr = rawReply.slice(markerIdx + '__PENDING_DELIVERY_IMPORT__:'.length);
+            const [opId, opName, coId] = markerStr.split(':');
+            await db.from('tg_report_session').upsert({
+              chat_id: String(pushTarget),
+              mode: 'import_delivery',
+              doc_id: parseInt(opId),
+              doc_name: opName,
+              company_id: parseInt(coId) || 1,
+              updated_at: new Date().toISOString()
+            });
+            await replyLine(replyToken, displayMsg.replace(/<[^>]+>/g, ''));
+          } else {
+            await replyLine(replyToken, rawReply.replace(/<[^>]+>/g, ''));
+          }
+        } catch (e) {
+          await replyLine(replyToken, '⚠️⚠️⚠️ ดึงข้อมูลไม่สำเร็จ: ' + e.message);
+        }
+        continue;
+      }
+
+      // ── /ยกเลิก — ยกเลิก session นำเข้าใบส่งของ ──────────────────────────
+      if (tt === '/ยกเลิก' || tt === '/cancel') {
+        if (db && pushTarget) {
+          const { data: canSess } = await db.from('tg_report_session')
+            .select('mode').eq('chat_id', String(pushTarget)).maybeSingle();
+          if (canSess && (canSess.mode === 'import_delivery' || canSess.mode === 'import_optype_select')) {
+            await db.from('tg_report_session').delete().eq('chat_id', String(pushTarget));
+            await replyLine(replyToken, '✅ ยกเลิกการนำเข้าใบส่งของแล้วครับ');
+            continue;
+          }
+        }
+      }
+
+      // ── ตอบตัวเลข session เลือก Operation Type ──────────────────────────────
+      if (/^\d+$/.test(tt) && db && pushTarget) {
+        const { data: impSess } = await db.from('tg_report_session')
+          .select('*').eq('chat_id', String(pushTarget)).maybeSingle();
+        const impAge = impSess ? (Date.now() - new Date(impSess.updated_at).getTime()) / 60000 : 999;
+        if (impSess && impSess.mode === 'import_optype_select' && impAge < 5) {
+          const idx = parseInt(tt) - 1;
+          const opts = impSess.options || [];
+          if (idx < 0 || idx >= opts.length) {
+            await replyLine(replyToken, '⚠️ กรุณาตอบเลข 1-' + opts.length + ' ครับ');
+          } else {
+            const chosen = opts[idx];
+            await db.from('tg_report_session').update({
+              mode: 'import_delivery',
+              doc_id: chosen.id,
+              doc_name: chosen.name,
+              updated_at: new Date().toISOString()
+            }).eq('chat_id', String(pushTarget));
+            await replyLine(replyToken, '✅ เลือกโครงการ:\n' + chosen.name + '\n\n📎 กรุณาแนบไฟล์ Excel ใบส่งของในข้อความถัดไปได้เลยครับ\n(พิมพ์ /ยกเลิก เพื่อยกเลิก)');
+          }
+          continue;
+        }
       }
 
       // ── คำสั่ง /help ─────────────────────────────────────────────────────
