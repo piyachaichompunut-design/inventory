@@ -845,31 +845,6 @@ export default async function handler(req, res) {
         res.status(200).json({ ok: true }); return;
       }
 
-      // ── รับตัวเลขตอบ session เลือก Operation Type สำหรับ /นำเข้าใบส่งของ ──────
-      if (/^\d+$/.test(cmdText.trim()) && db) {
-        const { data: impSess } = await db.from('tg_report_session')
-          .select('*').eq('chat_id', String(chatId)).maybeSingle();
-        const impAge = impSess ? (Date.now() - new Date(impSess.updated_at).getTime()) / 60000 : 999;
-        if (impSess && impSess.mode === 'import_optype_select' && impAge < 5) {
-          const idx = parseInt(cmdText.trim()) - 1;
-          const opts = impSess.options || [];
-          if (idx < 0 || idx >= opts.length) {
-            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + opts.length + ' ครับ');
-          } else {
-            const chosen = opts[idx];
-            // อัปเดต session เป็น mode รอ Excel
-            await db.from('tg_report_session').update({
-              mode: 'import_delivery',
-              doc_id: chosen.id,
-              doc_name: chosen.name,
-              updated_at: new Date().toISOString()
-            }).eq('chat_id', String(chatId));
-            await sendTelegramReply(chatId, '✅ เลือกโครงการ:\n<b>' + tgEsc(chosen.name) + '</b>\n\n📎 กรุณาแนบไฟล์ Excel ใบส่งของในข้อความถัดไปได้เลยครับ\n<i>(พิมพ์ /ยกเลิก เพื่อยกเลิก)</i>');
-          }
-          res.status(200).json({ ok: true }); return;
-        }
-      }
-
       // ── /ยกเลิก — ยกเลิก session นำเข้าใบส่งของ ──────────────────────────────
       if (cmdText === '/ยกเลิก' || cmdText === '/cancel') {
         if (db) {
