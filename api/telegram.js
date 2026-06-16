@@ -640,10 +640,8 @@ export default async function handler(req, res) {
         const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
         console.log('SESSION:', JSON.stringify({ xlsSess, xlsAge: Math.round(xlsAge) }));
         if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
-          // ตอบ Telegram 200 OK ทันที (ก่อน 5 วินาที) กัน retry
-          res.status(200).json({ ok: true });
-          // process ต่อหลัง response — ใช้ Promise.resolve().then เพื่อให้ res.json() flush ก่อน
-          Promise.resolve().then(async () => {
+          // ส่งข้อความยืนยันทันทีก่อน — กัน Telegram retry (timeout 5 วินาที)
+          await sendTelegramReply(xlsChatId, '⏳ รับไฟล์แล้ว กำลังประมวลผล...');
           try {
             const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
             const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${msg.document.file_id}`);
@@ -730,8 +728,7 @@ export default async function handler(req, res) {
           } catch (e) {
             await sendTelegramReply(msg.chat.id, '❌ สร้าง picking ไม่สำเร็จ: ' + tgEsc(e.message));
           }
-          }).catch(() => {}); // end Promise.resolve().then
-          return;
+          res.status(200).json({ ok: true }); return;
         }
       }
     }
