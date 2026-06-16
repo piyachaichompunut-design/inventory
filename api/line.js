@@ -670,12 +670,20 @@ export default async function handler(req, res) {
           const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
           if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
             try {
-              // ดาวน์โหลดไฟล์จาก LINE
-              const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+              // ดาวน์โหลดไฟล์จาก LINE (ใช้ LINE_TOKEN ตัวเดียวกับทั้งไฟล์)
               const fileR = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
                 headers: { Authorization: 'Bearer ' + LINE_TOKEN }
               });
+              if (!fileR.ok) {
+                await pushLine(pushTarget, [{ type:'text', text:'❌ ดาวน์โหลดไฟล์จาก LINE ไม่สำเร็จ (' + fileR.status + ') ครับ' }]);
+                continue;
+              }
               const xlsBuf = Buffer.from(await fileR.arrayBuffer());
+              // เช็คว่าเป็นไฟล์ xlsx จริง (ขึ้นต้นด้วย PK = zip signature)
+              if (xlsBuf.length < 100 || xlsBuf[0] !== 0x50 || xlsBuf[1] !== 0x4B) {
+                await pushLine(pushTarget, [{ type:'text', text:'❌ ไฟล์ที่ได้รับไม่ใช่ Excel ที่ถูกต้องครับ (ขนาด ' + xlsBuf.length + ' bytes)' }]);
+                continue;
+              }
 
               const XLSX = await import('xlsx');
               const wb = XLSX.read(xlsBuf, { type: 'buffer' });
