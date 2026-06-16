@@ -631,6 +631,7 @@ export default async function handler(req, res) {
       const mime = msg.document.mime_type || '';
       const fname = msg.document.file_name || '';
       const isExcel = /xlsx|spreadsheet/i.test(mime) || /\.xlsx$/i.test(fname);
+      console.log('DOCUMENT:', JSON.stringify({ mime, fname, isExcel, chatId: msg.chat?.id, allowed: isAllowedChat(msg.chat?.id) }));
       if (isExcel && isAllowedChat(msg.chat && msg.chat.id)) {
         const xlsChatId = msg.chat.id;
         // ดู session ว่ามี pending import ไว้ไหม
