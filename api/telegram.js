@@ -571,20 +571,17 @@ export default async function handler(req, res) {
             const ws = wb.Sheets[wb.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-            // หาบรรทัดรายการสินค้า: มี pattern [รหัส] และจำนวน
+            // โครงสร้าง Excel: col A=ลำดับ, B=รหัสสินค้า, C=ชื่อสินค้า, F=จำนวน
             const lines = [];
-            for (const row of rows) {
-              const rowStr = row.join('\t');
-              // หาคอลัมน์ที่มีรหัสสินค้า [XXXX-...]
-              const codeMatch = rowStr.match(/\[([A-Z0-9\-]{10,})\]/);
-              if (!codeMatch) continue;
-              const code = codeMatch[1];
-              // หาจำนวน (ตัวเลขที่ไม่ใช่ลำดับที่)
-              const nums = row.filter((v, i) => i > 0 && /^\d+(\.\d+)?$/.test(String(v).trim()) && parseFloat(v) > 0);
-              const qty = nums.length ? parseFloat(nums[0]) : 1;
-              // หาชื่อสินค้าจากคอลัมน์ถัดไปหลังรหัส
-              const nameRaw = rowStr.replace(/\[[A-Z0-9\-]+\]/, '').replace(/\d+(\.\d+)?/g, '').replace(/\t/g, ' ').trim();
-              lines.push({ productCode: code, productName: nameRaw.slice(0, 80), qty });
+            for (let ri = 0; ri < rows.length; ri++) {
+              const row = rows[ri];
+              const code = row[1] ? String(row[1]).trim() : '';
+              const name = row[2] ? String(row[2]).trim() : '';
+              const qty  = row[5];
+              if (!code || !/^[A-Z0-9]{2,}-[A-Z0-9\-]{5,}/.test(code)) continue;
+              const qtyNum = parseFloat(String(qty || '0').replace(/[^0-9.]/g, '')) || 0;
+              if (qtyNum <= 0) continue;
+              lines.push({ productCode: code, productName: name.slice(0, 120), qty: qtyNum });
             }
 
             if (!lines.length) {
