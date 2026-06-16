@@ -20,6 +20,11 @@ const db = (SUPABASE_URL && SERVICE_KEY)
 const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,5).toUpperCase();
 const todayStr = () => new Date().toISOString().slice(0,10);
 
+// escape อักขระ HTML สำหรับ Telegram parse_mode=HTML (กัน < > & ทำให้ส่งไม่ได้)
+function tgEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
 // ── ย่อรูปก่อนเก็บ (ประหยัด Storage) — ไม่ใช่รูปหรือย่อไม่ได้ คืนของเดิม ──
 async function compressIfImage(buffer, contentType) {
   if (!/^image\/(jpe?g|png|webp)/i.test(contentType || '')) {
@@ -631,14 +636,12 @@ export default async function handler(req, res) {
       const mime = msg.document.mime_type || '';
       const fname = msg.document.file_name || '';
       const isExcel = /xlsx|spreadsheet/i.test(mime) || /\.xlsx$/i.test(fname);
-      console.log('DOCUMENT:', JSON.stringify({ mime, fname, isExcel, chatId: msg.chat?.id, allowed: isAllowedChat(msg.chat?.id) }));
       if (isExcel && isAllowedChat(msg.chat && msg.chat.id)) {
         const xlsChatId = msg.chat.id;
         // ดู session ว่ามี pending import ไว้ไหม
         const { data: xlsSess } = await db.from('tg_report_session')
           .select('*').eq('chat_id', String(xlsChatId)).maybeSingle();
         const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
-        console.log('SESSION:', JSON.stringify({ xlsSess, xlsAge: Math.round(xlsAge) }));
         if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
           // ส่งข้อความยืนยันทันทีก่อน — กัน Telegram retry (timeout 5 วินาที)
           await sendTelegramReply(xlsChatId, '⏳ รับไฟล์แล้ว กำลังประมวลผล...');
