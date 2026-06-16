@@ -551,9 +551,9 @@ export async function odooFindOperationType(keyword, companyId) {
 
 // ── สร้าง picking ใน Odoo พร้อม stock move lines ─────────────────────────────
 // pickingTypeId = id ของ stock.picking.type
-// lines = [{ productCode, productName, qty }]  — productCode = default_code
-// scheduledDate = ISO string เช่น '2026-06-15 08:00:00'
-// sourceDoc = ข้อความอ้างอิง เช่น 'นนทบุรี กท.1002'
+// lines = [{ productCode, productName, qty }]
+// คืน { pickingId, results: [{ line, status, product }] }
+//   status: 'code' = เจอจากรหัสเป๊ะ | 'name' = เจอจากชื่อ (ต้องเช็ค) | 'notfound' = ไม่เจอ
 export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduledDate, sourceDoc, companyId) {
   const uid = await odooAuth();
 
@@ -566,12 +566,50 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
   const srcLocId  = Array.isArray(pt.default_location_src_id)  ? pt.default_location_src_id[0]  : pt.default_location_src_id;
   const destLocId = Array.isArray(pt.default_location_dest_id) ? pt.default_location_dest_id[0] : pt.default_location_dest_id;
 
-  // หา product id จาก default_code ทีละ batch
+  // ── ชั้นที่ 1: ค้นด้วยรหัส (default_code) แบบ batch ──────────────────────────
   const codes = lines.map(l => l.productCode).filter(Boolean);
-  const prodRows = await searchRead('product.product',
-    [['default_code', 'in', codes]],
-    ['id', 'default_code', 'name', 'uom_id'], codes.length + 5);
-  const prodMap = new Map(prodRows.map(r => [r.default_code, r]));
+  let codeMap = new Map();
+  if (codes.length) {
+    const prodByCode = await searchRead('product.product',
+      [['default_code', 'in', codes]],
+      ['id', 'default_code', 'name', 'uom_id'], codes.length + 5);
+    codeMap = new Map(prodByCode.map(r => [String(r.default_code), r]));
+  }
+
+  // ── จับคู่สินค้าแต่ละบรรทัด (fallback หลายชั้น) ────────────────────────────
+  const cleanName = (s) => String(s || '').replace(/-{2,}/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const results = [];
+  for (const line of lines) {
+    let prod = null, status = 'notfound';
+
+    // ชั้น 1: รหัสตรงเป๊ะ
+    if (line.productCode && codeMap.has(String(line.productCode))) {
+      prod = codeMap.get(String(line.productCode));
+      status = 'code';
+    }
+
+    // ชั้น 2: ค้นด้วยชื่อ (ตรงเป๊ะ → ใกล้เคียง)
+    if (!prod && line.productName) {
+      const nm = String(line.productName).trim();
+      // ตัด --- และช่องว่างซ้ำออกก่อนค้น เอาคำหลักมาค้น ilike
+      const searchName = nm.replace(/-{2,}/g, ' ').replace(/\s+/g, ' ').trim();
+      let nameRows = [];
+      try {
+        nameRows = await searchRead('product.product',
+          ['|', ['name', 'ilike', searchName], ['default_code', 'ilike', line.productCode || '___nomatch___']],
+          ['id', 'default_code', 'name', 'uom_id'], 10);
+      } catch (e) { nameRows = []; }
+
+      if (nameRows.length) {
+        // หาตัวที่ชื่อตรงเป๊ะ (หลัง normalize) ก่อน
+        const exact = nameRows.find(r => cleanName(r.name) === cleanName(nm));
+        prod = exact || nameRows[0];
+        status = 'name'; // เจอจากชื่อ = ต้องให้ user เช็ค
+      }
+    }
+
+    results.push({ line, status, product: prod });
+  }
 
   // สร้าง picking header
   const pickingVals = {
@@ -587,23 +625,19 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
     'stock.picking', 'create', [pickingVals]
   ]);
 
-  // สร้าง stock.move แต่ละบรรทัด
-  const notFound = [];
-  for (const line of lines) {
-    const prod = prodMap.get(line.productCode);
-    if (!prod) {
-      notFound.push(line.productCode);
-      continue;
-    }
+  // สร้าง stock.move เฉพาะรายการที่เจอสินค้า
+  for (const r of results) {
+    if (!r.product) continue;
+    const prod = r.product;
     const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
     await jsonRpc('object', 'execute_kw', [
       ODOO_DB, uid, ODOO_KEY,
       'stock.move', 'create',
       [{
-        name: prod.name || line.productCode,
+        name: prod.name || r.line.productCode || r.line.productName || '-',
         picking_id: pickingId,
         product_id: prod.id,
-        product_uom_qty: parseFloat(line.qty) || 1,
+        product_uom_qty: parseFloat(r.line.qty) || 1,
         product_uom: uomId,
         location_id: srcLocId,
         location_dest_id: destLocId,
@@ -611,8 +645,14 @@ export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduled
     ]);
   }
 
-  return { pickingId, notFound };
+  // สรุปผลแยกกลุ่ม
+  const matchedCode = results.filter(r => r.status === 'code');
+  const matchedName = results.filter(r => r.status === 'name');
+  const notFound    = results.filter(r => r.status === 'notfound');
+
+  return { pickingId, results, matchedCode, matchedName, notFound };
 }
+
 
 
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
