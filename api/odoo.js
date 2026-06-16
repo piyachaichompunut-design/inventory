@@ -536,7 +536,85 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
   return attId;
 }
 
-// ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
+// ── ค้นหา Operation Type (stock.picking.type) ตาม keyword ─────────────────────
+// คืน array ของ { id, name, warehouse_id, default_location_src_id, default_location_dest_id }
+export async function odooFindOperationType(keyword, companyId) {
+  const uid = await odooAuth();
+  const domain = withCompany([['name', 'ilike', keyword]], companyId);
+  const rows = await searchRead('stock.picking.type', domain,
+    ['id', 'name', 'warehouse_id', 'default_location_src_id', 'default_location_dest_id', 'code'],
+    20);
+  // กรองเฉพาะ outgoing (ส่งออก) → code = 'outgoing'
+  const outgoing = rows.filter(r => r.code === 'outgoing');
+  return outgoing.length ? outgoing : rows; // ถ้ากรองแล้วไม่เหลือ คืนทั้งหมด
+}
+
+// ── สร้าง picking ใน Odoo พร้อม stock move lines ─────────────────────────────
+// pickingTypeId = id ของ stock.picking.type
+// lines = [{ productCode, productName, qty }]  — productCode = default_code
+// scheduledDate = ISO string เช่น '2026-06-15 08:00:00'
+// sourceDoc = ข้อความอ้างอิง เช่น 'นนทบุรี กท.1002'
+export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduledDate, sourceDoc, companyId) {
+  const uid = await odooAuth();
+
+  // หา picking type เพื่อดึง location src/dest
+  const ptRows = await searchRead('stock.picking.type',
+    [['id', '=', pickingTypeId]],
+    ['default_location_src_id', 'default_location_dest_id', 'name'], 1);
+  if (!ptRows.length) throw new Error('ไม่พบ Operation Type id=' + pickingTypeId);
+  const pt = ptRows[0];
+  const srcLocId  = Array.isArray(pt.default_location_src_id)  ? pt.default_location_src_id[0]  : pt.default_location_src_id;
+  const destLocId = Array.isArray(pt.default_location_dest_id) ? pt.default_location_dest_id[0] : pt.default_location_dest_id;
+
+  // หา product id จาก default_code ทีละ batch
+  const codes = lines.map(l => l.productCode).filter(Boolean);
+  const prodRows = await searchRead('product.product',
+    [['default_code', 'in', codes]],
+    ['id', 'default_code', 'name', 'uom_id'], codes.length + 5);
+  const prodMap = new Map(prodRows.map(r => [r.default_code, r]));
+
+  // สร้าง picking header
+  const pickingVals = {
+    picking_type_id: pickingTypeId,
+    location_id: srcLocId,
+    location_dest_id: destLocId,
+    origin: sourceDoc || '',
+    ...(scheduledDate ? { scheduled_date: scheduledDate } : {}),
+    ...(companyId ? { company_id: companyId } : {}),
+  };
+  const pickingId = await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY,
+    'stock.picking', 'create', [pickingVals]
+  ]);
+
+  // สร้าง stock.move แต่ละบรรทัด
+  const notFound = [];
+  for (const line of lines) {
+    const prod = prodMap.get(line.productCode);
+    if (!prod) {
+      notFound.push(line.productCode);
+      continue;
+    }
+    const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
+    await jsonRpc('object', 'execute_kw', [
+      ODOO_DB, uid, ODOO_KEY,
+      'stock.move', 'create',
+      [{
+        name: prod.name || line.productCode,
+        picking_id: pickingId,
+        product_id: prod.id,
+        product_uom_qty: parseFloat(line.qty) || 1,
+        product_uom: uomId,
+        location_id: srcLocId,
+        location_dest_id: destLocId,
+      }]
+    ]);
+  }
+
+  return { pickingId, notFound };
+}
+
+
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
 // จัดเรียงผลลัพธ์: ถ้ามีรายการที่ name ตรงกับ keyword แบบเป๊ะๆ (ไม่สนตัวพิมพ์เล็ก/ใหญ่) ให้ขึ้นเป็นอันดับแรก
 // กันปัญหา ilike '2606001' ไปแมตช์ "M2606001" ก่อน "2606001" (ทำให้ docs[0] หรือ odooFindDoc หยิบใบผิด)
