@@ -544,6 +544,87 @@ export default async function handler(req, res) {
       }
     }
 
+    // ── รับไฟล์ Excel สำหรับ /นำเข้าใบส่งของ ─────────────────────────────────
+    if (msg && msg.document && db) {
+      const mime = msg.document.mime_type || '';
+      const fname = msg.document.file_name || '';
+      const isExcel = /xlsx|spreadsheet/i.test(mime) || /\.xlsx$/i.test(fname);
+      if (isExcel && isAllowedChat(msg.chat && msg.chat.id)) {
+        const xlsChatId = msg.chat.id;
+        // ดู session ว่ามี pending import ไว้ไหม
+        const { data: xlsSess } = await db.from('tg_report_session')
+          .select('*').eq('chat_id', String(xlsChatId)).maybeSingle();
+        const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
+        if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
+          try {
+            const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
+            const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${msg.document.file_id}`);
+            const info = await infoR.json();
+            if (!info.ok) throw new Error('ดาวน์โหลดไฟล์ไม่ได้');
+            const fileUrl = `https://api.telegram.org/file/bot${tgTok}/${info.result.file_path}`;
+            const fileR = await fetch(fileUrl);
+            const xlsBuf = Buffer.from(await fileR.arrayBuffer());
+
+            // อ่าน Excel ด้วย dynamic import (xlsx bundled ใน node_modules)
+            const XLSX = await import('xlsx');
+            const wb = XLSX.read(xlsBuf, { type: 'buffer' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+            // หาบรรทัดรายการสินค้า: มี pattern [รหัส] และจำนวน
+            const lines = [];
+            for (const row of rows) {
+              const rowStr = row.join('\t');
+              // หาคอลัมน์ที่มีรหัสสินค้า [XXXX-...]
+              const codeMatch = rowStr.match(/\[([A-Z0-9\-]{10,})\]/);
+              if (!codeMatch) continue;
+              const code = codeMatch[1];
+              // หาจำนวน (ตัวเลขที่ไม่ใช่ลำดับที่)
+              const nums = row.filter((v, i) => i > 0 && /^\d+(\.\d+)?$/.test(String(v).trim()) && parseFloat(v) > 0);
+              const qty = nums.length ? parseFloat(nums[0]) : 1;
+              // หาชื่อสินค้าจากคอลัมน์ถัดไปหลังรหัส
+              const nameRaw = rowStr.replace(/\[[A-Z0-9\-]+\]/, '').replace(/\d+(\.\d+)?/g, '').replace(/\t/g, ' ').trim();
+              lines.push({ productCode: code, productName: nameRaw.slice(0, 80), qty });
+            }
+
+            if (!lines.length) {
+              await sendTelegramReply(xlsChatId, '⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nตรวจสอบว่ารหัสสินค้าอยู่ในรูปแบบ [XXXX-XXXX-...] ในไฟล์');
+              res.status(200).json({ ok: true }); return;
+            }
+
+            await sendTelegramReply(xlsChatId, '⏳ พบ ' + lines.length + ' รายการ กำลังสร้าง picking ใน Odoo...');
+
+            const { odooCreatePickingFromLines: createPicking } = await import('./odoo.js');
+            const sourceDoc = xlsSess.doc_name || '';
+            const { pickingId, notFound } = await createPicking(
+              xlsSess.doc_id,        // picking_type_id
+              lines,
+              null,                  // scheduled_date (ใช้ค่า default)
+              sourceDoc,
+              xlsSess.company_id
+            );
+
+            // ลบ session
+            await db.from('tg_report_session').delete().eq('chat_id', String(xlsChatId));
+
+            let reply = '✅ สร้าง picking สำเร็จแล้วครับ!\n\n';
+            reply += '📋 Picking ID: <b>' + pickingId + '</b>\n';
+            reply += '📦 รายการสินค้า: ' + (lines.length - notFound.length) + '/' + lines.length + ' รายการ\n';
+            reply += '🏭 โครงการ: ' + tgEsc(sourceDoc) + '\n';
+            if (notFound.length) {
+              reply += '\n⚠️ ไม่พบรหัสสินค้าใน Odoo (' + notFound.length + ' รายการ):\n';
+              notFound.forEach(c => { reply += '• ' + tgEsc(c) + '\n'; });
+              reply += '\nรายการเหล่านี้ไม่ได้ถูกเพิ่มใน picking ครับ กรุณาเพิ่มเองใน Odoo';
+            }
+            await sendTelegramReply(xlsChatId, reply);
+          } catch (e) {
+            await sendTelegramReply(msg.chat.id, '❌ สร้าง picking ไม่สำเร็จ: ' + tgEsc(e.message));
+          }
+          res.status(200).json({ ok: true }); return;
+        }
+      }
+    }
+
     if (!msg || !msg.text) { res.status(200).json({ ok: true }); return; }
 
     // ── กัน Telegram retry ส่ง update เดิมซ้ำ (สาเหตุบอทค้าง/ตอบซ้ำ) ──
@@ -676,6 +757,89 @@ export default async function handler(req, res) {
           await sendReport(chatId, repPicks[0], repTarget, LINE_GROUPS, db);
         } catch(e) {
           await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
+      // ── รับตัวเลขตอบ session เลือก Operation Type สำหรับ /นำเข้าใบส่งของ ──────
+      if (/^\d+$/.test(cmdText.trim()) && db) {
+        const { data: impSess } = await db.from('tg_report_session')
+          .select('*').eq('chat_id', String(chatId)).maybeSingle();
+        const impAge = impSess ? (Date.now() - new Date(impSess.updated_at).getTime()) / 60000 : 999;
+        if (impSess && impSess.mode === 'import_optype_select' && impAge < 5) {
+          const idx = parseInt(cmdText.trim()) - 1;
+          const opts = impSess.options || [];
+          if (idx < 0 || idx >= opts.length) {
+            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + opts.length + ' ครับ');
+          } else {
+            const chosen = opts[idx];
+            // อัปเดต session เป็น mode รอ Excel
+            await db.from('tg_report_session').update({
+              mode: 'import_delivery',
+              doc_id: chosen.id,
+              doc_name: chosen.name,
+              updated_at: new Date().toISOString()
+            }).eq('chat_id', String(chatId));
+            await sendTelegramReply(chatId, '✅ เลือกโครงการ:\n<b>' + tgEsc(chosen.name) + '</b>\n\n📎 กรุณาแนบไฟล์ Excel ใบส่งของในข้อความถัดไปได้เลยครับ\n<i>(พิมพ์ /ยกเลิก เพื่อยกเลิก)</i>');
+          }
+          res.status(200).json({ ok: true }); return;
+        }
+      }
+
+      // ── /ยกเลิก — ยกเลิก session นำเข้าใบส่งของ ──────────────────────────────
+      if (cmdText === '/ยกเลิก' || cmdText === '/cancel') {
+        if (db) {
+          const { data: canSess } = await db.from('tg_report_session')
+            .select('mode').eq('chat_id', String(chatId)).maybeSingle();
+          if (canSess && (canSess.mode === 'import_delivery' || canSess.mode === 'import_optype_select')) {
+            await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
+            await sendTelegramReply(chatId, '✅ ยกเลิกการนำเข้าใบส่งของแล้วครับ');
+            res.status(200).json({ ok: true }); return;
+          }
+        }
+      }
+
+      // ── /นำเข้าใบส่งของ → ค้น Operation Type ──────────────────────────────────
+      if (cmdText.startsWith('/นำเข้าใบส่งของ') || lc.startsWith('/importdelivery')) {
+        if (!db) { await sendTelegramReply(chatId, '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); res.status(200).json({ ok: true }); return; }
+        const rawReply = await handleTelegramCommand(cmdText);
+
+        // รับ __OPTYPE_LIST__ marker → บันทึก session ตัวเลือก
+        if (rawReply.includes('__OPTYPE_LIST__:')) {
+          const markerIdx = rawReply.indexOf('__OPTYPE_LIST__:');
+          const displayMsg = rawReply.slice(0, markerIdx).trim();
+          const markerStr = rawReply.slice(markerIdx + '__OPTYPE_LIST__:'.length);
+          const [listPart, coPart] = markerStr.split('::CO:');
+          const coId = parseInt(coPart) || 1;
+          const opts = listPart.split(';;').map(s => {
+            const [id, ...nameParts] = s.split('|');
+            return { id: parseInt(id), name: nameParts.join('|') };
+          });
+          await db.from('tg_report_session').upsert({
+            chat_id: String(chatId),
+            mode: 'import_optype_select',
+            options: opts,
+            company_id: coId,
+            updated_at: new Date().toISOString()
+          });
+          await sendTelegramReply(chatId, displayMsg);
+        } else if (rawReply.includes('__PENDING_DELIVERY_IMPORT__:')) {
+          // เจอตัวเดียว → บันทึก session รอ Excel
+          const markerIdx = rawReply.indexOf('__PENDING_DELIVERY_IMPORT__:');
+          const displayMsg = rawReply.slice(0, markerIdx).trim();
+          const markerStr = rawReply.slice(markerIdx + '__PENDING_DELIVERY_IMPORT__:'.length);
+          const [opId, opName, coId] = markerStr.split(':');
+          await db.from('tg_report_session').upsert({
+            chat_id: String(chatId),
+            mode: 'import_delivery',
+            doc_id: parseInt(opId),
+            doc_name: opName,
+            company_id: parseInt(coId) || 1,
+            updated_at: new Date().toISOString()
+          });
+          await sendTelegramReply(chatId, displayMsg);
+        } else {
+          await sendTelegramReply(chatId, rawReply);
         }
         res.status(200).json({ ok: true }); return;
       }
