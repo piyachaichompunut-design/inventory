@@ -174,6 +174,22 @@
   </div>
 
 <script>
+// พิมพ์/บันทึก PDF — รองรับมือถือ (เรียก window.print หลังรูปโหลดเสร็จ + กัน event ถูกบล็อก)
+function doPrint(){
+  var imgs = Array.prototype.slice.call(document.images);
+  var pending = imgs.filter(function(im){ return !im.complete; });
+  function go(){
+    setTimeout(function(){ try { window.print(); } catch(e) { alert('กรุณาใช้เมนู "พิมพ์" ของเบราว์เซอร์ (⋮ → พิมพ์) เพื่อบันทึก PDF ครับ'); } }, 300);
+  }
+  if(!pending.length){ go(); return; }
+  var done = 0, total = pending.length;
+  var timer = setTimeout(go, 3000);
+  function check(){ done++; if(done >= total){ clearTimeout(timer); go(); } }
+  pending.forEach(function(im){
+    im.addEventListener('load', check);
+    im.addEventListener('error', check);
+  });
+}
 function openLB(src){
   document.getElementById('lb-img').src = src;
   document.getElementById('lb').classList.add('on');
@@ -249,7 +265,7 @@ function render(d){
       '<div class="summary">'+chips+'</div>'+
       '<div class="body">'+cards+'</div>'+
       '<div class="foot">'+
-        '<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>'+
+        '<button class="print-btn" onclick="doPrint()">🖨️ พิมพ์ / บันทึก PDF</button>'+
         '<div>พิมพ์เมื่อ '+new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})+'</div>'+
       '</div>'+
     '</div>';
