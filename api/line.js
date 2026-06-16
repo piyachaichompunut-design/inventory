@@ -540,7 +540,8 @@ export default async function handler(req, res) {
 
         // ── เช็ค session นำเข้าใบส่งของ (รับ Excel) ──────────────────────────
         const fname = event.message?.fileName || '';
-        const isExcel = /\.xlsx$/i.test(fname) || msgType === 'file' && /xlsx/i.test(fname);
+        // LINE ส่ง msgType='file' เสมอสำหรับไฟล์ทุกประเภท ดูจากนามสกุลไฟล์แทน
+        const isExcel = /\.xlsx?$/i.test(fname) || msgType === 'file';
         if (isExcel && db && pushTarget) {
           const { data: xlsSess } = await db.from('tg_report_session')
             .select('*').eq('chat_id', String(pushTarget)).maybeSingle();
@@ -573,11 +574,11 @@ export default async function handler(req, res) {
               }
 
               if (!lines.length) {
-                await pushLine(pushTarget, '⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nตรวจสอบว่ารหัสสินค้าอยู่ในรูปแบบ [XXXX-XXXX-...] ในไฟล์');
+                await pushLine(pushTarget, [{ type:'text', text:'⚠️ ไม่พบรายการสินค้าในไฟล์ Excel ครับ\nตรวจสอบว่ารหัสสินค้าอยู่ในรูปแบบ [XXXX-XXXX-...] ในไฟล์' }]);
                 continue;
               }
 
-              await pushLine(pushTarget, '⏳ พบ ' + lines.length + ' รายการ กำลังสร้าง picking ใน Odoo...');
+              await pushLine(pushTarget, [{ type:'text', text:'⏳ พบ ' + lines.length + ' รายการ กำลังสร้าง picking ใน Odoo...' }]);
 
               const { odooCreatePickingFromLines: createPicking } = await import('./odoo.js');
               const { pickingId, notFound } = await createPicking(
@@ -599,9 +600,9 @@ export default async function handler(req, res) {
                 notFound.forEach(c => { reply += '• ' + c + '\n'; });
                 reply += 'กรุณาเพิ่มเองใน Odoo';
               }
-              await pushLine(pushTarget, reply);
+              await pushLine(pushTarget, [{ type:'text', text: reply }]);
             } catch (e) {
-              await pushLine(pushTarget, '❌ สร้าง picking ไม่สำเร็จ: ' + e.message);
+              await pushLine(pushTarget, [{ type:'text', text:'❌ สร้าง picking ไม่สำเร็จ: ' + e.message }]);
             }
             continue;
           }
