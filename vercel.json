@@ -2,9 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "functions": {
-    "api/rpc.js": { "maxDuration": 30 },
-    "api/telegram.js": { "maxDuration": 30 },
-    "api/line.js": { "maxDuration": 30 },
+    "api/rpc.js": { "maxDuration": 60 },
+    "api/telegram.js": { "maxDuration": 60 },
+    "api/line.js": { "maxDuration": 60 },
     "api/odoo-image.js": { "maxDuration": 30 }
   },
   "crons": [
