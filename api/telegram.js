@@ -845,9 +845,9 @@ export default async function handler(req, res) {
             }
             await sendTelegramReply(chatId,
               '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts +
-              '\n\nตอบเลขที่ต้องการครับ\n' +
-              '💡 หรือระบุหลายใบพร้อมกันได้ เช่น:\n' +
-              repKw.replace(/\/\d+/g,'').trim() + ' /17 /19 ' + repTarget
+              '\n\nตอบด้วย:\n' +
+              '• เลข เช่น <b>1</b> เพื่อเลือกใบเดียว\n' +
+              '• /suffix เช่น <b>/17 /19</b> เพื่อเลือกหลายใบพร้อมกัน'
             );
             res.status(200).json({ ok: true }); return;
           }
@@ -1236,14 +1236,16 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── ตอบตัวเลข (ไม่มี /) → เช็ค session ต่างๆ ─────────────────────────────
-    if (/^\d+$/.test(trimmed) && db) {
+    // ── ตอบตัวเลข หรือ /suffix (/17 /19) → เช็ค session ต่างๆ ──────────────────
+    const isSingleNum = /^\d+$/.test(trimmed);
+    const isSuffixReply = /^(\/\d+\s*)+$/.test(trimmed); // เช่น "/17 /19" หรือ "/17"
+    if ((isSingleNum || isSuffixReply) && db) {
 
       // session เลือก Operation Type สำหรับ /นำเข้าใบส่งของ
       const { data: impSess2 } = await db.from('tg_report_session')
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const impAge2 = impSess2 ? (Date.now() - new Date(impSess2.updated_at).getTime()) / 60000 : 999;
-      if (impSess2 && impSess2.mode === 'import_optype_select' && impAge2 < 5) {
+      if (impSess2 && impSess2.mode === 'import_optype_select' && impAge2 < 5 && isSingleNum) {
         const idx = parseInt(trimmed) - 1;
         const opts = impSess2.options || [];
         if (idx < 0 || idx >= opts.length) {
@@ -1266,17 +1268,37 @@ export default async function handler(req, res) {
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const selAge2 = selSess2 ? (Date.now() - new Date(selSess2.created_at).getTime()) / 60000 : 999;
       if (selSess2 && selAge2 < 5) {
-        const idx = parseInt(trimmed) - 1;
         const picks = selSess2.picks || [];
         const LINE_GROUPS3 = {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
         };
-        if (idx < 0 || idx >= picks.length) {
-          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+
+        if (isSuffixReply) {
+          // ตอบแบบ /17 /19 → กรองจาก picks ที่ชื่อลงท้ายตรง
+          const suffixes = trimmed.match(/\/(\d+)/g).map(s => s.slice(1));
+          const selected = picks.filter(p =>
+            suffixes.some(s => String(p.name || '').endsWith('/' + s))
+          );
+          if (!selected.length) {
+            await sendTelegramReply(chatId, '⚠️ ไม่พบใบที่ลงท้ายด้วย ' + suffixes.map(s=>'/'+s).join(', ') + ' ครับ\nลองตอบด้วยเลข 1-' + picks.length + ' แทน');
+          } else {
+            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
+            if (selected.length === 1) {
+              await sendReport(chatId, selected[0], selSess2.target, LINE_GROUPS3, db);
+            } else {
+              await sendReportMulti(chatId, selected, selSess2.target, LINE_GROUPS3, db);
+            }
+          }
         } else {
-          await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
-          await sendReport(chatId, picks[idx], selSess2.target, LINE_GROUPS3, db);
+          // ตอบแบบตัวเลขปกติ → เลือกใบเดียว
+          const idx = parseInt(trimmed) - 1;
+          if (idx < 0 || idx >= picks.length) {
+            await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+          } else {
+            await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
+            await sendReport(chatId, picks[idx], selSess2.target, LINE_GROUPS3, db);
+          }
         }
         res.status(200).json({ ok: true }); return;
       }
@@ -1285,7 +1307,7 @@ export default async function handler(req, res) {
       const { data: cmpSess2 } = await db.from('tg_compare_select')
         .select('*').eq('chat_id', String(chatId)).maybeSingle();
       const cmpAge2 = cmpSess2 ? (Date.now() - new Date(cmpSess2.created_at).getTime()) / 60000 : 999;
-      if (cmpSess2 && cmpAge2 < 5) {
+      if (cmpSess2 && cmpAge2 < 5 && isSingleNum) {
         const idx = parseInt(trimmed) - 1;
         const picks = cmpSess2.picks || [];
         if (idx < 0 || idx >= picks.length) {
