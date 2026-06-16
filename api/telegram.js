@@ -638,6 +638,7 @@ export default async function handler(req, res) {
         const { data: xlsSess } = await db.from('tg_report_session')
           .select('*').eq('chat_id', String(xlsChatId)).maybeSingle();
         const xlsAge = xlsSess ? (Date.now() - new Date(xlsSess.updated_at).getTime()) / 60000 : 999;
+        console.log('SESSION:', JSON.stringify({ xlsSess, xlsAge: Math.round(xlsAge) }));
         if (xlsSess && xlsSess.mode === 'import_delivery' && xlsAge < 15) {
           // ตอบ Telegram 200 OK ทันที (ก่อน 5 วินาที) กัน retry
           res.status(200).json({ ok: true });
