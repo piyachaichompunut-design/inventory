@@ -412,6 +412,88 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
   }
 }
 
+// ── ส่งรายงานหลายใบพร้อมกันในข้อความเดียว ────────────────────────────────────
+async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
+  try {
+    const { odooDelivery } = await import('./odoo.js');
+    const { createClient } = await import('@supabase/supabase-js');
+    const SB_URL = process.env.SUPABASE_URL;
+    const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const sbdb = createClient(SB_URL, SB_KEY, { auth: { persistSession: false } });
+
+    // ดึงข้อมูลครบของแต่ละใบ
+    const stMap = { done: 'ส่งแล้ว', cancel: 'ยกเลิก' };
+    const picksData = [];
+    let totalImages = 0;
+
+    for (const picking of picks) {
+      const allPicks = await odooDelivery(picking.name || '', null);
+      const p = allPicks.find(x => x.id === picking.id) || picking;
+      const images = p.images || [];
+      totalImages += images.length;
+      picksData.push({
+        name: p.name,
+        origin: p.origin || '',
+        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+        date: String(p.scheduled_date || '').slice(0, 10),
+        statusText: stMap[p.state] || 'รอส่ง',
+        statusColor: p.state === 'done' ? 'red' : (p.state === 'cancel' ? 'gray' : 'green'),
+        lines: (p.lines || []).map(l => ({
+          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+        })),
+        images
+      });
+    }
+
+    // สร้าง delivery_views รวมทุกใบ
+    const names = picksData.map(p => p.name).join(', ');
+    const viewId = 'M' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const doneCount = picksData.filter(p => p.statusColor === 'red').length;
+    await sbdb.from('delivery_views').insert({
+      id: viewId,
+      title: 'รายงาน — ' + names,
+      company: '',
+      status_label: 'รายงาน',
+      data: {
+        summary: { total: picksData.length, done: doneCount, pending: picksData.length - doneCount },
+        picks: picksData
+      }
+    });
+    const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+
+    const msg =
+      '📊 รายงาน: ' + names + '\n' +
+      '📷 รูปงานรวม: ' + totalImages + ' รูป\n\n' +
+      picksData.map(p =>
+        '📋 ' + p.name + ' — ' + (p.statusText) + '\n' +
+        '   ' + p.lines.length + ' รายการสินค้า'
+      ).join('\n') + '\n\n' +
+      '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\nเรียบร้อยครับ ✅';
+
+    const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+    if (target === 'เทเลแกรม') {
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
+      });
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า Telegram เรียบร้อยครับ');
+    } else {
+      const groupId = lineGroups[target];
+      const LINE_TOKEN = process.env.LINE_CHANNEL_TOKEN || '';
+      await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+      });
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า LINE กลุ่ม "' + target + '" เรียบร้อยครับ');
+    }
+  } catch(e) {
+    await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ส่งรายงานไม่สำเร็จ: ' + e.message);
+  }
+}
+
 // ── ส่งรายงาน PO/SO/PR เข้า LINE หรือ Telegram กลุ่ม 2 ──────────────────────
 async function sendReportDoc(fromChatId, doc, target, lineGroups) {
   try {
@@ -734,7 +816,22 @@ export default async function handler(req, res) {
             res.status(200).json({ ok: true }); return;
           }
 
-          // เจอหลายใบ → ถามให้เลือก
+          // ตรวจว่ามีการระบุ suffix /17 /19 เพื่อเลือกหลายใบพร้อมกัน
+          // เช่น /รายงาน พิษณุโลก บ้านกร่าง 16/6 /17 /19 เทส
+          var suffixMatches = repKw.match(/\/(\d+)/g);
+          if (suffixMatches && suffixMatches.length > 0) {
+            const suffixes = suffixMatches.map(s => s.slice(1)); // ['17', '19']
+            const selected = repPicks.filter(p =>
+              suffixes.some(s => String(p.name || '').endsWith('/' + s))
+            );
+            if (selected.length) {
+              // ส่งรายงานรวมหลายใบในข้อความเดียว
+              await sendReportMulti(chatId, selected, repTarget, LINE_GROUPS, db);
+              res.status(200).json({ ok: true }); return;
+            }
+          }
+
+          // เจอหลายใบ → ถามให้เลือก (พร้อมบอกว่าระบุ suffix ได้)
           if (repPicks.length > 1) {
             const opts = repPicks.slice(0, 8).map((p, i) => (i+1) + '. ' + (p.name || '-')).join('\n');
             if (db) {
@@ -746,7 +843,12 @@ export default async function handler(req, res) {
                 created_at: new Date().toISOString()
               }, { onConflict: 'chat_id' });
             }
-            await sendTelegramReply(chatId, '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts + '\n\nตอบเลขที่ต้องการครับ');
+            await sendTelegramReply(chatId,
+              '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts +
+              '\n\nตอบเลขที่ต้องการครับ\n' +
+              '💡 หรือระบุหลายใบพร้อมกันได้ เช่น:\n' +
+              repKw.replace(/\/\d+/g,'').trim() + ' /17 /19 ' + repTarget
+            );
             res.status(200).json({ ok: true }); return;
           }
 
@@ -1132,6 +1234,70 @@ export default async function handler(req, res) {
       if (reply) await sendTelegramReply(chatId, reply);
       res.status(200).json({ ok: true });
       return;
+    }
+
+    // ── ตอบตัวเลข (ไม่มี /) → เช็ค session ต่างๆ ─────────────────────────────
+    if (/^\d+$/.test(trimmed) && db) {
+
+      // session เลือก Operation Type สำหรับ /นำเข้าใบส่งของ
+      const { data: impSess2 } = await db.from('tg_report_session')
+        .select('*').eq('chat_id', String(chatId)).maybeSingle();
+      const impAge2 = impSess2 ? (Date.now() - new Date(impSess2.updated_at).getTime()) / 60000 : 999;
+      if (impSess2 && impSess2.mode === 'import_optype_select' && impAge2 < 5) {
+        const idx = parseInt(trimmed) - 1;
+        const opts = impSess2.options || [];
+        if (idx < 0 || idx >= opts.length) {
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + opts.length + ' ครับ');
+        } else {
+          const chosen = opts[idx];
+          await db.from('tg_report_session').update({
+            mode: 'import_delivery',
+            doc_id: chosen.id,
+            doc_name: chosen.name,
+            updated_at: new Date().toISOString()
+          }).eq('chat_id', String(chatId));
+          await sendTelegramReply(chatId, '✅ เลือกโครงการ:\n<b>' + tgEsc(chosen.name) + '</b>\n\n📎 กรุณาแนบไฟล์ Excel ใบส่งของในข้อความถัดไปได้เลยครับ\n<i>(พิมพ์ /ยกเลิก เพื่อยกเลิก)</i>');
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
+      // session เลือกใบส่งของสำหรับ /รายงาน
+      const { data: selSess2 } = await db.from('tg_report_select')
+        .select('*').eq('chat_id', String(chatId)).maybeSingle();
+      const selAge2 = selSess2 ? (Date.now() - new Date(selSess2.created_at).getTime()) / 60000 : 999;
+      if (selSess2 && selAge2 < 5) {
+        const idx = parseInt(trimmed) - 1;
+        const picks = selSess2.picks || [];
+        const LINE_GROUPS3 = {
+          'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+        };
+        if (idx < 0 || idx >= picks.length) {
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+        } else {
+          await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
+          await sendReport(chatId, picks[idx], selSess2.target, LINE_GROUPS3, db);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
+      // session เลือกใบส่งของสำหรับ /เทียบ
+      const { data: cmpSess2 } = await db.from('tg_compare_select')
+        .select('*').eq('chat_id', String(chatId)).maybeSingle();
+      const cmpAge2 = cmpSess2 ? (Date.now() - new Date(cmpSess2.created_at).getTime()) / 60000 : 999;
+      if (cmpSess2 && cmpAge2 < 5) {
+        const idx = parseInt(trimmed) - 1;
+        const picks = cmpSess2.picks || [];
+        if (idx < 0 || idx >= picks.length) {
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+        } else {
+          await db.from('tg_compare_select').delete().eq('chat_id', String(chatId));
+          await sendTelegramReply(chatId, '⏳ กำลังดึงข้อมูลเปรียบเทียบ...');
+          const cmpCompany2 = companyById(cmpSess2.company_id);
+          await sendDeliveryCompareTG(chatId, cmpSess2.doc_ref, picks[idx], cmpCompany2);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
     }
 
     // ── เส้นทางที่ 2: กลุ่มย่อย + @บอท + Reply → บันทึกงาน ──────────────────
