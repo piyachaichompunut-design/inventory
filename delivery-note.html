@@ -105,15 +105,46 @@ function copyUrl(){
   else prompt('คัดลอกลิงก์นี้:', location.href);
 }
 
-// ข้อมูลบริษัท (หัวกระดาษ)
-const COMPANY = {
-  name: 'บริษัท อาคเนย์ทร้าฟฟิค จำกัด (สำนักงานใหญ่)',
-  nameEn: '(HEAD OFFICE)',
-  addr1: '169/1 ถนนทวีวัฒนา',
-  addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
-  tel: 'โทรศัพท์/Tel 02-421-0087  อีเมล/Email info@settraffic.com',
-  tax: 'เลขประจำตัวผู้เสียภาษีอากร/Tax ID 0105519008379  แฟกซ์/Fax 02-806-2000'
+// ข้อมูลบริษัท (หัวกระดาษ) แยกตาม company id
+const COMPANIES = {
+  1: {
+    logo: 'SET', logoColor: '#c0271e',
+    name: 'บริษัท อาคเนย์ทร้าฟฟิค จำกัด (สำนักงานใหญ่)',
+    nameEn: '(HEAD OFFICE)',
+    addr1: '169/1 ถนนทวีวัฒนา',
+    addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
+    tel: 'โทรศัพท์/Tel 02-421-0087  อีเมล/Email info@settraffic.com',
+    tax: 'เลขประจำตัวผู้เสียภาษีอากร/Tax ID 0105519008379  แฟกซ์/Fax 02-806-2000'
+  },
+  2: {
+    logo: 'WM', logoColor: '#1a2e57',
+    name: 'บริษัท เมิร์ค ไดเมนชันส์ จำกัด (สำนักงานใหญ่)',
+    nameEn: '(HEAD OFFICE)',
+    addr1: '171 ถนนทวีวัฒนา',
+    addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
+    tel: '',
+    tax: 'เลขประจำตัวผู้เสียภาษีอากร/Tax ID 0105558094965'
+  },
+  4: {
+    logo: 'CG', logoColor: '#0a7d4d',
+    name: 'บริษัท ซิลิกัล จำกัด (สำนักงานใหญ่)',
+    nameEn: '(HEAD OFFICE)',
+    addr1: '169/1 ถนนทวีวัฒนา',
+    addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
+    tel: '',
+    tax: ''
+  },
+  5: {
+    logo: 'SAK', logoColor: '#b8860b',
+    name: 'บริษัท ศรีอาคเนย์ จำกัด (สำนักงานใหญ่)',
+    nameEn: '(HEAD OFFICE)',
+    addr1: '169/1 ถนนทวีวัฒนา',
+    addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
+    tel: '',
+    tax: ''
+  }
 };
+var COMPANY = COMPANIES[1]; // default — จะถูกแทนที่ตอน load ตาม companyId
 
 function renderNote(note, pageNo, pageTotal){
   var rows = '';
@@ -137,14 +168,14 @@ function renderNote(note, pageNo, pageTotal){
   return '<div class="page">'
     + '<div class="dn-head">'
       + '<div class="dn-company">'
-        + '<div class="dn-logo">SET</div>'
+        + '<div class="dn-logo" style="color:'+COMPANY.logoColor+'">'+esc(COMPANY.logo)+'</div>'
         + '<div class="dn-company-info">'
           + '<div class="nm">'+esc(COMPANY.name)+'</div>'
           + '<div>'+esc(COMPANY.nameEn)+'</div>'
           + '<div>'+esc(COMPANY.addr1)+'</div>'
           + '<div>'+esc(COMPANY.addr2)+'</div>'
-          + '<div>'+esc(COMPANY.tel)+'</div>'
-          + '<div>'+esc(COMPANY.tax)+'</div>'
+          + (COMPANY.tel ? '<div>'+esc(COMPANY.tel)+'</div>' : '')
+          + (COMPANY.tax ? '<div>'+esc(COMPANY.tax)+'</div>' : '')
         + '</div>'
       + '</div>'
       + '<div class="dn-title">'
@@ -193,6 +224,9 @@ async function load(){
     var data = d.data || {};
     var notes = data.notes || [];
     if(!notes.length){ document.getElementById('app').innerHTML='<div class="error">ไม่มีรายการใบส่งสินค้า</div>'; return; }
+
+    // เลือกหัวกระดาษตามบริษัท
+    COMPANY = COMPANIES[data.companyId] || COMPANIES[1];
 
     var html = '';
     notes.forEach(function(note, idx){
