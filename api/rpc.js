@@ -15,26 +15,35 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // ── Auth: รหัสผ่านร่วมของออฟฟิศ (ตั้งใน Environment Variable: APP_PASSWORD) ──
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
+// รหัสผ่านจำกัดสิทธิ์ — เห็นแค่หน้านำเข้า Odoo (ตั้งใน IMPORT_PASSWORD)
+const IMPORT_PASSWORD = process.env.IMPORT_PASSWORD || '';
 // ใช้ service key เป็น "ความลับ" ในการเซ็น token (มีอยู่แล้ว ไม่ต้องตั้งเพิ่ม)
 const TOKEN_SECRET = SERVICE_KEY || 'fallback-secret';
 
-// สร้าง token แบบ HMAC: payload = วันหมดอายุ, sig = ลายเซ็นที่ปลอมไม่ได้
-function makeToken() {
+// ฟังก์ชันที่ role 'import' (รหัสจำกัดสิทธิ์) เรียกได้
+const IMPORT_ALLOWED_FN = new Set([
+  'searchOperationTypes', 'createPickingFromWeb',
+  'getDeliveryNotesForExport', 'buildDeliveryView', 'getDeliveryPDF',
+  'heartbeat'
+]);
+
+// สร้าง token แบบ HMAC: payload = "exp:role", sig = ลายเซ็นที่ปลอมไม่ได้
+function makeToken(role) {
   const exp = Date.now() + 1000 * 60 * 60 * 24 * 7; // อายุ 7 วัน
-  const payload = String(exp);
+  const payload = String(exp) + ':' + (role || 'full');
   const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
   return payload + '.' + sig;
 }
 function verifyToken(token) {
-  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
   const [payload, sig] = token.split('.');
   const expect = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
-  // เทียบแบบ timing-safe กันการเดา
   let ok = false;
   try { ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect)); } catch { ok = false; }
-  if (!ok) return false;
-  if (Date.now() > Number(payload)) return false; // หมดอายุ
-  return true;
+  if (!ok) return null;
+  const [expStr, role] = payload.split(':');
+  if (Date.now() > Number(expStr)) return null; // หมดอายุ
+  return { role: role || 'full' };
 }
 
 let db = (SUPABASE_URL && SERVICE_KEY)
@@ -2444,27 +2453,37 @@ export default async function handler(req, res) {
     const { fn, args } = body;
 
     // ── ด่าน Login ──────────────────────────────────────────────────────────
-    // 1) ฟังก์ชัน login: เช็ครหัส แล้วออก token ให้
+    // 1) ฟังก์ชัน login: เช็ครหัส แล้วออก token ให้ (พร้อม role)
     if (fn === 'login') {
       const pw = Array.isArray(args) ? args[0] : '';
-      if (!APP_PASSWORD) {
-        // ยังไม่ได้ตั้งรหัส → อนุญาตผ่าน (กันล็อกตัวเองตอนยังไม่ตั้งค่า) แต่เตือน
-        res.status(200).json({ ok: true, result: { token: makeToken(), warn: 'ยังไม่ได้ตั้ง APP_PASSWORD' } });
+      if (!APP_PASSWORD && !IMPORT_PASSWORD) {
+        // ยังไม่ได้ตั้งรหัสเลย → อนุญาตผ่าน (กันล็อกตัวเอง)
+        res.status(200).json({ ok: true, result: { token: makeToken('full'), role: 'full', warn: 'ยังไม่ได้ตั้ง APP_PASSWORD' } });
         return;
       }
-      if (pw === APP_PASSWORD) {
-        res.status(200).json({ ok: true, result: { token: makeToken() } });
+      if (APP_PASSWORD && pw === APP_PASSWORD) {
+        res.status(200).json({ ok: true, result: { token: makeToken('full'), role: 'full' } });
+      } else if (IMPORT_PASSWORD && pw === IMPORT_PASSWORD) {
+        res.status(200).json({ ok: true, result: { token: makeToken('import'), role: 'import' } });
       } else {
         res.status(200).json({ ok: false, error: 'รหัสผ่านไม่ถูกต้อง' });
       }
       return;
     }
 
-    // 2) ทุกฟังก์ชันอื่น ต้องมี token ที่ถูกต้อง (ถ้าตั้ง APP_PASSWORD ไว้)
-    if (APP_PASSWORD) {
+    // 2) ทุกฟังก์ชันอื่น ต้องมี token ที่ถูกต้อง
+    let userRole = 'full';
+    if (APP_PASSWORD || IMPORT_PASSWORD) {
       const token = req.headers['x-app-token'] || (body && body.token) || '';
-      if (!verifyToken(token)) {
+      const auth = verifyToken(token);
+      if (!auth) {
         res.status(401).json({ ok: false, error: 'unauthorized' });
+        return;
+      }
+      userRole = auth.role;
+      // role 'import' เรียกได้แค่ฟังก์ชันที่อนุญาต
+      if (userRole === 'import' && !IMPORT_ALLOWED_FN.has(fn)) {
+        res.status(403).json({ ok: false, error: 'ไม่มีสิทธิ์ใช้ฟังก์ชันนี้' });
         return;
       }
     }
