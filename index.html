@@ -14,6 +14,9 @@
   try {
     if (!localStorage.getItem('app_token')) {
       window.location.replace('/login.html');
+    } else if (localStorage.getItem('app_role') === 'import') {
+      // รหัสจำกัดสิทธิ์ — เห็นแค่หน้านำเข้า Odoo
+      window.location.replace('/import-odoo.html');
     }
   } catch(e){}
 })();
