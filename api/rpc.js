@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines, odooAllProductIds } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -2091,8 +2091,58 @@ async function heartbeat(sessionId) {
   return { online: count || 0 };
 }
 
+// ── ดึง product.product ID ทั้งหมด (สำหรับทำ template import Odoo) ────────────
+async function getProductIdMapping() {
+  if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
+  try {
+    const products = await odooAllProductIds();
+    return { ok: true, products };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── ค้นหา Operation Type สำหรับหน้าเว็บ Import Odoo ──────────────────────────
+async function searchOperationTypes(keyword, companyAlias) {
+  if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
+  try {
+    const { company } = parseCompany((keyword || '') + (companyAlias ? ' ' + companyAlias : ''));
+    const kw = (keyword || '').trim();
+    if (!kw) return { ok: false, error: 'กรุณาใส่คำค้นหา' };
+    const opTypes = await odooFindOperationType(kw, company.id);
+    return { ok: true, opTypes: opTypes.map(o => ({ id: o.id, name: o.name })), companyId: company.id };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ── สร้าง picking จากหน้าเว็บ Import Odoo ────────────────────────────────────
+// lines = [{ productCode, productName, qty }]
+async function createPickingFromWeb(opTypeId, opTypeName, lines, companyId) {
+  if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
+  if (!opTypeId) return { ok: false, error: 'ไม่ได้ระบุโครงการ' };
+  if (!Array.isArray(lines) || !lines.length) return { ok: false, error: 'ไม่มีรายการสินค้า' };
+  try {
+    const { pickingId, matchedCode, matchedName, notFound } = await odooCreatePickingFromLines(
+      opTypeId, lines, null, opTypeName || '', companyId
+    );
+    return {
+      ok: true,
+      pickingId,
+      total: lines.length,
+      matchedCode: matchedCode.map(r => ({ code: r.line.productCode, name: r.product.name, qty: r.line.qty })),
+      matchedName: matchedName.map(r => ({ from: r.line.productName || r.line.productCode, to: r.product.name, qty: r.line.qty })),
+      notFound: notFound.map(r => r.line.productCode || r.line.productName)
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 const HANDLERS = {
   heartbeat,
+  getProductIdMapping,
+  searchOperationTypes, createPickingFromWeb,
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
   getCategories, addCategory, deleteCategory, getDashboardData,
