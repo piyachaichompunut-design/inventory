@@ -342,19 +342,22 @@ export async function odooDeliveryPDF(pickIds) {
   if (!Array.isArray(pickIds) || !pickIds.length) throw new Error('ไม่ได้ระบุใบส่งของ');
 
   // 1) login แบบ web session เพื่อเอา cookie (report endpoint ต้องใช้ session ไม่ใช่ API key)
+  // web session ต้องใช้รหัสผ่านจริง (ODOO_PASSWORD) — ถ้าไม่มีลองใช้ API key
+  const webPassword = process.env.ODOO_PASSWORD || ODOO_KEY;
   const loginRes = await fetch(ODOO_URL + '/web/session/authenticate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0',
-      params: { db: ODOO_DB, login: ODOO_USER, password: ODOO_KEY }
+      params: { db: ODOO_DB, login: ODOO_USER, password: webPassword }
     })
   });
   const setCookie = loginRes.headers.get('set-cookie') || '';
   const sessionId = (setCookie.match(/session_id=([^;]+)/) || [])[1];
   if (!sessionId) {
     const j = await loginRes.json().catch(() => ({}));
-    throw new Error('Odoo login (web session) ล้มเหลว: ' + (j.error?.data?.message || 'ไม่ได้ session'));
+    const msg = j.error?.data?.message || j.error?.message || 'Access Denied';
+    throw new Error('Odoo web session ล้มเหลว: ' + msg + ' (ต้องตั้ง ODOO_PASSWORD = รหัสผ่านจริงใน Vercel)');
   }
   const cookie = 'session_id=' + sessionId;
 
