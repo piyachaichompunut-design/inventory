@@ -2180,48 +2180,42 @@ async function getDeliveryNotesForExport(keyword, companyAlias, statusFilter) {
   }
 }
 
-// ── สร้าง view PDF จากใบส่งของที่ user เลือก (เลือกได้หลายใบ) ──────────────────
+// ── สร้าง view ใบส่งสินค้า (รูปแบบทางการ) จากใบที่เลือก ──────────────────────
 async function buildDeliveryView(pickIds, keyword, companyName) {
   if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
   if (!Array.isArray(pickIds) || !pickIds.length) return { ok: false, error: 'ยังไม่ได้เลือกใบส่งของ' };
   try {
-    // ดึงข้อมูลใบที่เลือกจาก keyword เดิม แล้วกรองตาม id
     const { keyword: dkw, company: dCo } = parseCompany(keyword || '');
     const allPicks = await odooDelivery(dkw, dCo.id);
     const idSet = new Set(pickIds.map(Number));
     const picks = allPicks.filter(p => idSet.has(Number(p.id)));
     if (!picks.length) return { ok: false, error: 'ไม่พบใบส่งของที่เลือก' };
 
-    let cntDone = 0, cntPending = 0, cntCancel = 0;
-    const picksData = picks.map(p => {
-      let statusText, statusColor;
-      if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red';  cntDone++; }
-      else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; cntCancel++; }
-      else                           { statusText = 'รอส่ง';   statusColor = 'green'; cntPending++; }
-      return {
-        name: p.name || '-', origin: p.origin || '',
-        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-        statusText, statusColor, shipped: p.state === 'done',
-        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
-        lines: (p.lines || []).map(l => ({
-          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
-          qty: l.quantity || l.product_uom_qty || 0,
-          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-        })),
-        images: p.images || []
-      };
-    });
-    const data = { summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel }, picks: picksData };
-    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const stMap = { draft:'ร่าง', waiting:'รอ', confirmed:'รอของ', assigned:'รอส่ง', done:'ส่งแล้ว', cancel:'ยกเลิก' };
+    const notes = picks.map(p => ({
+      docNo: p.name || '-',
+      ref: p.origin || '',
+      partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+      date: String(p.scheduled_date || p.date_done || '').slice(0,10),
+      status: stMap[p.state] || p.state,
+      lines: (p.lines || []).map(l => ({
+        code: '', // default_code ไม่ได้ดึงมาใน lines — ใช้ชื่อพอ
+        name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+        qty: l.quantity || l.product_uom_qty || 0,
+        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
+      }))
+    }));
+
+    const viewId = 'N' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
     const { error: insErr } = await db.from('delivery_views').insert({
       id: viewId,
-      title: 'ใบส่งของ — ' + (keyword || '') + ' (' + (companyName || dCo.name) + ')',
+      title: 'ใบส่งสินค้า — ' + (keyword || ''),
       company: companyName || dCo.name,
-      status_label: 'เลือก ' + picks.length + ' ใบ',
-      data: data
+      status_label: 'delivery_note',
+      data: { type: 'delivery_note', company: companyName || dCo.name, notes }
     });
     if (insErr) return { ok: false, error: 'บันทึกไม่สำเร็จ: ' + insErr.message };
-    return { ok: true, viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId, count: picks.length };
+    return { ok: true, viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery-note.html?id=' + viewId, count: picks.length };
   } catch (e) {
     return { ok: false, error: e.message };
   }
