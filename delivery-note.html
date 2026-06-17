@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ใบส่งสินค้า — TMS</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Sarabun','TH Sarabun New','Segoe UI',Tahoma,sans-serif;background:#525659;color:#1a1a1a;padding:0}
+
+  /* แถบปุ่มด้านบน (ไม่พิมพ์) */
+  .toolbar{
+    position:sticky;top:0;z-index:10;background:linear-gradient(135deg,#1a1d29,#2d3142);
+    padding:12px 16px;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.3);
+  }
+  .toolbar .title{color:#fff;font-weight:700;font-size:14px;margin-right:auto}
+  .tb-btn{
+    padding:9px 18px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;
+    font-family:inherit;display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+  }
+  .tb-print{background:linear-gradient(135deg,#e8590c,#ff922b);color:#fff}
+  .tb-ghost{background:rgba(255,255,255,.15);color:#fff}
+
+  /* กระดาษ A4 */
+  .page{
+    background:#fff;width:210mm;min-height:297mm;margin:18px auto;padding:14mm 12mm;
+    box-shadow:0 4px 30px rgba(0,0,0,.4);position:relative;
+  }
+  .page + .page{margin-top:0}
+
+  /* หัวเอกสาร */
+  .dn-head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:0;padding-bottom:6px}
+  .dn-company{display:flex;gap:12px;align-items:flex-start}
+  .dn-logo{font-size:42px;font-weight:900;color:#c0271e;letter-spacing:-1px;line-height:1;font-family:Georgia,serif}
+  .dn-company-info{font-size:11px;line-height:1.55;color:#222}
+  .dn-company-info .nm{font-size:13.5px;font-weight:700;margin-bottom:1px}
+  .dn-title{text-align:right}
+  .dn-title .th{font-size:20px;font-weight:700}
+  .dn-title .en{font-size:14px;color:#333}
+  .dn-title .pg{font-size:11px;color:#666;margin-top:2px}
+
+  /* กล่องลูกค้า */
+  .dn-cust{border:1px solid #333;display:flex;margin-top:6px}
+  .dn-cust-left,.dn-cust-right{padding:7px 10px;font-size:11.5px;line-height:1.7}
+  .dn-cust-left{flex:1.4;border-right:1px solid #333}
+  .dn-cust-right{flex:1}
+  .dn-cust .lbl{font-weight:700;display:inline-block;min-width:92px}
+  .dn-cust .lbl-r{font-weight:700;display:inline-block;min-width:90px}
+
+  /* ตารางสินค้า */
+  table.dn-tbl{width:100%;border-collapse:collapse;margin-top:0;border:1px solid #333;border-top:none}
+  table.dn-tbl th{
+    background:#fff;border:1px solid #333;padding:6px 5px;font-size:11.5px;font-weight:700;text-align:center;
+  }
+  table.dn-tbl td{border:1px solid #333;padding:5px 6px;font-size:11px;vertical-align:top}
+  .col-no{width:34px;text-align:center}
+  .col-code{width:90px}
+  .col-wh{width:50px;text-align:center}
+  .col-qty{width:52px;text-align:right}
+  .col-uom{width:42px;text-align:center}
+  .col-lot{width:70px}
+  .dn-remark{border:1px solid #333;border-top:none;padding:6px 8px;font-size:11px;min-height:26px}
+
+  /* ลายเซ็น */
+  .dn-sign{display:flex;justify-content:space-between;margin-top:48px;gap:20px;padding:0 10px}
+  .dn-sign .col{flex:1;text-align:center;font-size:11.5px}
+  .dn-sign .line{margin:0 auto 6px;border-bottom:1px dotted #333;width:80%;height:34px}
+  .dn-sign .date{margin-top:8px;color:#444;font-size:11px}
+
+  .loading,.error{color:#fff;text-align:center;padding:60px 20px;font-size:16px}
+
+  @media print{
+    body{background:#fff}
+    .toolbar{display:none}
+    .page{margin:0;box-shadow:none;width:auto;min-height:auto;padding:10mm 8mm;page-break-after:always}
+    .page:last-child{page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+  @media(max-width:620px){
+    .page{width:100%;padding:8mm 5mm;margin:10px auto}
+    .dn-logo{font-size:32px}
+    .dn-title .th{font-size:16px}
+    .dn-head{flex-direction:column;gap:10px}
+    .dn-title{text-align:left}
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span class="title" id="tbTitle">📄 ใบส่งสินค้า</span>
+  <button class="tb-btn tb-print" onclick="window.print()">🖨️ พิมพ์ / บันทึก PDF</button>
+  <button class="tb-btn tb-ghost" onclick="copyUrl()">🔗 คัดลอกลิงก์</button>
+</div>
+
+<div id="app"><div class="loading">⏳ กำลังโหลด...</div></div>
+
+<script>
+const SUPABASE_URL = 'https://rvdboyrusmrjzurukwja.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2ZGJveXJ1c21yanp1cnVrd2phIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNTQ3MDEsImV4cCI6MjA5NTgzMDcwMX0.UxP6ZlJ41DxxG_ofA6ge43XIfm6BMIOARvmsn1gDtrQ';
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+function copyUrl(){
+  if(navigator.clipboard) navigator.clipboard.writeText(location.href).then(function(){ alert('คัดลอกลิงก์แล้ว ✅'); });
+  else prompt('คัดลอกลิงก์นี้:', location.href);
+}
+
+// ข้อมูลบริษัท (หัวกระดาษ)
+const COMPANY = {
+  name: 'บริษัท อาคเนย์ทร้าฟฟิค จำกัด (สำนักงานใหญ่)',
+  nameEn: '(HEAD OFFICE)',
+  addr1: '169/1 ถนนทวีวัฒนา',
+  addr2: 'เขตหนองแขม กรุงเทพมหานคร 10160',
+  tel: 'โทรศัพท์/Tel 02-421-0087  อีเมล/Email info@settraffic.com',
+  tax: 'เลขประจำตัวผู้เสียภาษีอากร/Tax ID 0105519008379  แฟกซ์/Fax 02-806-2000'
+};
+
+function renderNote(note, pageNo, pageTotal){
+  var rows = '';
+  (note.lines||[]).forEach(function(l, i){
+    rows += '<tr>'
+      + '<td class="col-no">'+(i+1)+'</td>'
+      + '<td class="col-code">'+esc(l.code||'')+'</td>'
+      + '<td>'+esc(l.name||'')+'</td>'
+      + '<td class="col-wh">Stock</td>'
+      + '<td class="col-qty">'+Number(l.qty||0).toFixed(2)+'</td>'
+      + '<td class="col-uom">'+esc(l.uom||'EA')+'</td>'
+      + '<td class="col-lot"></td>'
+      + '</tr>';
+  });
+  // เติมแถวว่างให้เต็มหน้าสวยงาม (ขั้นต่ำ 8 แถว)
+  var minRows = 8;
+  for (var k=(note.lines||[]).length; k<minRows; k++){
+    rows += '<tr><td class="col-no">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
+  }
+
+  return '<div class="page">'
+    + '<div class="dn-head">'
+      + '<div class="dn-company">'
+        + '<div class="dn-logo">SET</div>'
+        + '<div class="dn-company-info">'
+          + '<div class="nm">'+esc(COMPANY.name)+'</div>'
+          + '<div>'+esc(COMPANY.nameEn)+'</div>'
+          + '<div>'+esc(COMPANY.addr1)+'</div>'
+          + '<div>'+esc(COMPANY.addr2)+'</div>'
+          + '<div>'+esc(COMPANY.tel)+'</div>'
+          + '<div>'+esc(COMPANY.tax)+'</div>'
+        + '</div>'
+      + '</div>'
+      + '<div class="dn-title">'
+        + '<div class="th">ใบส่งสินค้า</div>'
+        + '<div class="en">Delivery Note</div>'
+        + '<div class="pg">หน้า '+pageNo+'/'+pageTotal+'</div>'
+      + '</div>'
+    + '</div>'
+    + '<div class="dn-cust">'
+      + '<div class="dn-cust-left">'
+        + '<div style="font-weight:700;margin-bottom:2px">สถานที่ส่งสินค้า/Customer</div>'
+        + '<div><span class="lbl">ผู้ติดต่อ/Name</span>: '+esc(note.partner||'-')+'</div>'
+        + '<div><span class="lbl">ที่อยู่/Address</span>: '+esc(note.address||'-')+'</div>'
+      + '</div>'
+      + '<div class="dn-cust-right">'
+        + '<div><span class="lbl-r">วันที่/Date</span>: '+esc(note.date||'-')+'</div>'
+        + '<div><span class="lbl-r">เลขที่/No.</span>: '+esc(note.docNo||'-')+'</div>'
+        + '<div><span class="lbl-r">เอกสารอ้างอิง/Ref.</span>: '+esc(note.ref||'-')+'</div>'
+        + '<div><span class="lbl-r">สถานะ/Status</span>: '+esc(note.status||'-')+'</div>'
+      + '</div>'
+    + '</div>'
+    + '<table class="dn-tbl">'
+      + '<thead><tr>'
+        + '<th class="col-no">ลำดับ</th><th class="col-code">รหัส</th><th>ชื่อสินค้า</th>'
+        + '<th class="col-wh">คลัง</th><th class="col-qty">จำนวน</th><th class="col-uom">หน่วย</th><th class="col-lot">Lot No.</th>'
+      + '</tr></thead><tbody>'+rows+'</tbody></table>'
+    + '<div class="dn-remark">หมายเหตุ/Remark :</div>'
+    + '<div class="dn-sign">'
+      + '<div class="col"><div class="line"></div>ผู้รับสินค้า/Received By<div class="date">วันที่/Date_____/_____/_____</div></div>'
+      + '<div class="col"><div class="line"></div>ผู้ส่งสินค้า/Delivered By<div class="date">วันที่/Date_____/_____/_____</div></div>'
+      + '<div class="col"><div class="line"></div>ผู้มีอำนาจอนุมัติ/Authorized<div class="date">วันที่/Date_____/_____/_____</div></div>'
+    + '</div>'
+    + '</div>';
+}
+
+async function load(){
+  var id = new URLSearchParams(location.search).get('id');
+  if(!id){ document.getElementById('app').innerHTML='<div class="error">ไม่พบรหัสเอกสาร</div>'; return; }
+  try{
+    var r = await fetch(SUPABASE_URL+'/rest/v1/delivery_views?id=eq.'+encodeURIComponent(id)+'&select=*',{
+      headers:{ apikey:SUPABASE_ANON, Authorization:'Bearer '+SUPABASE_ANON }
+    });
+    var rows = await r.json();
+    if(!rows || !rows.length){ document.getElementById('app').innerHTML='<div class="error">ไม่พบเอกสารนี้ (อาจหมดอายุ)</div>'; return; }
+    var d = rows[0];
+    var data = d.data || {};
+    var notes = data.notes || [];
+    if(!notes.length){ document.getElementById('app').innerHTML='<div class="error">ไม่มีรายการใบส่งสินค้า</div>'; return; }
+
+    var html = '';
+    notes.forEach(function(note, idx){
+      html += renderNote(note, idx+1, notes.length);
+    });
+    document.getElementById('app').innerHTML = html;
+    document.getElementById('tbTitle').textContent = '📄 ใบส่งสินค้า ('+notes.length+' ใบ)';
+    document.title = 'ใบส่งสินค้า — '+(d.company||'TMS');
+  }catch(e){
+    document.getElementById('app').innerHTML='<div class="error">โหลดไม่สำเร็จ: '+esc(e.message)+'</div>';
+  }
+}
+load();
+</script>
+</body>
+</html>
