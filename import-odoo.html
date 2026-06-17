@@ -24,6 +24,8 @@
     background:linear-gradient(135deg,#1a1d29 0%,#2d3142 100%);
     color:#fff; padding:26px 30px; position:relative; overflow:hidden;
   }
+  .top-btn{background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:7px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
+  .top-btn:hover{background:rgba(255,255,255,.25)}
   .head::after{content:'';position:absolute;left:0;right:0;bottom:0;height:4px;background:linear-gradient(90deg,var(--accent),#ffa94d)}
   .head h1{margin:0;font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}
   .head .sub{font-size:13px;color:#aeb4c4;font-weight:400;margin-top:4px}
@@ -155,6 +157,9 @@
 <body>
 <div class="wrap">
   <div class="head">
+    <div id="topActions" style="position:absolute;top:14px;right:18px;display:flex;gap:8px">
+      <button class="top-btn" onclick="doLogout()">ออกจากระบบ</button>
+    </div>
     <h1>📥 นำเข้าไฟล์เข้า Odoo</h1>
     <div class="sub">อัปโหลดไฟล์ Excel เพิ่มสินค้าเข้า Picking • ดึงใบส่งของรอส่งเป็น PDF</div>
   </div>
@@ -216,8 +221,22 @@
   (function(){
     var token = '';
     try { token = localStorage.getItem('app_token') || ''; } catch(e){}
-    if (!token) location.href = '/login.html';
+    if (!token) { location.href = '/login.html'; return; }
+    // ถ้าเป็น role เต็ม แสดงปุ่มกลับหน้าหลัก
+    try {
+      if (localStorage.getItem('app_role') !== 'import') {
+        document.addEventListener('DOMContentLoaded', function(){
+          var bar = document.getElementById('topActions');
+          if (bar) bar.insertAdjacentHTML('afterbegin', '<button class="top-btn" onclick="location.href=\'/\'">← หน้าหลัก</button>');
+        });
+      }
+    } catch(e){}
   })();
+
+  function doLogout(){
+    try { localStorage.removeItem('app_token'); localStorage.removeItem('app_role'); } catch(e){}
+    location.href = '/login.html';
+  }
 
   var selectedOp = null;   // { id, name, companyId }
   var parsedLines = [];    // [{ productCode, productName, qty }]
