@@ -2223,7 +2223,7 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
       title: 'ใบส่งสินค้า — ' + (keyword || ''),
       company: companyName || dCo.name,
       status_label: 'delivery_note',
-      data: { type: 'delivery_note', company: companyName || dCo.name, notes }
+      data: { type: 'delivery_note', company: companyName || dCo.name, companyId: dCo.id, notes }
     });
     if (insErr) return { ok: false, error: 'บันทึกไม่สำเร็จ: ' + insErr.message };
     return { ok: true, viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery-note.html?id=' + viewId, count: picks.length };
