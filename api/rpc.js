@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines, odooAllProductIds } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines, odooAllProductIds, odooDeliveryPDF } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -2227,11 +2227,23 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
   }
 }
 
+// ── ดึง PDF ใบส่งสินค้าตัวจริงจาก Odoo (หลายใบรวมกัน) → คืน base64 ────────────
+async function getDeliveryPDF(pickIds) {
+  if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
+  if (!Array.isArray(pickIds) || !pickIds.length) return { ok: false, error: 'ยังไม่ได้เลือกใบส่งของ' };
+  try {
+    const base64 = await odooDeliveryPDF(pickIds);
+    return { ok: true, pdfBase64: base64, count: pickIds.length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 const HANDLERS = {
   heartbeat,
   getProductIdMapping,
   searchOperationTypes, createPickingFromWeb,
-  getDeliveryNotesForExport, buildDeliveryView,
+  getDeliveryNotesForExport, buildDeliveryView, getDeliveryPDF,
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
   getCategories, addCategory, deleteCategory, getDashboardData,
