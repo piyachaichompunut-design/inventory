@@ -2132,7 +2132,14 @@ async function createPickingFromWeb(opTypeId, opTypeName, lines, companyId) {
       total: lines.length,
       matchedCode: matchedCode.map(r => ({ code: r.line.productCode, name: r.product.name, qty: r.line.qty })),
       matchedName: matchedName.map(r => ({ from: r.line.productName || r.line.productCode, to: r.product.name, qty: r.line.qty })),
-      notFound: notFound.map(r => r.line.productCode || r.line.productName)
+      notFound: notFound.map(r => ({
+        code: r.line.productCode || '',
+        name: r.line.productName || '',
+        qty: r.line.qty,
+        reason: r.line.productCode
+          ? 'ไม่พบรหัสสินค้านี้ใน Odoo'
+          : 'ไม่พบชื่อสินค้านี้ใน Odoo (ไม่มีรหัสให้ค้น)'
+      }))
     };
   } catch (e) {
     return { ok: false, error: e.message };
