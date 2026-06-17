@@ -335,6 +335,19 @@ export const GUARDRAIL_PRODUCTS = [
 ];
 
 // ── เช็คสต็อกสินค้าการ์ดเรลทุกรหัสในรายการด้านบน ทีเดียวในคำสั่งเดียว ─────────
+// ── ดึง product.product ID + รหัสสินค้า ทั้งหมด (สำหรับทำ template import) ──────
+// คืน [{ id, code, name }] — id = Database ID ของ product.product (ที่ stock.move ใช้)
+export async function odooAllProductIds() {
+  const uid = await odooAuth();
+  const rows = await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY,
+    'product.product', 'search_read',
+    [[['default_code', '!=', false]]],
+    { fields: ['id', 'default_code', 'name'], limit: 10000 }
+  ]);
+  return rows.map(r => ({ id: r.id, code: r.default_code, name: r.name }));
+}
+
 export async function odooGuardrailStock(companyId) {
   const codes = GUARDRAIL_PRODUCTS.map(p => p.code);
   // context: ให้ qty_available คำนวณเฉพาะบริษัทที่เลือก (เหมือน odooStock)
