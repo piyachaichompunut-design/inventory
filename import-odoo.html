@@ -112,6 +112,9 @@
   .dn-card .meta{font-size:11.5px;color:var(--ink-soft);margin-top:2px}
   .dn-badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
   .dn-badge.green{background:var(--green-soft);color:var(--green)}
+  .dn-badge.red{background:var(--red-soft);color:var(--red)}
+  .dn-badge.gray{background:var(--gray-soft);color:var(--gray)}
+  .dn-select{transition:border .15s,background .15s}
   .pdf-actions{display:flex;gap:10px;margin-top:16px}
   .pdf-actions .btn{flex:1}
 </style>
@@ -194,42 +197,113 @@
     document.getElementById('tab-export').classList.toggle('active', v==='export');
   }
 
-  // ── VIEW 2: ค้นใบส่งของรอส่ง → ทำ PDF ──
+  // ── VIEW 2: ค้นใบส่งของทั้งหมด → ให้เลือกหลายใบ ──
+  var exportKeyword = '';
+  var exportCompany = '';
+
   function doExportSearch(){
     var kw = document.getElementById('kw2').value.trim();
     if (!kw){ showMsg2('err','กรุณาพิมพ์คำค้นหา'); return; }
     var btn = document.getElementById('exportBtn');
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>ค้นหา...';
-    showMsg2('load','<span class="spinner"></span>กำลังดึงใบส่งของรอส่งจาก Odoo...');
+    showMsg2('load','<span class="spinner"></span>กำลังดึงใบส่งของจาก Odoo...');
 
     google.script.run
       .withSuccessHandler(function(res){
         btn.disabled = false; btn.textContent = 'ค้นหา';
         if (!res || !res.ok){ showMsg2('err', (res && res.error) || 'ค้นหาไม่สำเร็จ'); return; }
-        renderExportResult(res);
+        exportKeyword = res.keyword; exportCompany = res.company;
+        renderExportList(res);
       })
       .withFailureHandler(function(e){
         btn.disabled = false; btn.textContent = 'ค้นหา';
         showMsg2('err','ค้นหาไม่สำเร็จ: ' + e.message);
       })
-      .getDeliveryNotesForExport(kw, '', 'pending');
+      .getDeliveryNotesForExport(kw, '', 'all');
   }
 
-  function renderExportResult(res){
-    var html = '<div style="font-size:15px;font-weight:700;margin-bottom:4px">📄 ใบส่งของรอส่ง — '+escapeHtml(res.keyword)+'</div>';
-    html += '<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">บริษัท '+escapeHtml(res.company)+' • พบ <b>'+res.summary.pending+'</b> ใบรอส่ง</div>';
-    res.picks.forEach(function(p){
-      html += '<div class="dn-card"><span class="ic">📦</span><div class="info">'
-        + '<div class="nm">'+escapeHtml(p.name)+'</div>'
-        + '<div class="meta">'+(p.origin?escapeHtml(p.origin)+' • ':'')+p.lineCount+' รายการ'+(p.date?' • '+p.date:'')+'</div>'
-        + '</div><span class="dn-badge green">'+escapeHtml(p.statusText)+'</span></div>';
-    });
-    html += '<div class="pdf-actions">'
-      + '<button class="btn btn-primary" onclick="window.open(\''+res.viewUrl+'\',\'_blank\')">📄 เปิด / พิมพ์ PDF</button>'
-      + '<button class="btn btn-ghost" onclick="copyLink(\''+res.viewUrl+'\')">🔗 คัดลอกลิงก์</button>'
+  function renderExportList(res){
+    var s = res.summary;
+    var html = '<div style="font-size:15px;font-weight:700;margin-bottom:4px">📄 ใบส่งของ — '+escapeHtml(res.keyword)+'</div>';
+    html += '<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:6px">บริษัท '+escapeHtml(res.company)+' • พบ '+s.total+' ใบ '
+      + '<span class="tag-ok">(รอส่ง '+s.pending+')</span> '
+      + (s.done?'<span class="tag-err">(ส่งแล้ว '+s.done+')</span> ':'')
+      + (s.cancel?'<span style="color:var(--gray)">(ยกเลิก '+s.cancel+')</span>':'')
       + '</div>';
-    html += '<div class="hint" style="margin-top:10px">กดเปิด PDF แล้วใช้ปุ่ม "พิมพ์ / บันทึก PDF" ในหน้านั้น เพื่อส่งให้แผนกขนส่งครับ</div>';
+    html += '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px" onclick="selectByStatus(\'green\')">เลือกรอส่งทั้งหมด</button>'
+      + '<button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px" onclick="selectAll(true)">เลือกทั้งหมด</button>'
+      + '<button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px" onclick="selectAll(false)">ล้าง</button>'
+      + '</div>';
+
+    html += '<div id="dnList">';
+    res.picks.forEach(function(p){
+      var badgeClass = p.statusColor==='green'?'green':p.statusColor==='red'?'red':'gray';
+      html += '<label class="dn-card dn-select" data-status="'+p.statusColor+'" style="cursor:pointer">'
+        + '<input type="checkbox" class="dn-cb" value="'+p.id+'" onchange="updateCount()" style="width:18px;height:18px;accent-color:var(--accent)">'
+        + '<div class="info"><div class="nm">'+escapeHtml(p.name)+'</div>'
+        + '<div class="meta">'+(p.origin?escapeHtml(p.origin)+' • ':'')+p.lineCount+' รายการ'+(p.date?' • '+p.date:'')+'</div></div>'
+        + '<span class="dn-badge '+badgeClass+'">'+escapeHtml(p.statusText)+'</span></label>';
+    });
+    html += '</div>';
+    html += '<button class="btn btn-primary" id="makePdfBtn" style="margin-top:16px;width:100%" onclick="makePdf()" disabled>📄 สร้าง PDF (เลือก 0 ใบ)</button>';
+    html += '<div class="hint" style="margin-top:8px">เลือกใบที่ต้องการ แล้วกดสร้าง PDF เพื่อส่งให้แผนกขนส่งครับ</div>';
     showMsg2('ok', html);
+  }
+
+  function selectAll(state){
+    document.querySelectorAll('.dn-cb').forEach(function(cb){ cb.checked = state; });
+    updateCount();
+  }
+  function selectByStatus(color){
+    document.querySelectorAll('.dn-select').forEach(function(card){
+      var cb = card.querySelector('.dn-cb');
+      cb.checked = (card.getAttribute('data-status') === color);
+    });
+    updateCount();
+  }
+  function updateCount(){
+    var n = document.querySelectorAll('.dn-cb:checked').length;
+    var btn = document.getElementById('makePdfBtn');
+    btn.disabled = (n === 0);
+    btn.textContent = '📄 สร้าง PDF (เลือก ' + n + ' ใบ)';
+    // ไฮไลต์การ์ดที่เลือก
+    document.querySelectorAll('.dn-select').forEach(function(card){
+      card.style.borderColor = card.querySelector('.dn-cb').checked ? 'var(--accent)' : 'var(--line)';
+      card.style.background = card.querySelector('.dn-cb').checked ? 'var(--accent-soft)' : '';
+    });
+  }
+
+  function makePdf(){
+    var ids = Array.prototype.slice.call(document.querySelectorAll('.dn-cb:checked')).map(function(cb){ return parseInt(cb.value); });
+    if (!ids.length){ return; }
+    var btn = document.getElementById('makePdfBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังสร้าง PDF...';
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        if (!res || !res.ok){
+          btn.disabled = false; updateCount();
+          alert((res && res.error) || 'สร้าง PDF ไม่สำเร็จ'); return;
+        }
+        btn.disabled = false; updateCount();
+        // เปิดหน้า PDF
+        window.open(res.viewUrl, '_blank');
+        // แสดงปุ่มคัดลอกลิงก์ใต้ปุ่ม
+        if (!document.getElementById('pdfLinkBox')){
+          var box = document.createElement('div');
+          box.id = 'pdfLinkBox'; box.style.marginTop='10px';
+          box.innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="copyLink(\''+res.viewUrl+'\')">🔗 คัดลอกลิงก์ PDF ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
+          btn.parentNode.insertBefore(box, btn.nextSibling);
+        } else {
+          document.getElementById('pdfLinkBox').innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="copyLink(\''+res.viewUrl+'\')">🔗 คัดลอกลิงก์ PDF ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
+        }
+      })
+      .withFailureHandler(function(e){
+        btn.disabled = false; updateCount();
+        alert('สร้าง PDF ไม่สำเร็จ: ' + e.message);
+      })
+      .buildDeliveryView(ids, exportKeyword, exportCompany);
   }
 
   function copyLink(url){
