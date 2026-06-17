@@ -2192,18 +2192,29 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
     if (!picks.length) return { ok: false, error: 'ไม่พบใบส่งของที่เลือก' };
 
     const stMap = { draft:'ร่าง', waiting:'รอ', confirmed:'รอของ', assigned:'รอส่ง', done:'ส่งแล้ว', cancel:'ยกเลิก' };
+    // แยกรหัสกับชื่อ: Odoo ส่งมาแบบ "[07RP-086-...] ซีลยาง EPDM..."
+    const splitCodeName = (full) => {
+      const s = String(full || '').trim();
+      const m = s.match(/^\[([^\]]+)\]\s*(.*)$/);
+      if (m) return { code: m[1].trim(), name: m[2].trim() };
+      return { code: '', name: s };
+    };
     const notes = picks.map(p => ({
       docNo: p.name || '-',
       ref: p.origin || '',
       partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
       date: String(p.scheduled_date || p.date_done || '').slice(0,10),
       status: stMap[p.state] || p.state,
-      lines: (p.lines || []).map(l => ({
-        code: '', // default_code ไม่ได้ดึงมาใน lines — ใช้ชื่อพอ
-        name: Array.isArray(l.product_id) ? l.product_id[1] : '',
-        qty: l.quantity || l.product_uom_qty || 0,
-        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
-      }))
+      lines: (p.lines || []).map(l => {
+        const full = Array.isArray(l.product_id) ? l.product_id[1] : '';
+        const { code, name } = splitCodeName(full);
+        return {
+          code,
+          name,
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
+        };
+      })
     }));
 
     const viewId = 'N' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
