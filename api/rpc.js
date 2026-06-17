@@ -2139,10 +2139,82 @@ async function createPickingFromWeb(opTypeId, opTypeName, lines, companyId) {
   }
 }
 
+// ── ดึงใบส่งของ "รอส่ง" ของโครงการ → สร้าง view สำหรับ PDF (หน้าเว็บขนส่ง) ──────
+async function getDeliveryNotesForExport(keyword, companyAlias, statusFilter) {
+  if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
+  try {
+    const { keyword: dkw, company: dCo } = parseCompany((keyword || '') + (companyAlias ? ' ' + companyAlias : ''));
+    if (!dkw) return { ok: false, error: 'กรุณาใส่คำค้นหา' };
+    const allPicks = await odooDelivery(dkw, dCo.id);
+    if (!allPicks.length) return { ok: false, error: 'ไม่พบใบส่งของของโครงการนี้' };
+
+    const sf = statusFilter || 'pending';
+    let picks = allPicks.filter(p => {
+      if (sf === 'done') return p.state === 'done';
+      if (sf === 'all')  return true;
+      return p.state !== 'done' && p.state !== 'cancel'; // รอส่ง
+    });
+    if (!picks.length) {
+      const lb = sf === 'done' ? 'ส่งแล้ว' : sf === 'all' ? 'ทั้งหมด' : 'รอส่ง';
+      return { ok: false, error: 'ไม่พบใบส่งของสถานะ "' + lb + '" (มีทั้งหมด ' + allPicks.length + ' ใบ)' };
+    }
+
+    let cntDone = 0, cntPending = 0, cntCancel = 0;
+    const picksData = picks.map(p => {
+      let statusText, statusColor;
+      if (p.state === 'done')        { statusText = 'ส่งแล้ว'; statusColor = 'red';  cntDone++; }
+      else if (p.state === 'cancel') { statusText = 'ยกเลิก';  statusColor = 'gray'; cntCancel++; }
+      else                           { statusText = 'รอส่ง';   statusColor = 'green'; cntPending++; }
+      return {
+        name: p.name || '-',
+        origin: p.origin || '',
+        partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+        statusText, statusColor,
+        shipped: p.state === 'done',
+        date: String(p.date_done || p.scheduled_date || '').slice(0, 10),
+        lines: (p.lines || []).map(l => ({
+          name: Array.isArray(l.product_id) ? l.product_id[1] : '',
+          qty: l.quantity || l.product_uom_qty || 0,
+          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+        })),
+        images: p.images || []
+      };
+    });
+
+    const statusLabel2 = sf === 'done' ? 'ส่งแล้ว' : sf === 'all' ? 'ทั้งหมด' : 'รอส่ง';
+    const data = {
+      summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
+      picks: picksData
+    };
+    const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
+    const { error: insErr } = await db.from('delivery_views').insert({
+      id: viewId,
+      title: 'ใบส่งของ — ' + dkw + ' (' + dCo.name + ')',
+      company: dCo.name,
+      status_label: statusLabel2,
+      data: data
+    });
+    if (insErr) return { ok: false, error: 'บันทึกไม่สำเร็จ: ' + insErr.message };
+
+    return {
+      ok: true,
+      viewId,
+      viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId,
+      summary: { total: picks.length, done: cntDone, pending: cntPending, cancel: cntCancel },
+      company: dCo.name,
+      keyword: dkw,
+      picks: picksData.map(p => ({ name: p.name, origin: p.origin, statusText: p.statusText, lineCount: p.lines.length, date: p.date }))
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 const HANDLERS = {
   heartbeat,
   getProductIdMapping,
   searchOperationTypes, createPickingFromWeb,
+  getDeliveryNotesForExport,
   getTasks, addTask, updateTask, deleteTask,
   checkDueTasks, dailyReceiveSend, eveningReport, monthlyKPIReport,
   getCategories, addCategory, deleteCategory, getDashboardData,
