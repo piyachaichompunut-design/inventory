@@ -95,6 +95,24 @@
   .result-line{font-size:12.5px;padding:3px 0;color:var(--ink-soft)}
   .tag-ok{color:var(--green)} .tag-warn{color:var(--amber)} .tag-err{color:var(--red)}
 
+  /* การ์ดสรุปผล */
+  .sum-cards{display:flex;gap:10px;margin:6px 0}
+  .sum-card{flex:1;border-radius:12px;padding:14px 8px;text-align:center;border:1.5px solid}
+  .sum-card .sc-num{font-size:26px;font-weight:800;line-height:1}
+  .sum-card .sc-lbl{font-size:11.5px;margin-top:4px;font-weight:600}
+  .sc-green{background:var(--green-soft);border-color:var(--green)} .sc-green .sc-num,.sc-green .sc-lbl{color:var(--green)}
+  .sc-amber{background:var(--amber-soft);border-color:var(--amber)} .sc-amber .sc-num,.sc-amber .sc-lbl{color:var(--amber)}
+  .sc-red{background:var(--red-soft);border-color:var(--red)} .sc-red .sc-num,.sc-red .sc-lbl{color:var(--red)}
+
+  /* กลุ่มผลลัพธ์ */
+  .rs-group{border-radius:10px;padding:12px 14px;margin-top:10px;border:1.5px solid}
+  .rs-green{background:var(--green-soft);border-color:#bfe6cf} .rs-amber{background:var(--amber-soft);border-color:#f5e0b8} .rs-red{background:var(--red-soft);border-color:#f3c6d6}
+  .rs-head{font-size:13.5px;font-weight:700;margin-bottom:8px}
+  .rs-line{font-size:12.5px;padding:5px 0;border-top:1px solid rgba(0,0,0,.05);line-height:1.5}
+  .rs-line:first-of-type{border-top:none}
+  .rs-code{font-family:'Courier New',monospace;font-weight:700;font-size:11.5px}
+  .rs-note{font-size:11.5px;color:var(--ink-soft);margin-top:8px;font-style:italic}
+
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(232,89,12,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -460,26 +478,66 @@
 
   function renderResult(res){
     var added = (res.matchedCode.length + res.matchedName.length);
-    var html = '<div style="font-size:15px;font-weight:700;color:var(--green);margin-bottom:8px">✅ สร้าง Picking สำเร็จ!</div>';
-    html += '<div>📋 Picking ID: <b>'+res.pickingId+'</b></div>';
-    html += '<div>📦 เพิ่มสินค้า: <b>'+added+'/'+res.total+'</b> รายการ</div>';
+    var html = '';
 
-    if (res.matchedName.length){
-      html += '<div class="result-group"><h4 class="tag-warn">⚠️ ต้องตรวจสอบ '+res.matchedName.length+' รายการ (จับจากชื่อ):</h4>';
-      res.matchedName.forEach(function(m){
-        html += '<div class="result-line">• "'+escapeHtml(m.from)+'" → <b>'+escapeHtml(m.to)+'</b></div>';
+    // หัวข้อสำเร็จ
+    html += '<div style="text-align:center;padding:8px 0 14px">'
+      + '<div style="font-size:34px">✅</div>'
+      + '<div style="font-size:18px;font-weight:700;color:var(--green)">บันทึกสำเร็จ!</div>'
+      + '<div style="font-size:13px;color:var(--ink-soft);margin-top:2px">Picking ID: <b>'+res.pickingId+'</b></div>'
+      + '</div>';
+
+    // การ์ดสรุปตัวเลข 3 ช่อง
+    html += '<div class="sum-cards">'
+      + '<div class="sum-card sc-green"><div class="sc-num">'+added+'</div><div class="sc-lbl">บันทึกแล้ว</div></div>'
+      + '<div class="sum-card sc-amber"><div class="sc-num">'+res.matchedName.length+'</div><div class="sc-lbl">ต้องเช็ค</div></div>'
+      + '<div class="sum-card sc-red"><div class="sc-num">'+res.notFound.length+'</div><div class="sc-lbl">ไม่บันทึก</div></div>'
+      + '</div>';
+    html += '<div style="text-align:center;font-size:12.5px;color:var(--ink-soft);margin:4px 0 14px">รวมทั้งหมด '+res.total+' รายการในไฟล์</div>';
+
+    // ✅ บันทึกจากรหัสตรงเป๊ะ
+    if (res.matchedCode.length){
+      html += '<div class="rs-group rs-green">'
+        + '<div class="rs-head tag-ok">✅ บันทึกจากรหัสตรงเป๊ะ ('+res.matchedCode.length+')</div>';
+      res.matchedCode.forEach(function(m){
+        html += '<div class="rs-line"><span class="rs-code">'+escapeHtml(m.code||'-')+'</span> '+escapeHtml((m.name||'').slice(0,55))+' <b>× '+m.qty+'</b></div>';
       });
-      html += '<div class="result-line" style="margin-top:4px">กรุณาเปิด Odoo เช็คว่าตรงไหม</div></div>';
+      html += '</div>';
     }
+
+    // ⚠️ ต้องเช็ค (จับจากชื่อ)
+    if (res.matchedName.length){
+      html += '<div class="rs-group rs-amber">'
+        + '<div class="rs-head tag-warn">⚠️ บันทึกแล้ว แต่ต้องตรวจสอบ ('+res.matchedName.length+')</div>'
+        + '<div class="rs-note">จับคู่จากชื่อ (ไม่ใช่รหัส) — อาจไม่ตรงตัว กรุณาเปิด Odoo เช็ค</div>';
+      res.matchedName.forEach(function(m){
+        html += '<div class="rs-line">📄 "'+escapeHtml((m.from||'').slice(0,45))+'"<br><span style="color:var(--amber)">→ จับเป็น:</span> <b>'+escapeHtml((m.to||'').slice(0,50))+'</b> × '+m.qty+'</div>';
+      });
+      html += '</div>';
+    }
+
+    // ❌ ไม่บันทึก
     if (res.notFound.length){
-      html += '<div class="result-group"><h4 class="tag-err">❌ ไม่พบใน Odoo '+res.notFound.length+' รายการ:</h4>';
-      res.notFound.forEach(function(c){ html += '<div class="result-line">• '+escapeHtml(c)+'</div>'; });
-      html += '<div class="result-line" style="margin-top:4px">กรุณาเพิ่มเองใน Odoo</div></div>';
+      html += '<div class="rs-group rs-red">'
+        + '<div class="rs-head tag-err">❌ ไม่ได้บันทึก ('+res.notFound.length+')</div>';
+      res.notFound.forEach(function(m){
+        var label = m.code || m.name || '-';
+        html += '<div class="rs-line">'
+          + '<span class="rs-code">'+escapeHtml(String(label).slice(0,40))+'</span>'
+          + (m.qty?' <b>× '+m.qty+'</b>':'')
+          + '<br><span style="color:var(--red);font-size:11.5px">⚠ '+escapeHtml(m.reason||'ไม่พบใน Odoo')+'</span></div>';
+      });
+      html += '<div class="rs-note">กรุณาเพิ่มสินค้าเหล่านี้ใน Odoo ก่อน แล้วนำเข้าใหม่</div>';
+      html += '</div>';
     }
+
     if (!res.matchedName.length && !res.notFound.length){
-      html += '<div class="result-line tag-ok" style="margin-top:6px">✅ ทุกรายการจับจากรหัสสินค้าตรงเป๊ะ</div>';
+      html += '<div class="rs-group rs-green"><div class="rs-head tag-ok" style="margin:0">🎉 สมบูรณ์! ทุกรายการจับจากรหัสตรงเป๊ะ ไม่ต้องเช็คอะไรเพิ่ม</div></div>';
     }
-    html += '<div style="margin-top:14px"><button class="btn btn-ghost" onclick="resetAll()">+ นำเข้าไฟล์ใหม่</button></div>';
+
+    html += '<div style="margin-top:16px;display:flex;gap:10px">'
+      + '<button class="btn btn-ghost" style="flex:1" onclick="resetAll()">+ นำเข้าไฟล์ใหม่</button>'
+      + '</div>';
     showMsg('ok', html);
     document.getElementById('importBtn').disabled = true;
   }
