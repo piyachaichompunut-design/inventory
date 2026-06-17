@@ -335,7 +335,45 @@ export const GUARDRAIL_PRODUCTS = [
 ];
 
 // ── เช็คสต็อกสินค้าการ์ดเรลทุกรหัสในรายการด้านบน ทีเดียวในคำสั่งเดียว ─────────
-// ── ดึง product.product ID + รหัสสินค้า ทั้งหมด (สำหรับทำ template import) ──────
+// ── ดึง PDF ใบส่งสินค้าตัวจริงจาก Odoo (report ทางการ มีโลโก้ ช่องเซ็น) ──────────
+// pickIds = array ของ stock.picking id
+// คืน base64 ของ PDF (รวมหลายใบใน PDF เดียว)
+export async function odooDeliveryPDF(pickIds) {
+  if (!Array.isArray(pickIds) || !pickIds.length) throw new Error('ไม่ได้ระบุใบส่งของ');
+
+  // 1) login แบบ web session เพื่อเอา cookie (report endpoint ต้องใช้ session ไม่ใช่ API key)
+  const loginRes = await fetch(ODOO_URL + '/web/session/authenticate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      params: { db: ODOO_DB, login: ODOO_USER, password: ODOO_KEY }
+    })
+  });
+  const setCookie = loginRes.headers.get('set-cookie') || '';
+  const sessionId = (setCookie.match(/session_id=([^;]+)/) || [])[1];
+  if (!sessionId) {
+    const j = await loginRes.json().catch(() => ({}));
+    throw new Error('Odoo login (web session) ล้มเหลว: ' + (j.error?.data?.message || 'ไม่ได้ session'));
+  }
+  const cookie = 'session_id=' + sessionId;
+
+  // 2) เรียก report endpoint — report ใบส่งของมาตรฐานคือ stock.report_deliveryslip
+  const ids = pickIds.join(',');
+  const reportUrl = ODOO_URL + '/report/pdf/stock.report_deliveryslip/' + ids;
+  const pdfRes = await fetch(reportUrl, { headers: { Cookie: cookie } });
+
+  if (!pdfRes.ok) {
+    throw new Error('ดึง PDF จาก Odoo ไม่สำเร็จ (HTTP ' + pdfRes.status + ')');
+  }
+  const buf = Buffer.from(await pdfRes.arrayBuffer());
+  // เช็คว่าเป็น PDF จริง (ขึ้นต้น %PDF)
+  if (buf.length < 100 || buf.slice(0, 4).toString() !== '%PDF') {
+    throw new Error('ไฟล์ที่ได้ไม่ใช่ PDF (อาจไม่มีสิทธิ์ หรือ report name ไม่ตรง)');
+  }
+  return buf.toString('base64');
+}
+
 // คืน [{ id, code, name }] — id = Database ID ของ product.product (ที่ stock.move ใช้)
 export async function odooAllProductIds() {
   const uid = await odooAuth();
