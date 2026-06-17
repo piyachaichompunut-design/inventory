@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>นำเข้าไฟล์เข้า Odoo — TMS</title>
+<script src="/app-shim.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#1a1d29; --ink-soft:#5a6072; --line:#e4e7ef; --paper:#ffffff;
+    --bg:#eef1f7; --accent:#e8590c; --accent-soft:#fff1e8;
+    --green:#1f9d55; --green-soft:#e6f7ee; --red:#d6336c; --red-soft:#fff0f4;
+    --gray:#868e96; --gray-soft:#f1f3f5; --amber:#d97706; --amber-soft:#fff8ec;
+  }
+  *{box-sizing:border-box}
+  body{
+    font-family:'Segoe UI','Sarabun',Tahoma,sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.6;
+    margin:0; padding:0 0 60px;
+  }
+  .wrap{max-width:820px; margin:0 auto; background:var(--paper); min-height:100vh; box-shadow:0 0 40px rgba(0,0,0,.06)}
+  .head{
+    background:linear-gradient(135deg,#1a1d29 0%,#2d3142 100%);
+    color:#fff; padding:26px 30px; position:relative; overflow:hidden;
+  }
+  .head::after{content:'';position:absolute;left:0;right:0;bottom:0;height:4px;background:linear-gradient(90deg,var(--accent),#ffa94d)}
+  .head h1{margin:0;font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}
+  .head .sub{font-size:13px;color:#aeb4c4;font-weight:400;margin-top:4px}
+  .body{padding:26px 30px}
+
+  .step{margin-bottom:26px}
+  .step-title{font-size:13px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .step-num{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px}
+
+  .search-row{display:flex;gap:10px}
+  input[type=text]{
+    flex:1;padding:13px 16px;border:1.5px solid var(--line);border-radius:10px;
+    font-size:15px;font-family:inherit;outline:none;transition:border .15s;
+  }
+  input[type=text]:focus{border-color:var(--accent)}
+  .btn{
+    padding:13px 22px;border:none;border-radius:10px;font-size:15px;font-weight:600;
+    font-family:inherit;cursor:pointer;transition:transform .1s,box-shadow .15s;white-space:nowrap;
+  }
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:linear-gradient(135deg,var(--accent),#ff922b);color:#fff;box-shadow:0 2px 8px rgba(232,89,12,.25)}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+  .btn-ghost{background:var(--gray-soft);color:var(--ink-soft)}
+
+  .hint{font-size:12.5px;color:var(--ink-soft);margin-top:8px}
+
+  .results{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+  .op-card{
+    border:1.5px solid var(--line);border-radius:10px;padding:14px 16px;cursor:pointer;
+    transition:border .15s,background .15s;display:flex;align-items:center;gap:12px;
+  }
+  .op-card:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .op-card.selected{border-color:var(--accent);background:var(--accent-soft)}
+  .op-card .ic{font-size:20px}
+  .op-card .nm{flex:1;font-size:14px;line-height:1.4}
+  .op-card .chk{color:var(--accent);font-weight:700;font-size:18px;opacity:0}
+  .op-card.selected .chk{opacity:1}
+
+  .selected-box{
+    background:var(--green-soft);border:1.5px solid var(--green);border-radius:10px;
+    padding:14px 16px;margin-bottom:16px;font-size:14px;
+  }
+  .selected-box b{color:var(--green)}
+
+  .drop{
+    border:2px dashed var(--line);border-radius:12px;padding:34px 20px;text-align:center;
+    cursor:pointer;transition:border .15s,background .15s;
+  }
+  .drop:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .drop.has-file{border-color:var(--green);background:var(--green-soft)}
+  .drop .ic{font-size:40px;margin-bottom:8px}
+  .drop .t{font-size:15px;font-weight:600}
+  .drop .s{font-size:12.5px;color:var(--ink-soft);margin-top:4px}
+
+  .preview{margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;display:none}
+  .preview table{width:100%;border-collapse:collapse;font-size:13px}
+  .preview th{background:var(--gray-soft);padding:9px 12px;text-align:left;font-weight:600;color:var(--ink-soft)}
+  .preview td{padding:8px 12px;border-top:1px solid var(--line)}
+  .preview .more{padding:8px 12px;text-align:center;color:var(--ink-soft);font-size:12px;background:var(--gray-soft)}
+
+  .msg{padding:14px 16px;border-radius:10px;margin-top:16px;font-size:14px;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:var(--green-soft);border:1.5px solid var(--green)}
+  .msg.err{background:var(--red-soft);border:1.5px solid var(--red);color:var(--red)}
+  .msg.load{background:var(--accent-soft);border:1.5px solid var(--accent)}
+
+  .result-group{margin-top:12px}
+  .result-group h4{margin:0 0 6px;font-size:13px}
+  .result-line{font-size:12.5px;padding:3px 0;color:var(--ink-soft)}
+  .tag-ok{color:var(--green)} .tag-warn{color:var(--amber)} .tag-err{color:var(--red)}
+
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(232,89,12,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .disabled-section{opacity:.4;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>📥 นำเข้าไฟล์เข้า Odoo</h1>
+    <div class="sub">อัปโหลดไฟล์ Excel เพื่อเพิ่มรายการสินค้าเข้า Picking ใน Odoo อัตโนมัติ</div>
+  </div>
+
+  <div class="body">
+
+    <!-- STEP 1: ค้นหาโครงการ -->
+    <div class="step">
+      <div class="step-title"><span class="step-num">1</span> ค้นหาโครงการ</div>
+      <div class="search-row">
+        <input type="text" id="kw" placeholder="พิมพ์ชื่อโครงการ / สายทาง เช่น กท.1002" onkeydown="if(event.key==='Enter')doSearch()">
+        <button class="btn btn-primary" id="searchBtn" onclick="doSearch()">ค้นหา</button>
+      </div>
+      <div class="hint">💡 เติมตัวย่อบริษัทท้ายคำค้นได้ เช่น <b>กท.1002 md</b> (md=เมิร์ค, cg=ซิลิกัล, sep=ศรีอาคเนย์)</div>
+      <div class="results" id="opResults"></div>
+    </div>
+
+    <!-- STEP 2: อัปโหลดไฟล์ -->
+    <div class="step disabled-section" id="uploadStep">
+      <div class="step-title"><span class="step-num">2</span> อัปโหลดไฟล์ Excel</div>
+      <div id="selectedBox" class="selected-box" style="display:none"></div>
+      <div class="drop" id="drop" onclick="document.getElementById('file').click()">
+        <div class="ic">📄</div>
+        <div class="t">คลิกเพื่อเลือกไฟล์ Excel</div>
+        <div class="s">รองรับ .xlsx — รหัสสินค้าคอลัมน์ B, จำนวนคอลัมน์ F</div>
+      </div>
+      <input type="file" id="file" accept=".xlsx" style="display:none" onchange="handleFile(this.files[0])">
+      <div class="preview" id="preview"></div>
+      <button class="btn btn-primary" id="importBtn" style="margin-top:16px;width:100%" onclick="doImport()" disabled>สร้าง Picking ใน Odoo</button>
+    </div>
+
+    <div class="msg" id="msg"></div>
+
+  </div>
+</div>
+
+<script>
+  // ── ตรวจ login ──
+  (function(){
+    var token = '';
+    try { token = localStorage.getItem('app_token') || ''; } catch(e){}
+    if (!token) location.href = '/login.html';
+  })();
+
+  var selectedOp = null;   // { id, name, companyId }
+  var parsedLines = [];    // [{ productCode, productName, qty }]
+
+  // ── STEP 1: ค้นหา ──
+  function doSearch(){
+    var kw = document.getElementById('kw').value.trim();
+    if (!kw){ showMsg('err','กรุณาพิมพ์คำค้นหา'); return; }
+    var btn = document.getElementById('searchBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>ค้นหา...';
+    hideMsg();
+    document.getElementById('opResults').innerHTML = '';
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        btn.disabled = false; btn.textContent = 'ค้นหา';
+        if (!res || !res.ok){ showMsg('err', (res && res.error) || 'ค้นหาไม่สำเร็จ'); return; }
+        renderOps(res.opTypes || [], res.companyId);
+      })
+      .withFailureHandler(function(e){
+        btn.disabled = false; btn.textContent = 'ค้นหา';
+        showMsg('err','ค้นหาไม่สำเร็จ: ' + e.message);
+      })
+      .searchOperationTypes(kw, '');
+  }
+
+  function renderOps(ops, companyId){
+    var box = document.getElementById('opResults');
+    if (!ops.length){ box.innerHTML = '<div class="hint">🔍 ไม่พบโครงการที่ตรงกับคำค้นนี้</div>'; return; }
+    box.innerHTML = '';
+    ops.forEach(function(op){
+      var card = document.createElement('div');
+      card.className = 'op-card';
+      card.innerHTML = '<span class="ic">🏗️</span><span class="nm">'+escapeHtml(op.name)+'</span><span class="chk">✓</span>';
+      card.onclick = function(){
+        document.querySelectorAll('.op-card').forEach(function(c){c.classList.remove('selected')});
+        card.classList.add('selected');
+        selectedOp = { id: op.id, name: op.name, companyId: companyId };
+        enableUpload();
+      };
+      box.appendChild(card);
+    });
+  }
+
+  // ── เปิด STEP 2 ──
+  function enableUpload(){
+    var step = document.getElementById('uploadStep');
+    step.classList.remove('disabled-section');
+    var sb = document.getElementById('selectedBox');
+    sb.style.display = 'block';
+    sb.innerHTML = '✅ เลือกโครงการ: <b>'+escapeHtml(selectedOp.name)+'</b>';
+    step.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  // ── STEP 2: อ่านไฟล์ Excel ──
+  function handleFile(file){
+    if (!file) return;
+    if (!/\.xlsx$/i.test(file.name)){ showMsg('err','กรุณาเลือกไฟล์ .xlsx เท่านั้น'); return; }
+    var drop = document.getElementById('drop');
+    drop.classList.add('has-file');
+    drop.querySelector('.t').textContent = file.name;
+    drop.querySelector('.s').textContent = 'ขนาด ' + Math.round(file.size/1024) + ' KB';
+
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, {type:'array'});
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+        parseRows(rows);
+      } catch(err){
+        showMsg('err','อ่านไฟล์ไม่สำเร็จ: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function parseRows(rows){
+    parsedLines = [];
+    for (var i=0; i<rows.length; i++){
+      var row = rows[i];
+      var code = row[1] ? String(row[1]).trim() : '';
+      var name = row[2] ? String(row[2]).trim() : '';
+      var qty  = row[5];
+      if (code && !/^[A-Z0-9]{2,}-[A-Z0-9\-]{5,}/.test(code)) code='';
+      if (!code && !name) continue;
+      var qtyNum = parseFloat(String(qty||'0').replace(/[^0-9.]/g,'')) || 0;
+      if (qtyNum <= 0) continue;
+      parsedLines.push({ productCode: code, productName: name.slice(0,120), qty: qtyNum });
+    }
+    renderPreview();
+  }
+
+  function renderPreview(){
+    var pv = document.getElementById('preview');
+    if (!parsedLines.length){
+      pv.style.display='none';
+      showMsg('err','ไม่พบรายการสินค้าในไฟล์ (ต้องมีรหัสคอลัมน์ B หรือชื่อคอลัมน์ C และจำนวนคอลัมน์ F)');
+      document.getElementById('importBtn').disabled = true;
+      return;
+    }
+    hideMsg();
+    var html = '<table><tr><th>รหัส/ชื่อสินค้า</th><th style="text-align:center;width:80px">จำนวน</th></tr>';
+    parsedLines.slice(0,8).forEach(function(l){
+      html += '<tr><td>'+escapeHtml(l.productCode || l.productName)+'</td><td style="text-align:center">'+l.qty+'</td></tr>';
+    });
+    html += '</table>';
+    if (parsedLines.length > 8) html += '<div class="more">... และอีก '+(parsedLines.length-8)+' รายการ (รวม '+parsedLines.length+' รายการ)</div>';
+    pv.innerHTML = html; pv.style.display='block';
+    document.getElementById('importBtn').disabled = false;
+  }
+
+  // ── STEP 3: สร้าง Picking ──
+  function doImport(){
+    if (!selectedOp){ showMsg('err','ยังไม่ได้เลือกโครงการ'); return; }
+    if (!parsedLines.length){ showMsg('err','ไม่มีรายการสินค้า'); return; }
+    var btn = document.getElementById('importBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังสร้าง Picking...';
+    showMsg('load','<span class="spinner"></span>กำลังสร้าง Picking ใน Odoo... กรุณารอสักครู่');
+
+    google.script.run
+      .withSuccessHandler(function(res){
+        btn.disabled = false; btn.textContent = 'สร้าง Picking ใน Odoo';
+        if (!res || !res.ok){ showMsg('err', (res && res.error) || 'สร้างไม่สำเร็จ'); return; }
+        renderResult(res);
+      })
+      .withFailureHandler(function(e){
+        btn.disabled = false; btn.textContent = 'สร้าง Picking ใน Odoo';
+        showMsg('err','สร้างไม่สำเร็จ: ' + e.message);
+      })
+      .createPickingFromWeb(selectedOp.id, selectedOp.name, parsedLines, selectedOp.companyId);
+  }
+
+  function renderResult(res){
+    var added = (res.matchedCode.length + res.matchedName.length);
+    var html = '<div style="font-size:15px;font-weight:700;color:var(--green);margin-bottom:8px">✅ สร้าง Picking สำเร็จ!</div>';
+    html += '<div>📋 Picking ID: <b>'+res.pickingId+'</b></div>';
+    html += '<div>📦 เพิ่มสินค้า: <b>'+added+'/'+res.total+'</b> รายการ</div>';
+
+    if (res.matchedName.length){
+      html += '<div class="result-group"><h4 class="tag-warn">⚠️ ต้องตรวจสอบ '+res.matchedName.length+' รายการ (จับจากชื่อ):</h4>';
+      res.matchedName.forEach(function(m){
+        html += '<div class="result-line">• "'+escapeHtml(m.from)+'" → <b>'+escapeHtml(m.to)+'</b></div>';
+      });
+      html += '<div class="result-line" style="margin-top:4px">กรุณาเปิด Odoo เช็คว่าตรงไหม</div></div>';
+    }
+    if (res.notFound.length){
+      html += '<div class="result-group"><h4 class="tag-err">❌ ไม่พบใน Odoo '+res.notFound.length+' รายการ:</h4>';
+      res.notFound.forEach(function(c){ html += '<div class="result-line">• '+escapeHtml(c)+'</div>'; });
+      html += '<div class="result-line" style="margin-top:4px">กรุณาเพิ่มเองใน Odoo</div></div>';
+    }
+    if (!res.matchedName.length && !res.notFound.length){
+      html += '<div class="result-line tag-ok" style="margin-top:6px">✅ ทุกรายการจับจากรหัสสินค้าตรงเป๊ะ</div>';
+    }
+    html += '<div style="margin-top:14px"><button class="btn btn-ghost" onclick="resetAll()">+ นำเข้าไฟล์ใหม่</button></div>';
+    showMsg('ok', html);
+    document.getElementById('importBtn').disabled = true;
+  }
+
+  function resetAll(){
+    selectedOp = null; parsedLines = [];
+    document.getElementById('kw').value='';
+    document.getElementById('opResults').innerHTML='';
+    document.getElementById('uploadStep').classList.add('disabled-section');
+    document.getElementById('selectedBox').style.display='none';
+    document.getElementById('preview').style.display='none';
+    var drop = document.getElementById('drop');
+    drop.classList.remove('has-file');
+    drop.querySelector('.t').textContent='คลิกเพื่อเลือกไฟล์ Excel';
+    drop.querySelector('.s').textContent='รองรับ .xlsx — รหัสสินค้าคอลัมน์ B, จำนวนคอลัมน์ F';
+    document.getElementById('file').value='';
+    hideMsg();
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+
+  // ── helpers ──
+  function showMsg(type, html){
+    var m = document.getElementById('msg');
+    m.className = 'msg show ' + type;
+    m.innerHTML = html;
+  }
+  function hideMsg(){ document.getElementById('msg').className = 'msg'; }
+  function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+</script>
+</body>
+</html>
