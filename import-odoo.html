@@ -341,10 +341,10 @@
         if (!document.getElementById('pdfLinkBox')){
           var box = document.createElement('div');
           box.id = 'pdfLinkBox'; box.style.marginTop='10px';
-          box.innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="copyLink(\''+res.viewUrl+'\')">🔗 คัดลอกลิงก์ใบส่งสินค้า ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
+          box.innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="openLink(\''+res.viewUrl+'\')">🔗 เปิดลิงก์ใบส่งสินค้า ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
           btn.parentNode.insertBefore(box, btn.nextSibling);
         } else {
-          document.getElementById('pdfLinkBox').innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="copyLink(\''+res.viewUrl+'\')">🔗 คัดลอกลิงก์ใบส่งสินค้า ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
+          document.getElementById('pdfLinkBox').innerHTML = '<button class="btn btn-ghost" style="width:100%" onclick="openLink(\''+res.viewUrl+'\')">🔗 เปิดลิงก์ใบส่งสินค้า ('+res.count+' ใบ) ส่งให้ขนส่ง</button>';
         }
       })
       .withFailureHandler(function(e){
@@ -354,9 +354,11 @@
       .buildDeliveryView(ids, exportKeyword, exportCompany);
   }
 
-  function copyLink(url){
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert('คัดลอกลิงก์แล้ว ✅'); });
-    else { prompt('คัดลอกลิงก์นี้:', url); }
+  function openLink(url){
+    // เปิดหน้าใบส่งสินค้าในแท็บใหม่ทันที (ไม่ต้องเอา URL ไปวางเอง)
+    window.open(url, '_blank');
+    // คัดลอกลิงก์ไว้ด้วยแบบเงียบๆ เผื่ออยากส่งต่อให้ขนส่งทางไลน์/แชท
+    try { if (navigator.clipboard) navigator.clipboard.writeText(url).catch(function(){}); } catch(e){}
   }
 
   function showMsg2(type, html){
