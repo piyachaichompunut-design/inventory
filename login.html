@@ -87,8 +87,13 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && d.ok && d.result && d.result.token) {
-          try { localStorage.setItem('app_token', d.result.token); } catch (e) {}
-          window.location.href = '/';
+          try {
+            localStorage.setItem('app_token', d.result.token);
+            localStorage.setItem('app_role', d.result.role || 'full');
+          } catch (e) {}
+          // role 'import' → ไปหน้านำเข้า Odoo โดยตรง, role อื่น → หน้าหลัก
+          if (d.result.role === 'import') window.location.href = '/import-odoo.html';
+          else window.location.href = '/';
         } else {
           err.textContent = (d && d.error) || 'เข้าสู่ระบบไม่สำเร็จ';
           btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
