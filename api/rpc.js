@@ -17,8 +17,10 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 // รหัสผ่านจำกัดสิทธิ์ — เห็นแค่หน้านำเข้า Odoo (ตั้งใน IMPORT_PASSWORD)
 const IMPORT_PASSWORD = process.env.IMPORT_PASSWORD || '';
-// ใช้ service key เป็น "ความลับ" ในการเซ็น token (มีอยู่แล้ว ไม่ต้องตั้งเพิ่ม)
-const TOKEN_SECRET = SERVICE_KEY || 'fallback-secret';
+// ใช้ service key + TOKEN_VERSION เป็น "ความลับ" ในการเซ็น token
+// เปลี่ยน APP_TOKEN_VERSION ใน Vercel env แล้ว Redeploy → token เก่าทุกใบ invalid ทันที
+const TOKEN_VERSION = process.env.APP_TOKEN_VERSION || 'v1';
+const TOKEN_SECRET = (SERVICE_KEY || 'fallback-secret') + ':' + TOKEN_VERSION;
 
 // ฟังก์ชันที่ role 'import' (รหัสจำกัดสิทธิ์) เรียกได้
 const IMPORT_ALLOWED_FN = new Set([
