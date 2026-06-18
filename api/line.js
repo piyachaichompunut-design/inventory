@@ -1321,14 +1321,19 @@ export default async function handler(req, res) {
         }
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // กัน false-positive: ถ้าที่พิมพ์สั้นเกินไปและไม่มีเนื้อหางาน
-        // เช่น "รับ so", "ok", "ขอบคุณ", "so" → ไม่สร้างงาน
-        const REPLY_NOISE = /^(รับ|ส่ง|ok|okay|โอเค|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|ได้เลย|เรียบร้อย|รับทราบ|noted|รับ so|ส่ง so|รับso|ส่งso)$/i;
+        // กัน false-positive: คนกด "รับงาน"/ตอบรับ ไม่ใช่สั่งงานใหม่
+        // เช่น "รับ so", "ok", "ขอบคุณ", "รับทราบ" → ไม่สร้างงาน
+        // ⚠️ ระวัง: "SO พี่นิค" (หมวด+ชื่อคน) คือสั่งงานจริง — ห้ามตัด
+        // หลักการ: noise = ขึ้นต้นด้วย "รับ"/"ส่ง" แล้วเหลือแค่ keyword สั้นๆ ที่ไม่มีชื่อคน
+        const REPLY_NOISE = /^(ok|okay|โอเค|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|ได้เลย|ได้ครับ|ได้ค่ะ|เรียบร้อย|รับทราบ|รับแล้ว|noted|👍|👌)$/i;
         const typedWords = typedClean.split(/\s+/).filter(Boolean);
-        // ถ้าพิมพ์สั้น (≤2 คำ) และไม่มีวันที่ และไม่มีคำบอกสถานที่/งาน → ข้ามเลย ไม่รวม quotedText
-        const hasDate = /\d{1,2}[\/\-]\d{1,2}|วันที่|พรุ่งนี้|วันนี้|มะรืน/.test(typedClean);
-        const hasTaskHint = /(ส่งของ|นัดส่ง|จัดส่ง|รับของ|รับเข้า|เข้ารับ|ไปรับ|ไปส่ง|นำส่ง|งาน)/.test(typedClean);
-        const isNoise = REPLY_NOISE.test(typedClean) || (typedWords.length <= 2 && !hasDate && !hasTaskHint);
+        // ตัดคำ "รับ"/"ส่ง" นำหน้าออก แล้วดูว่าเหลืออะไร
+        const afterRecvSend = typedClean.replace(/^\s*(รับ|ส่ง)\s+/i, '').trim();
+        const afterWords = afterRecvSend.split(/\s+/).filter(Boolean);
+        // เหลือแค่ keyword ที่ไม่ใช่งาน (so/งาน/แล้ว/ครับ) คำเดียว + เดิมขึ้นต้นด้วย รับ/ส่ง = แค่ตอบรับ
+        const startsRecvSend = /^\s*(รับ|ส่ง)\s+/i.test(typedClean);
+        const leftoverIsKeyword = afterWords.length <= 1 && /^(so|งาน|แล้ว|ครับ|ค่ะ|นะ|แล้วครับ|แล้วค่ะ|so แล้ว)?$/i.test(afterRecvSend);
+        const isNoise = REPLY_NOISE.test(typedClean) || (startsRecvSend && leftoverIsKeyword);
 
         // ถ้าเจอข้อความเดิมที่ reply และไม่ใช่ noise → รวม | ถ้า noise → ใช้แค่ที่พิมพ์
         const combined = (quotedText && !isNoise)
