@@ -1048,6 +1048,7 @@ export default async function handler(req, res) {
       // ── คำสั่ง Odoo อื่นๆ (/สต็อก /po /so /pr /help) → เรียก rpc.js ──────
       if (tt.startsWith('/สต็อก') || tt.startsWith('/stock') ||
           tt.startsWith('/อัพเดทสต็อกการ์ดเรล') || tt.startsWith('/อัปเดทสต็อกการ์ดเรล') || lc.startsWith('/guardrailstock') ||
+          tt.startsWith('/อัพเดทสต็อกอุปกรณ์ไฟฟ้า') || tt.startsWith('/อัปเดทสต็อกอุปกรณ์ไฟฟ้า') || lc.startsWith('/electricstock') ||
           lc.startsWith('/po') || tt.startsWith('/พีโอ') ||
           lc.startsWith('/so') || tt.startsWith('/ขาย') ||
           lc.startsWith('/pr') || tt.startsWith('/ขอซื้อ')) {
