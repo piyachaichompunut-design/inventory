@@ -2244,28 +2244,35 @@ async function getDeliveryNotesForExport(keyword, companyAlias, statusFilter) {
     const allPicks = await odooDelivery(dkw, dCo.id);
     if (!allPicks.length) {
       // ไม่พบใบส่งของ (stock.picking) — อาจเพราะ SO ยังเป็นใบเสนอราคา (Quotation) ยังไม่ confirm
-      // ลองค้นจาก sale.order เพื่อบอกผู้ใช้ว่า SO มีอยู่จริง แต่ยังไม่มีใบส่งของ
+      // → ดึงรายการสินค้าจาก SO มาทำเป็น "ใบส่งของเสมือน" ให้เลือก/พิมพ์ PDF ได้เลย (ไม่แตะ Odoo)
       try {
         const orders = await odooSO(dkw, dCo.id);
         if (orders && orders.length) {
-          const stMap = {
-            draft: 'ใบเสนอราคา (ยังไม่ยืนยัน)', sent: 'ส่งใบเสนอราคาแล้ว (ยังไม่ยืนยัน)',
-            sale: 'ยืนยันแล้ว', done: 'ปิดงานแล้ว', cancel: 'ยกเลิก'
+          const soStMap = {
+            draft: 'ใบเสนอราคา', sent: 'ใบเสนอราคา', sale: 'ยืนยันแล้ว', done: 'ปิดงานแล้ว', cancel: 'ยกเลิก'
           };
-          const found = orders.map(o => {
-            const st = stMap[o.state] || o.state;
-            const partner = Array.isArray(o.partner_id) ? o.partner_id[1] : '';
-            return o.name + ' — ' + st + (partner ? ' (' + partner + ')' : '');
-          }).join('\n');
-          // ถ้ามี SO ที่ยังไม่ยืนยัน → แนะนำให้ยืนยันก่อน
-          const hasUnconfirmed = orders.some(o => o.state === 'draft' || o.state === 'sent');
-          let hint = '';
-          if (hasUnconfirmed) {
-            hint = '\n\n💡 SO นี้ยังเป็นใบเสนอราคา — ต้องกดยืนยัน (Confirm) ใน Odoo ก่อน ระบบจึงจะสร้างใบส่งของให้';
-          }
-          const foundHtml = found.replace(/\n/g, '<br>');
-          const hintHtml = hint.replace(/\n/g, '<br>');
-          return { ok: false, error: 'ยังไม่มีใบส่งของของโครงการนี้<br><br>แต่พบ SO ในระบบ:<br>' + foundHtml + hintHtml };
+          let cntSO = 0;
+          const soPicks = orders.map(o => {
+            cntSO++;
+            return {
+              id: 'SO_' + o.id,                       // id เสมือน — prefix SO_ แยกจาก picking จริง
+              name: o.name || '-',
+              origin: Array.isArray(o.partner_id) ? o.partner_id[1] : '',
+              statusText: (soStMap[o.state] || o.state) + ' (จาก SO)',
+              statusColor: 'green',                   // ให้เลือกได้เหมือนรอส่ง
+              lineCount: (o.lines || []).length,
+              date: String(o.date_order || '').slice(0, 10),
+              fromSO: true
+            };
+          });
+          return {
+            ok: true,
+            keyword: dkw,
+            company: dCo.name,
+            fromSO: true,
+            summary: { total: soPicks.length, done: 0, pending: cntSO, cancel: 0 },
+            picks: soPicks
+          };
         }
       } catch (soErr) { /* ค้น SO ไม่ได้ ก็ข้ามไป */ }
       return { ok: false, error: 'ไม่พบใบส่งของของโครงการนี้' };
@@ -2309,36 +2316,72 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
   if (!Array.isArray(pickIds) || !pickIds.length) return { ok: false, error: 'ยังไม่ได้เลือกใบส่งของ' };
   try {
     const { keyword: dkw, company: dCo } = parseCompany(keyword || '');
-    const allPicks = await odooDelivery(dkw, dCo.id);
-    const idSet = new Set(pickIds.map(Number));
-    const picks = allPicks.filter(p => idSet.has(Number(p.id)));
-    if (!picks.length) return { ok: false, error: 'ไม่พบใบส่งของที่เลือก' };
 
-    const stMap = { draft:'ร่าง', waiting:'รอ', confirmed:'รอของ', assigned:'รอส่ง', done:'ส่งแล้ว', cancel:'ยกเลิก' };
-    // แยกรหัสกับชื่อ: Odoo ส่งมาแบบ "[07RP-086-...] ซีลยาง EPDM..."
     const splitCodeName = (full) => {
       const s = String(full || '').trim();
       const m = s.match(/^\[([^\]]+)\]\s*(.*)$/);
       if (m) return { code: m[1].trim(), name: m[2].trim() };
       return { code: '', name: s };
     };
-    const notes = picks.map(p => ({
-      docNo: p.name || '-',
-      ref: p.origin || '',
-      partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
-      date: String(p.scheduled_date || p.date_done || '').slice(0,10),
-      status: stMap[p.state] || p.state,
-      lines: (p.lines || []).map(l => {
-        const full = Array.isArray(l.product_id) ? l.product_id[1] : '';
-        const { code, name } = splitCodeName(full);
-        return {
-          code,
-          name,
-          qty: l.quantity || l.product_uom_qty || 0,
-          uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
-        };
-      })
-    }));
+
+    // แยก id: แบบ SO_<id> = ใบเสมือนจาก sale.order | ตัวเลขล้วน = picking จริง
+    const soIds = pickIds.filter(x => String(x).startsWith('SO_')).map(x => Number(String(x).slice(3)));
+    const pickIdsReal = pickIds.filter(x => !String(x).startsWith('SO_')).map(Number);
+
+    let notes = [];
+
+    // ── กรณีใบเสมือนจาก SO ──────────────────────────────────────────────
+    if (soIds.length) {
+      const orders = await odooSO(dkw, dCo.id);
+      const soSel = orders.filter(o => soIds.includes(Number(o.id)));
+      const soStMap = { draft: 'ใบเสนอราคา', sent: 'ใบเสนอราคา', sale: 'ยืนยันแล้ว', done: 'ปิดงานแล้ว', cancel: 'ยกเลิก' };
+      soSel.forEach(o => {
+        notes.push({
+          docNo: o.name || '-',
+          ref: Array.isArray(o.client_order_ref) ? o.client_order_ref : (o.client_order_ref || ''),
+          partner: Array.isArray(o.partner_id) ? o.partner_id[1] : '',
+          date: String(o.date_order || '').slice(0, 10),
+          status: soStMap[o.state] || o.state,
+          lines: (o.lines || []).map(l => {
+            const full = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            const { code, name } = splitCodeName(full);
+            return {
+              code, name,
+              qty: l.product_uom_qty || 0,
+              uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
+            };
+          })
+        });
+      });
+    }
+
+    // ── กรณี picking จริง ───────────────────────────────────────────────
+    if (pickIdsReal.length) {
+      const allPicks = await odooDelivery(dkw, dCo.id);
+      const idSet = new Set(pickIdsReal);
+      const picks = allPicks.filter(p => idSet.has(Number(p.id)));
+      const stMap = { draft:'ร่าง', waiting:'รอ', confirmed:'รอของ', assigned:'รอส่ง', done:'ส่งแล้ว', cancel:'ยกเลิก' };
+      picks.forEach(p => {
+        notes.push({
+          docNo: p.name || '-',
+          ref: p.origin || '',
+          partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+          date: String(p.scheduled_date || p.date_done || '').slice(0,10),
+          status: stMap[p.state] || p.state,
+          lines: (p.lines || []).map(l => {
+            const full = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            const { code, name } = splitCodeName(full);
+            return {
+              code, name,
+              qty: l.quantity || l.product_uom_qty || 0,
+              uom: Array.isArray(l.product_uom) ? l.product_uom[1] : 'EA'
+            };
+          })
+        });
+      });
+    }
+
+    if (!notes.length) return { ok: false, error: 'ไม่พบใบส่งของที่เลือก' };
 
     const viewId = 'N' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
     const { error: insErr } = await db.from('delivery_views').insert({
@@ -2349,7 +2392,7 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
       data: { type: 'delivery_note', company: companyName || dCo.name, companyId: dCo.id, notes }
     });
     if (insErr) return { ok: false, error: 'บันทึกไม่สำเร็จ: ' + insErr.message };
-    return { ok: true, viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery-note.html?id=' + viewId, count: picks.length };
+    return { ok: true, viewUrl: 'https://inventory-rho-hazel.vercel.app/delivery-note.html?id=' + viewId, count: notes.length };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2359,6 +2402,10 @@ async function buildDeliveryView(pickIds, keyword, companyName) {
 async function getDeliveryPDF(pickIds) {
   if (!odooConfigured()) return { ok: false, error: 'ยังไม่ได้ตั้งค่า Odoo' };
   if (!Array.isArray(pickIds) || !pickIds.length) return { ok: false, error: 'ยังไม่ได้เลือกใบส่งของ' };
+  // ใบเสมือนจาก SO (SO_<id>) ยังไม่มี picking จริงใน Odoo → ดึง PDF ตัวจริงไม่ได้
+  if (pickIds.some(x => String(x).startsWith('SO_'))) {
+    return { ok: false, error: 'รายการนี้มาจากใบเสนอราคา (SO) ที่ยังไม่ยืนยัน จึงยังไม่มี PDF ตัวจริงจาก Odoo\nกรุณาใช้ปุ่ม "สร้างใบส่งสินค้า" เพื่อพิมพ์ใบส่งของจากระบบแทนครับ' };
+  }
   try {
     const base64 = await odooDeliveryPDF(pickIds);
     return { ok: true, pdfBase64: base64, count: pickIds.length };
