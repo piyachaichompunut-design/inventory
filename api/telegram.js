@@ -64,12 +64,21 @@ async function buildReportMsg(raw) {
 
   const dt = guessDocType(keyword);
   const order = dt ? [dt] : ['po', 'so', 'pr'];
+
+  // ใน Odoo ชื่อ PO/SO มักเก็บเป็นเลขล้วน (เช่น "2606027") ไม่มี prefix
+  // ส่วน PR มักมี prefix (เช่น "PR01881") — เลยลองค้นทั้ง 2 แบบ
+  const kwStripped = keyword.replace(/^(PO|SO|PR)\s*/i, '').trim();
+  const candidates = (kwStripped && kwStripped !== keyword) ? [keyword, kwStripped] : [keyword];
+
   let found = null;
   for (const t of order) {
-    try {
-      found = await odooFindDoc(t, keyword, null, coId);
-      if (found) break;
-    } catch (e) {}
+    for (const kw of candidates) {
+      try {
+        found = await odooFindDoc(t, kw, null, coId);
+        if (found) break;
+      } catch (e) {}
+    }
+    if (found) break;
   }
   if (!found) return '🔍 ไม่พบเอกสาร "' + tgEscape(keyword) + '"' + (coId ? ' (บริษัท ' + tgEscape(company.name) + ')' : '') + ' ใน Odoo ครับ\nรองรับ PO / SO / PR — ลองพิมพ์เลขให้ครบ เช่น /รายงาน PO2606027';
 
