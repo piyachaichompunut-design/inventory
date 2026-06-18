@@ -100,7 +100,7 @@ const CAT_MAP = {
   'อื่น':       'งานอื่นๆ',
 };
 
-function parseTaskFromText(text, catKeyword) {
+function parseTaskFromText(text, catKeyword, forceDuration) {
   const t = text.trim();
   const kw = (catKeyword || '').trim();
 
@@ -112,9 +112,12 @@ function parseTaskFromText(text, catKeyword) {
   const actionDate = rawDate ? (parseDate(rawDate) || todayStr()) : todayStr();
 
   // ── ส่ง/รับ — เช็คจาก catKeyword ก่อน แล้ว fallback ไปหาในข้อความ ──
+  // forceDuration: ถ้าระบุมา (เช่น chat 2 บังคับ 'รับ') → ใช้เลย ไม่ auto-detect
   const kwLower = kw.toLowerCase();
   let duration = 'รับ';
-  if (/^ส่ง/.test(kwLower) || /ส่งของ|นัดส่ง|จัดส่ง|ออกของ/.test(kwLower)) duration = 'ส่ง';
+  if (forceDuration === 'รับ' || forceDuration === 'ส่ง') {
+    duration = forceDuration;
+  } else if (/^ส่ง/.test(kwLower) || /ส่งของ|นัดส่ง|จัดส่ง|ออกของ/.test(kwLower)) duration = 'ส่ง';
   else if (/ส่งของ|นัดส่ง|จัดส่ง|ออกของ|นำส่ง/.test(t)) duration = 'ส่ง';
   else if (/รับของ|รับเข้า|รับสินค้า/.test(t)) duration = 'รับ';
 
@@ -141,10 +144,10 @@ function parseTaskFromText(text, catKeyword) {
 }
 
 // ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
-async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null) {
+async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null, forceDuration = null) {
   if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
 
-  const taskData = parseTaskFromText(text, catKeyword);
+  const taskData = parseTaskFromText(text, catKeyword, forceDuration);
   const id = rid();
   const attachments = attachmentObj ? [attachmentObj] : [];
 
@@ -385,18 +388,16 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
-    if (target === '__self__' || target === 'เทเลแกรม') {
-      // __self__ → ส่งกลับกลุ่มที่พิมพ์คำสั่ง, เทเลแกรม → ส่งเข้า TELEGRAM_CHAT_ID_2
-      const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
-      if (!destId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2 ใน env'); return; }
+    if (target === 'เทเลแกรม') {
+      // ส่งเข้า Telegram กลุ่ม 2
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
+      if (!TG_SUB) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_SUB_CHAT_ID ใน env'); return; }
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
       });
-      if (target !== '__self__') {
-        await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
-      }
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
     } else {
       // ส่งเข้า LINE
       const groupId = lineGroups[target];
@@ -480,15 +481,13 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\nเรียบร้อยครับ ✅';
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-    if (target === '__self__' || target === 'เทเลแกรม') {
-      const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
+    if (target === 'เทเลแกรม') {
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
       });
-      if (target !== '__self__') {
-        await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า Telegram เรียบร้อยครับ');
-      }
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า Telegram เรียบร้อยครับ');
     } else {
       const groupId = lineGroups[target];
       const LINE_TOKEN = process.env.LINE_CHANNEL_TOKEN || '';
@@ -559,16 +558,14 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       'เรียบร้อยครับ ✅';
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-    if (target === '__self__' || target === 'เทเลแกรม') {
-      const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
-      if (!destId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2'); return; }
+    if (target === 'เทเลแกรม') {
+      const TG_SUB = process.env.TELEGRAM_CHAT_ID_2 || '';
+      if (!TG_SUB) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2'); return; }
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: TG_SUB, text: msg })
       });
-      if (target !== '__self__') {
-        await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
-      }
+      await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
     } else {
       const groupId = lineGroups[target];
       if (!groupId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบกลุ่ม LINE "' + target + '"'); return; }
@@ -804,7 +801,8 @@ export default async function handler(req, res) {
         else if (/\sเทเลแกรม\s*$/i.test(repKw)) { repTarget = 'เทเลแกรม'; repKw = repKw.replace(/\sเทเลแกรม\s*$/, '').trim(); }
 
         if (!repTarget) {
-          repTarget = '__self__'; // ไม่ระบุปลายทาง → ส่งกลับกลุ่มที่พิมพ์คำสั่ง
+          await sendTelegramReply(chatId, '⚠️ ระบุปลายทางด้วยครับ: ไลน์ / เทส / เทเลแกรม');
+          res.status(200).json({ ok: true }); return;
         }
 
         // ตรวจว่าเป็น po/so/pr หรือใบส่งของ
@@ -1382,7 +1380,9 @@ export default async function handler(req, res) {
         }
 
         // ── บันทึกงานพร้อมไฟล์แนบ ────────────────────────────────────────
-        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword, replyMsg.message_id);
+        // chat 2 (sub) = กลุ่มงานรับเท่านั้น → บังคับประเภทเป็น 'รับ' เสมอ
+        // (ไม่สนใจคำว่า ส่งของ/จัดส่ง ที่อาจมีในข้อความงานต้นฉบับ)
+        const result = await saveTaskFromReply(originalText, fromUser, chatId, attachmentObj, catKeyword, replyMsg.message_id, 'รับ');
 
         if (result.ok) {
           // จำงานล่าสุดของกลุ่มนี้ (สำหรับ +1 +2 แนบไฟล์)
