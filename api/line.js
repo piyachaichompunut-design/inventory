@@ -1307,7 +1307,10 @@ export default async function handler(req, res) {
       // (mentionees, botMentioned, quotedId ประกาศไว้ข้างบนแล้ว)
 
       // แบบเดิม (รับ:/ส่ง:/งานใหม่) — พิมพ์ตรงๆ ยังใช้ได้
-      let taskData = parseTask(text);
+      // ⚠️ ถ้าเป็นการ reply + แท็กบอท → ข้าม parseTask(text) เพราะ text มี mention/quoted ปน
+      //    ปล่อยให้บล็อก Reply ด้านล่าง (ที่มี noise filter) จัดการแทน
+      //    กันเคส reply แล้วพิมพ์ "รับ so" → parseTask จับผิดเป็นงานชื่อ "so"
+      let taskData = (botMentioned && quotedId) ? null : parseTask(text);
 
       // แบบ Reply: ต้องเป็นการ reply (มี quotedId) + แท็กบอท
       if (!taskData && botMentioned && quotedId) {
@@ -1326,7 +1329,6 @@ export default async function handler(req, res) {
         // ⚠️ ระวัง: "SO พี่นิค" (หมวด+ชื่อคน) คือสั่งงานจริง — ห้ามตัด
         // หลักการ: noise = ขึ้นต้นด้วย "รับ"/"ส่ง" แล้วเหลือแค่ keyword สั้นๆ ที่ไม่มีชื่อคน
         const REPLY_NOISE = /^(ok|okay|โอเค|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|ได้เลย|ได้ครับ|ได้ค่ะ|เรียบร้อย|รับทราบ|รับแล้ว|noted|👍|👌)$/i;
-        const typedWords = typedClean.split(/\s+/).filter(Boolean);
         // ตัดคำ "รับ"/"ส่ง" นำหน้าออก แล้วดูว่าเหลืออะไร
         const afterRecvSend = typedClean.replace(/^\s*(รับ|ส่ง)\s+/i, '').trim();
         const afterWords = afterRecvSend.split(/\s+/).filter(Boolean);
@@ -1335,11 +1337,14 @@ export default async function handler(req, res) {
         const leftoverIsKeyword = afterWords.length <= 1 && /^(so|งาน|แล้ว|ครับ|ค่ะ|นะ|แล้วครับ|แล้วค่ะ|so แล้ว)?$/i.test(afterRecvSend);
         const isNoise = REPLY_NOISE.test(typedClean) || (startsRecvSend && leftoverIsKeyword);
 
-        // ถ้าเจอข้อความเดิมที่ reply และไม่ใช่ noise → รวม | ถ้า noise → ใช้แค่ที่พิมพ์
-        const combined = (quotedText && !isNoise)
-          ? (quotedText + ' ' + typedClean).trim()
-          : typedClean;
-        taskData = await parseTaskSmart(combined, db, typedClean);
+        // ถ้าเป็น noise (กดรับงาน/ตอบรับ) → ไม่สร้างงานเลย
+        // ถ้าไม่ใช่ noise → รวม quotedText (งานเต็ม) + ที่พิมพ์ (หมวด/ชื่อ/วัน) แล้ว parse
+        if (!isNoise) {
+          const combined = quotedText
+            ? (quotedText + ' ' + typedClean).trim()
+            : typedClean;
+          taskData = await parseTaskSmart(combined, db, typedClean);
+        }
       }
 
       if (taskData) {
