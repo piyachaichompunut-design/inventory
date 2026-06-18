@@ -2242,7 +2242,34 @@ async function getDeliveryNotesForExport(keyword, companyAlias, statusFilter) {
     const { keyword: dkw, company: dCo } = parseCompany((keyword || '') + (companyAlias ? ' ' + companyAlias : ''));
     if (!dkw) return { ok: false, error: 'กรุณาใส่คำค้นหา' };
     const allPicks = await odooDelivery(dkw, dCo.id);
-    if (!allPicks.length) return { ok: false, error: 'ไม่พบใบส่งของของโครงการนี้' };
+    if (!allPicks.length) {
+      // ไม่พบใบส่งของ (stock.picking) — อาจเพราะ SO ยังเป็นใบเสนอราคา (Quotation) ยังไม่ confirm
+      // ลองค้นจาก sale.order เพื่อบอกผู้ใช้ว่า SO มีอยู่จริง แต่ยังไม่มีใบส่งของ
+      try {
+        const orders = await odooSO(dkw, dCo.id);
+        if (orders && orders.length) {
+          const stMap = {
+            draft: 'ใบเสนอราคา (ยังไม่ยืนยัน)', sent: 'ส่งใบเสนอราคาแล้ว (ยังไม่ยืนยัน)',
+            sale: 'ยืนยันแล้ว', done: 'ปิดงานแล้ว', cancel: 'ยกเลิก'
+          };
+          const found = orders.map(o => {
+            const st = stMap[o.state] || o.state;
+            const partner = Array.isArray(o.partner_id) ? o.partner_id[1] : '';
+            return o.name + ' — ' + st + (partner ? ' (' + partner + ')' : '');
+          }).join('\n');
+          // ถ้ามี SO ที่ยังไม่ยืนยัน → แนะนำให้ยืนยันก่อน
+          const hasUnconfirmed = orders.some(o => o.state === 'draft' || o.state === 'sent');
+          let hint = '';
+          if (hasUnconfirmed) {
+            hint = '\n\n💡 SO นี้ยังเป็นใบเสนอราคา — ต้องกดยืนยัน (Confirm) ใน Odoo ก่อน ระบบจึงจะสร้างใบส่งของให้';
+          }
+          const foundHtml = found.replace(/\n/g, '<br>');
+          const hintHtml = hint.replace(/\n/g, '<br>');
+          return { ok: false, error: 'ยังไม่มีใบส่งของของโครงการนี้<br><br>แต่พบ SO ในระบบ:<br>' + foundHtml + hintHtml };
+        }
+      } catch (soErr) { /* ค้น SO ไม่ได้ ก็ข้ามไป */ }
+      return { ok: false, error: 'ไม่พบใบส่งของของโครงการนี้' };
+    }
 
     let cntDone = 0, cntPending = 0, cntCancel = 0;
     const picks = allPicks.map(p => {
