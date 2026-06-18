@@ -7,7 +7,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import crypto from 'crypto';
-import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooFindOperationType, odooCreatePickingFromLines, odooAllProductIds, odooDeliveryPDF } from './odoo.js';
+import { odooConfigured, odooStock, odooPO, odooSO, odooPR, odooDelivery, parseCompany, odooGuardrailStock, odooElectricalStock, odooFindOperationType, odooCreatePickingFromLines, odooAllProductIds, odooDeliveryPDF } from './odoo.js';
 import { buildDeliveryPDF } from './pdfgen.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -978,6 +978,7 @@ async function handleTelegramCommand(text) {
       '🔍 /ค้นหา [คำ] — ค้นหางาน เช่น /ค้นหา ชุบ หรือ /ค้นหา ชุบ to do\n' +
       '📦 /สต็อก [ชื่อสินค้า] — เช็คสต็อกจาก Odoo เช่น /สต็อก แผ่น 3.2 ชุบ\n' +
       '🛣️ /อัพเดทสต็อกการ์ดเรล [md/cg/sep] — เช็คสต็อกชิ้นส่วนการ์ดเรลทั้งหมดทีเดียว\n' +
+      '⚡ /อัพเดทสต็อกอุปกรณ์ไฟฟ้า [md/cg/sep] — เช็คสต็อกอุปกรณ์ไฟฟ้า (แสดงเฉพาะที่มีจำนวน)\n' +
       '📥 /นำเข้าใบส่งของ [คำค้นโครงการ] + แนบไฟล์ Excel — สร้าง picking ใน Odoo อัตโนมัติ\n' +
       '🧾 /po [เลข PO] — ดูใบสั่งซื้อจาก Odoo เช่น /po PO2603068\n' +
       '🧾 /so [เลข SO] — ดูใบสั่งขายจาก Odoo เช่น /so 2606007\n' +
@@ -1478,6 +1479,83 @@ async function handleTelegramCommand(text) {
       msg += 'พบ ' + foundCount + ' / ' + (foundCount + notFoundCount) + ' รายการ';
       if (notFoundCount) msg += ' (ไม่พบ ' + notFoundCount + ' รายการ)';
       msg += '\n\n📎 เปิดดูสต็อกการ์ดเรล:\n' + viewUrl;
+      return msg;
+    } catch (e) {
+      return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
+    }
+  }
+
+  // ── /อัพเดทสต็อกอุปกรณ์ไฟฟ้า [md/cg/sep/akn] — เช็คสต็อกอุปกรณ์ไฟฟ้าทั้งหมด ──
+  // หมายเหตุ: คำสั่งนี้ "แสดงเฉพาะสินค้าที่มีจำนวน" (qty>0) — เหลือ 0 หรือไม่พบ ไม่แสดง
+  if (cleaned.startsWith('/อัพเดทสต็อกอุปกรณ์ไฟฟ้า') || cleaned.startsWith('/อัปเดทสต็อกอุปกรณ์ไฟฟ้า') ||
+      cleaned.startsWith('/สต็อกอุปกรณ์ไฟฟ้า') || lower.startsWith('/electricstock')) {
+    if (!odooConfigured()) return '❌ ยังไม่ได้ตั้งค่า Odoo ใน Environment Variables ครับ';
+    if (!db) return '⚠️⚠️⚠️ ยังไม่ได้เชื่อมต่อ Storage ครับ';
+    const elArg = cleaned
+      .replace(/^\/อัพเดทสต็อกอุปกรณ์ไฟฟ้า/, '')
+      .replace(/^\/อัปเดทสต็อกอุปกรณ์ไฟฟ้า/, '')
+      .replace(/^\/สต็อกอุปกรณ์ไฟฟ้า/, '')
+      .replace(/^\/electricstock/i, '')
+      .trim();
+    const { company: elCo } = parseCompany(elArg);
+
+    try {
+      const items = await odooElectricalStock(elCo.id);
+
+      // ชื่อกลุ่ม (เรียงตามลำดับที่อยากให้แสดง)
+      const groupNames = {
+        wire_THW: '🔌 สายไฟ THW', wire_CV: '🔌 สายไฟ CV', wire_NYY: '🔌 สายไฟ NYY',
+        wire_VCT: '🔌 สายไฟ VCT', wire_VAF: '🔌 สายไฟ VAF', wire_other: '🔌 สายไฟ อื่นๆ',
+        lug: '🔗 หางปลา/ปลอกหุ้ม', pipe: '🟫 ท่อ/ข้อต่อ', clamp: '🔩 แคล้ม',
+        ground: '🟠 แท่งกราวด์ทองแดง', sleeve: '⚪ สลิป', connector: '🔵 คอนเนคเตอร์',
+        tape: '🟡 เทป', base: '🏗️ ฐานเสาไฟฟ้า', bolt: '🔩 นอต',
+        channel: '📏 รางซี', box: '📦 กล่องควบคุม', other: '📦 อื่นๆ'
+      };
+      const groupOrder = [
+        'wire_THW','wire_CV','wire_NYY','wire_VCT','wire_VAF','wire_other',
+        'lug','pipe','clamp','ground','sleeve','connector','tape','base','bolt','channel','box','other'
+      ];
+
+      const now = new Date(Date.now() + 7 * 60 * 60 * 1000);
+      const ts = now.toISOString().slice(0, 10) + ' ' + now.toISOString().slice(11, 16);
+
+      // กรองเฉพาะที่มีจำนวน (qty>0) — เหลือ 0 หรือไม่พบ ตัดทิ้ง
+      const inStock = items.filter(it => it.found && Number(it.qty) > 0);
+
+      let totalQty = 0;
+      const picks = groupOrder.map(g => {
+        const list = inStock.filter(it => it.group === g);
+        const lines = list.map(it => {
+          totalQty++;
+          return { name: '[' + it.code + '] ' + it.label, qty: it.qty, uom: it.uom || '' };
+        });
+        return {
+          name: groupNames[g] + ' (' + list.length + ' รายการ)',
+          origin: '', partner: '', date: ts,
+          lines
+        };
+      }).filter(p => p.lines.length); // ตัดกลุ่มที่ไม่มีของเลย
+
+      if (!picks.length) {
+        return '📦 สต็อกอุปกรณ์ไฟฟ้า — ' + elCo.name + '\nไม่พบสินค้าที่มีจำนวนคงเหลือครับ';
+      }
+
+      const data = { summary: { total: picks.length }, picks };
+
+      const viewId = 'E' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+      const { error: insErr } = await db.from('delivery_views').insert({
+        id: viewId,
+        title: 'สต็อกอุปกรณ์ไฟฟ้า — ' + elCo.name,
+        company: elCo.name,
+        status_label: 'อัปเดต ' + ts + ' น. (เฉพาะที่มีจำนวน)',
+        data
+      });
+      if (insErr) return '⚠️⚠️⚠️ บันทึกข้อมูลไม่สำเร็จ: ' + tgEsc(insErr.message);
+
+      const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+      let msg = '📦 สต็อกอุปกรณ์ไฟฟ้า — ' + elCo.name + '\n';
+      msg += 'มีสินค้าคงเหลือ ' + totalQty + ' รายการ (เฉพาะที่มีจำนวน)';
+      msg += '\n\n📎 เปิดดูสต็อกอุปกรณ์ไฟฟ้า:\n' + viewUrl;
       return msg;
     } catch (e) {
       return '❌ ดึงข้อมูล Odoo ไม่สำเร็จ: ' + tgEsc(e.message);
