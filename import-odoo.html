@@ -252,6 +252,7 @@
   // ── VIEW 2: ค้นใบส่งของทั้งหมด → ให้เลือกหลายใบ ──
   var exportKeyword = '';
   var exportCompany = '';
+  var exportIsSO = false;
 
   function doExportSearch(){
     var kw = document.getElementById('kw2').value.trim();
@@ -264,7 +265,7 @@
       .withSuccessHandler(function(res){
         btn.disabled = false; btn.textContent = 'ค้นหา';
         if (!res || !res.ok){ showMsg2('err', (res && res.error) || 'ค้นหาไม่สำเร็จ'); return; }
-        exportKeyword = res.keyword; exportCompany = res.company;
+        exportKeyword = res.keyword; exportCompany = res.company; exportIsSO = (res.fromSO === true);
         renderExportList(res);
       })
       .withFailureHandler(function(e){
@@ -276,12 +277,20 @@
 
   function renderExportList(res){
     var s = res.summary;
-    var html = '<div style="font-size:15px;font-weight:700;margin-bottom:4px">📄 ใบส่งของ — '+escapeHtml(res.keyword)+'</div>';
-    html += '<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:6px">บริษัท '+escapeHtml(res.company)+' • พบ '+s.total+' ใบ '
-      + '<span class="tag-ok">(รอส่ง '+s.pending+')</span> '
-      + (s.done?'<span class="tag-err">(ส่งแล้ว '+s.done+')</span> ':'')
-      + (s.cancel?'<span style="color:var(--gray)">(ยกเลิก '+s.cancel+')</span>':'')
-      + '</div>';
+    var isSO = res.fromSO === true;
+    var headTitle = isSO ? '🧾 ใบเสนอราคา (SO) — ' : '📄 ใบส่งของ — ';
+    var html = '<div style="font-size:15px;font-weight:700;margin-bottom:4px">'+headTitle+escapeHtml(res.keyword)+'</div>';
+    if (isSO) {
+      html += '<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:6px">บริษัท '+escapeHtml(res.company)+' • พบ '+s.total+' SO '
+        + '<span class="tag-ok">(ดึงรายการสินค้าจาก SO มาทำใบส่งของได้)</span></div>'
+        + '<div class="hint" style="margin-bottom:10px">💡 SO นี้ยังเป็นใบเสนอราคา (ยังไม่มีใบส่งของจริงใน Odoo) — ระบบดึงรายการสินค้ามาให้ทำใบส่งของได้เลย</div>';
+    } else {
+      html += '<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:6px">บริษัท '+escapeHtml(res.company)+' • พบ '+s.total+' ใบ '
+        + '<span class="tag-ok">(รอส่ง '+s.pending+')</span> '
+        + (s.done?'<span class="tag-err">(ส่งแล้ว '+s.done+')</span> ':'')
+        + (s.cancel?'<span style="color:var(--gray)">(ยกเลิก '+s.cancel+')</span>':'')
+        + '</div>';
+    }
     html += '<div style="display:flex;gap:8px;margin-bottom:10px">'
       + '<button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px" onclick="selectByStatus(\'green\')">เลือกรอส่งทั้งหมด</button>'
       + '<button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px" onclick="selectAll(true)">เลือกทั้งหมด</button>'
@@ -298,8 +307,9 @@
         + '<span class="dn-badge '+badgeClass+'">'+escapeHtml(p.statusText)+'</span></label>';
     });
     html += '</div>';
-    html += '<button class="btn btn-primary" id="makePdfBtn" style="margin-top:16px;width:100%" onclick="makePdf()" disabled>📄 สร้าง PDF (เลือก 0 ใบ)</button>';
-    html += '<div class="hint" style="margin-top:8px">เลือกใบที่ต้องการ แล้วกดสร้าง PDF เพื่อส่งให้แผนกขนส่งครับ</div>';
+    var btnLabel = isSO ? '🧾 สร้างใบส่งสินค้าจาก SO (เลือก 0 ใบ)' : '📄 สร้าง PDF (เลือก 0 ใบ)';
+    html += '<button class="btn btn-primary" id="makePdfBtn" style="margin-top:16px;width:100%" onclick="makePdf()" disabled>'+btnLabel+'</button>';
+    html += '<div class="hint" style="margin-top:8px">เลือกรายการที่ต้องการ แล้วกดสร้างใบส่งสินค้าเพื่อส่งให้แผนกขนส่งครับ</div>';
     showMsg2('ok', html);
   }
 
@@ -318,7 +328,7 @@
     var n = document.querySelectorAll('.dn-cb:checked').length;
     var btn = document.getElementById('makePdfBtn');
     btn.disabled = (n === 0);
-    btn.textContent = '📄 สร้าง PDF (เลือก ' + n + ' ใบ)';
+    btn.textContent = (exportIsSO ? '🧾 สร้างใบส่งสินค้าจาก SO (เลือก ' : '📄 สร้าง PDF (เลือก ') + n + ' ใบ)';
     // ไฮไลต์การ์ดที่เลือก
     document.querySelectorAll('.dn-select').forEach(function(card){
       card.style.borderColor = card.querySelector('.dn-cb').checked ? 'var(--accent)' : 'var(--line)';
@@ -327,7 +337,10 @@
   }
 
   function makePdf(){
-    var ids = Array.prototype.slice.call(document.querySelectorAll('.dn-cb:checked')).map(function(cb){ return parseInt(cb.value); });
+    var ids = Array.prototype.slice.call(document.querySelectorAll('.dn-cb:checked')).map(function(cb){
+      var v = cb.value;
+      return /^\d+$/.test(v) ? parseInt(v, 10) : v;  // ตัวเลขล้วน → number | SO_<id> → คงเป็น string
+    });
     if (!ids.length){ return; }
     var btn = document.getElementById('makePdfBtn');
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>กำลังสร้างใบส่งสินค้า...';
