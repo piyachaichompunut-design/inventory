@@ -1320,8 +1320,17 @@ export default async function handler(req, res) {
         }
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // ถ้าเจอข้อความเดิมที่ reply → รวม | ถ้าไม่เจอ → ใช้ที่พิมพ์ (ไม่หยุด)
-        const combined = quotedText
+        // กัน false-positive: ถ้าที่พิมพ์สั้นเกินไปและไม่มีเนื้อหางาน
+        // เช่น "รับ so", "ok", "ขอบคุณ", "so" → ไม่สร้างงาน
+        const REPLY_NOISE = /^(รับ|ส่ง|ok|okay|โอเค|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|ได้เลย|เรียบร้อย|รับทราบ|noted|รับ so|ส่ง so|รับso|ส่งso)$/i;
+        const typedWords = typedClean.split(/\s+/).filter(Boolean);
+        // ถ้าพิมพ์สั้น (≤2 คำ) และไม่มีวันที่ และไม่มีคำบอกสถานที่/งาน → ข้ามเลย ไม่รวม quotedText
+        const hasDate = /\d{1,2}[\/\-]\d{1,2}|วันที่|พรุ่งนี้|วันนี้|มะรืน/.test(typedClean);
+        const hasTaskHint = /(ส่งของ|นัดส่ง|จัดส่ง|รับของ|รับเข้า|เข้ารับ|ไปรับ|ไปส่ง|นำส่ง|งาน)/.test(typedClean);
+        const isNoise = REPLY_NOISE.test(typedClean) || (typedWords.length <= 2 && !hasDate && !hasTaskHint);
+
+        // ถ้าเจอข้อความเดิมที่ reply และไม่ใช่ noise → รวม | ถ้า noise → ใช้แค่ที่พิมพ์
+        const combined = (quotedText && !isNoise)
           ? (quotedText + ' ' + typedClean).trim()
           : typedClean;
         taskData = await parseTaskSmart(combined, db, typedClean);
