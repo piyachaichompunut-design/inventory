@@ -55,12 +55,12 @@ function formatReportMsg(doc) {
   return m;
 }
 
-// ค้นหาเอกสาร + ดึงรายละเอียด แล้วคืนข้อความรายงาน
+// ค้นหาเอกสาร + ดึงรายละเอียด แล้วคืน { text, images }
 async function buildReportMsg(raw) {
-  if (!odooConfigured()) return '⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ';
+  if (!odooConfigured()) return { text: '⚠️⚠️⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ', images: [] };
   const { keyword, company } = parseCompany(raw);
   const coId = company && company.id;
-  if (!keyword) return 'พิมพ์เลขเอกสารด้วยครับ เช่น /รายงาน PO2606027';
+  if (!keyword) return { text: 'พิมพ์เลขเอกสารด้วยครับ เช่น /รายงาน PO2606027', images: [] };
 
   const dt = guessDocType(keyword);
   const order = dt ? [dt] : ['po', 'so', 'pr'];
@@ -80,11 +80,36 @@ async function buildReportMsg(raw) {
     }
     if (found) break;
   }
-  if (!found) return '🔍 ไม่พบเอกสาร "' + tgEscape(keyword) + '"' + (coId ? ' (บริษัท ' + tgEscape(company.name) + ')' : '') + ' ใน Odoo ครับ\nรองรับ PO / SO / PR — ลองพิมพ์เลขให้ครบ เช่น /รายงาน PO2606027';
+  if (!found) return { text: '🔍 ไม่พบเอกสาร "' + tgEscape(keyword) + '"' + (coId ? ' (บริษัท ' + tgEscape(company.name) + ')' : '') + ' ใน Odoo ครับ\nรองรับ PO / SO / PR — ลองพิมพ์เลขให้ครบ เช่น /รายงาน PO2606027', images: [] };
 
   const doc = await odooDocDetail(found.model, found.id);
-  if (!doc) return '🔍 เจอ "' + tgEscape(found.name) + '" แต่ดึงรายละเอียดไม่ได้ครับ';
-  return formatReportMsg(doc);
+  if (!doc) return { text: '🔍 เจอ "' + tgEscape(found.name) + '" แต่ดึงรายละเอียดไม่ได้ครับ', images: [] };
+  return { text: formatReportMsg(doc), images: doc.images || [] };
+}
+
+// ส่งรูปงานเข้า Telegram ผ่าน proxy /api/odoo-image (รูปจาก Odoo ir.attachment)
+const APP_BASE = 'https://inventory-rho-hazel.vercel.app';
+async function sendReportPhotos(chatId, images) {
+  const TG = process.env.TELEGRAM_BOT_TOKEN || '';
+  if (!TG || !images || !images.length) return;
+  // Telegram จำกัด album ละ 10 รูป — ส่งทีละชุด
+  const urls = images.map(im => APP_BASE + '/api/odoo-image?id=' + im.id);
+  for (let i = 0; i < urls.length; i += 10) {
+    const chunk = urls.slice(i, i + 10);
+    try {
+      if (chunk.length === 1) {
+        await fetch('https://api.telegram.org/bot' + TG + '/sendPhoto', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, photo: chunk[0] })
+        });
+      } else {
+        await fetch('https://api.telegram.org/bot' + TG + '/sendMediaGroup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, media: chunk.map(u => ({ type: 'photo', media: u })) })
+        });
+      }
+    } catch (e) {}
+  }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -330,8 +355,9 @@ export default async function handler(req, res) {
         if (rRest && !hasTarget) {
           await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
           try {
-            const rMsg = await buildReportMsg(rRest);
-            await sendTelegramReply(chatId, rMsg);
+            const r = await buildReportMsg(rRest);
+            await sendTelegramReply(chatId, r.text);
+            if (r.images && r.images.length) await sendReportPhotos(chatId, r.images);
           } catch (e) {
             await sendTelegramReply(chatId, '⚠️⚠️⚠️ สร้างรายงานไม่สำเร็จ: ' + e.message);
           }
