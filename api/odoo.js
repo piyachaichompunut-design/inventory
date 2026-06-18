@@ -872,7 +872,7 @@ export async function odooDocDetail(model, id) {
   try {
     const atts = await searchRead('ir.attachment',
       ['&','&',['res_model','=',model],['res_id','=',id],['mimetype','ilike','image']],
-      ['id','name'], 20);
+      ['id','name'], 50);
     doc.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
   } catch(e) { doc.images = []; }
 
@@ -962,7 +962,7 @@ export async function odooDelivery(keyword, companyId) {
         'ir.attachment',
         ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
         ['id', 'name', 'mimetype'],
-        20
+        50
       );
       p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
     } catch (e) { p.images = []; }
