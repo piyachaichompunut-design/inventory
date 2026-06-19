@@ -1261,18 +1261,41 @@ export default async function handler(req, res) {
           const newDate = parseDate(dateStr);
           if (!newDate) continue; // วันที่อ่านไม่ได้ — เงียบ ไม่ใช่ error การบันทึก
 
-          // หางานที่ reply มา — จาก task_id ที่ผูกกับ quotedId ก่อน (แม่นยำตรงงาน)
-          let targetTaskId = null, targetTaskName = '';
+          // หางานที่ reply มา — ลำดับความแม่นยำ: (1) task_id ผูก quotedId → (2) match เลขเอกสาร/ชื่อจาก quotedText → (3) งานล่าสุด
+          let targetTaskId = null, targetTaskName = '', matchedBy = '';
+          // (1) task_id ที่ผูกกับ quotedId โดยตรง (แม่นสุด)
           if (quotedId) {
             const { data: qmsg } = await db.from('line_messages')
               .select('task_id').eq('message_id', quotedId).maybeSingle();
-            if (qmsg && qmsg.task_id) targetTaskId = qmsg.task_id;
+            if (qmsg && qmsg.task_id) { targetTaskId = qmsg.task_id; matchedBy = 'quoted'; }
           }
-          // fallback → งานล่าสุดของกลุ่ม (กรณีไม่เจอ)
+          // (2) ยังไม่เจอ → ลอง match เลขเอกสาร (PO/PR/SO ตามด้วยตัวเลข) จากข้อความที่ reply
+          if (!targetTaskId && quotedText) {
+            // จับเลขเอกสาร PO/PR/SO (รองรับ "PO NO 2606056", "PR01844", "so 2606007")
+            // เก็บเลขเต็มตามที่พิมพ์ (รวม 0 นำหน้า) เพื่อ match กับชื่องานได้ตรง
+            const rawMatches = quotedText.match(/\b(?:PO|PR|SO)\s*(?:NO|No|no|#|เลขที่|\.)?\.?\s*(\d{4,})/gi) || [];
+            const docNums = [];
+            for (const s of rawMatches) {
+              const mm = s.match(/(\d{4,})/);
+              if (mm) docNums.push(mm[1]);
+            }
+            const uniqNums = [...new Set(docNums)];
+            for (const num of uniqNums) {
+              const { data: matches } = await db.from('tasks')
+                .select('id, task').ilike('task', '%' + num + '%').limit(2);
+              if (matches && matches.length === 1) {
+                targetTaskId = matches[0].id;
+                targetTaskName = (matches[0].task || '').slice(0, 100);
+                matchedBy = 'docnum';
+                break;
+              }
+            }
+          }
+          // (3) ยังไม่เจอ → fallback งานล่าสุดของกลุ่ม (เดา — เตือนว่าเดา)
           if (!targetTaskId) {
             const { data: last } = await db.from('line_last_task')
               .select('task_id, task_name').eq('group_id', pushTarget).maybeSingle();
-            if (last && last.task_id) { targetTaskId = last.task_id; targetTaskName = last.task_name; }
+            if (last && last.task_id) { targetTaskId = last.task_id; targetTaskName = last.task_name; matchedBy = 'fallback'; }
           }
           if (!targetTaskId) continue; // ไม่พบงาน — เงียบ ไม่ใช่ error การบันทึก
 
@@ -1292,10 +1315,13 @@ export default async function handler(req, res) {
           const dateDisplay = `${+d2}/${+m2}/${+y2+543}`;
           // แจ้งเข้ากลุ่ม Telegram หลัก (แทนการตอบ LINE)
           try {
+            const warnGuess = matchedBy === 'fallback'
+              ? '\n⚠️ <i>ระบบเดาจากงานล่าสุด (ข้อความที่ reply ไม่ได้ผูกกับงาน) — โปรดตรวจสอบว่าตรงงานไหม</i>'
+              : '';
             await notifyMainChat(
               '✏️ <b>แก้ไขวันที่งาน (จากไลน์)</b>\n' +
               '📋 ' + targetTaskName + '\n' +
-              '📅 เปลี่ยนเป็น ' + dateDisplay
+              '📅 เปลี่ยนเป็น ' + dateDisplay + warnGuess
             );
           } catch (e) {}
           continue;
