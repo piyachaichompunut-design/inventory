@@ -855,11 +855,13 @@ export default async function handler(req, res) {
         var rawRep = cmdText.replace(/^\/รายงาน/, '').trim();
         if (!rawRep) {
           await sendTelegramReply(chatId,
-            'ระบุให้ครบครับ เช่น:\n' +
-            '/รายงาน กท.1002 12/6 ไลน์\n' +
+            'พิมพ์ชื่องาน/เลขเอกสารต่อท้ายครับ เช่น:\n' +
+            '/รายงาน กท.1002 12/6\n' +
             '/รายงาน po2606025 เทส\n' +
-            '/รายงาน so2606011 เทเลแกรม\n' +
-            '/รายงาน pr00278 ไลน์'
+            '/รายงาน so2606011 เทเลแกรม\n\n' +
+            '➡️ บอทจะให้ส่งรูป แล้วพิมพ์ /จบรายงาน\n' +
+            '   (อัปรูปเข้า Odoo + แสดงรายงานในครั้งเดียว)\n' +
+            'ปลายทาง: ไลน์ / เทส / เทเลแกรม (ไม่ใส่ = แสดงในกลุ่มนี้)'
           );
           res.status(200).json({ ok: true }); return;
         }
@@ -887,35 +889,50 @@ export default async function handler(req, res) {
 
         await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
 
-        // ── po/so/pr → ค้น + ส่งรายงานเลย (ไม่กรองวันที่) ──
+        // ── po/so/pr → ค้นเอกสาร แล้วเปิด session รอรูป ──
         if (repDocType !== 'picking') {
           try {
             const { odooFindDoc } = await import('./odoo.js');
-            // ตัดตัวย่อบริษัท (md/cg/sep/akn/set) ออกก่อนค้น เช่น "2606001 MD" → "2606001" + company=เมิร์ค
             const { keyword: repKwClean, company: repCompany } = parseCompany(repKw);
             const doc = await odooFindDoc(repDocType, repKwClean, null, repCompany.id);
             if (!doc) {
               await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKwClean + '" ครับ');
               res.status(200).json({ ok: true }); return;
             }
-            await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
+            // เปิด session รอรูป (เก็บ target ไว้ใช้ตอน /จบรายงาน)
+            if (db) {
+              await db.from('tg_report_session').upsert({
+                chat_id: String(chatId),
+                doc_type: repDocType, doc_id: doc.id, doc_name: doc.name, doc_model: doc.model,
+                uploaded: 0, options: repTarget, updated_at: new Date().toISOString()
+              }, { onConflict: 'chat_id' });
+            }
+            await sendTelegramReply(chatId,
+              '✅ พบเอกสารแล้วครับ!\n📋 ' + doc.name +
+              '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
+            );
           } catch(e) {
             await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
           }
           res.status(200).json({ ok: true }); return;
         }
 
-        // ดึงวันที่ออกจาก keyword (เฉพาะใบส่งของ)
+        // ดึงวันที่จริงออกจาก keyword (เฉพาะใบส่งของ) — ระวัง 82/2 = เลขใบ ไม่ใช่วันที่
         var repDate = null;
         var repDm = repKw.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
-        if (repDm) { repDate = parseDate(repDm[1]); repKw = repKw.replace(repDm[0], '').trim(); }
+        if (repDm) {
+          var rdParts = repDm[1].split(/[\/\-]/);
+          var rdDay = parseInt(rdParts[0], 10), rdMon = parseInt(rdParts[1], 10);
+          if (rdDay >= 1 && rdDay <= 31 && rdMon >= 1 && rdMon <= 12) {
+            repDate = parseDate(repDm[1]); repKw = repKw.replace(repDm[0], '').trim();
+          }
+        }
 
         try {
           const { odooDelivery, parseCompany } = await import('./odoo.js');
           const { keyword: dkw, company: dCo } = parseCompany(repKw);
           const allPicks = await odooDelivery(dkw, dCo.id);
 
-          // กรองวันที่
           let repPicks = repDate
             ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
             : allPicks;
@@ -925,7 +942,7 @@ export default async function handler(req, res) {
             res.status(200).json({ ok: true }); return;
           }
 
-          // เจอหลายใบ → ถามให้เลือก (ตอบเลข 1 หรือ 1 2)
+          // เจอหลายใบ → ถามให้เลือก (ตอบเลข) — เก็บ target ไว้
           if (repPicks.length > 1) {
             const opts = repPicks.slice(0, 8).map((p, i) => (i+1) + '. ' + (p.name || '-')).join('\n');
             if (db) {
@@ -939,15 +956,24 @@ export default async function handler(req, res) {
             }
             await sendTelegramReply(chatId,
               '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts +
-              '\n\n📌 ตอบเลขที่ต้องการครับ\n' +
-              '• ใบเดียว เช่น <b>1</b>\n' +
-              '• หลายใบ เช่น <b>1 2</b> (เว้นวรรค)'
+              '\n\n📌 ตอบเลขที่ต้องการครับ (เลือกได้ใบเดียว) เช่น <b>1</b>'
             );
             res.status(200).json({ ok: true }); return;
           }
 
-          // เจอใบเดียว → ส่งรายงานเลย
-          await sendReport(chatId, repPicks[0], repTarget, LINE_GROUPS, db);
+          // เจอใบเดียว → เปิด session รอรูป
+          const onePick = repPicks[0];
+          if (db) {
+            await db.from('tg_report_session').upsert({
+              chat_id: String(chatId),
+              doc_type: 'picking', doc_id: onePick.id, doc_name: onePick.name, doc_model: 'stock.picking',
+              uploaded: 0, options: repTarget, updated_at: new Date().toISOString()
+            }, { onConflict: 'chat_id' });
+          }
+          await sendTelegramReply(chatId,
+            '✅ พบใบส่งของแล้วครับ!\n📋 ' + onePick.name +
+            '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
+          );
         } catch(e) {
           await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
         }
@@ -1163,84 +1189,62 @@ export default async function handler(req, res) {
         res.status(200).json({ ok: true }); return;
       }
 
-      // ── /ลงรูป → เปิด session รอรูป แล้วอัปเข้า Odoo ────────────────────
+      // ── /ลงรูป (ยกเลิกแล้ว) → แนะนำให้ใช้ /รายงาน แทน ──────────────────────
       if (cmdText.startsWith('/ลงรูป') || lc.startsWith('/uploadphoto')) {
-        var rawArg = cmdText.replace(/^\/ลงรูป/, '').replace(/^\/uploadphoto/i, '').trim();
-        if (!rawArg) {
-          await sendTelegramReply(chatId,
-            'ระบุเอกสารด้วยครับ เช่น:\n' +
-            '/ลงรูป กท.1002 12/6\n' +
-            '/ลงรูป po2606001\n' +
-            '/ลงรูป so2606007\n' +
-            '/ลงรูป pr00278'
-          );
-          res.status(200).json({ ok: true }); return;
-        }
-
-        // แยกตัวย่อบริษัท (md/cg/sep/akn/set) ออกก่อน เช่น "po2606001 md" → keyword="po2606001", company=เมิร์ค
-        const { keyword: argNoCompany, company: docCompany } = parseCompany(rawArg);
-
-        // แยก docType
-        var docType = 'picking', docKeyword = argNoCompany;
-        var docDateFilter = null;
-        if (/^po\s*/i.test(argNoCompany)) { docType = 'po'; docKeyword = argNoCompany.replace(/^po\s*/i,'').trim(); }
-        else if (/^so\s*/i.test(argNoCompany)) { docType = 'so'; docKeyword = argNoCompany.replace(/^so\s*/i,'').trim(); }
-        else if (/^pr\s*/i.test(argNoCompany)) { docType = 'pr'; docKeyword = argNoCompany.replace(/^pr\s*/i,'').trim(); }
-        else {
-          // picking — ดึง "วันที่จริง" ออก (วัน 1-31 / เดือน 1-12)
-          // ระวัง: "82/2" คือเลขลำดับใบส่ง ไม่ใช่วันที่ → ห้ามตัดออก
-          var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
-          if (dmR) {
-            var dParts = dmR[1].split(/[\/\-]/);
-            var dDay = parseInt(dParts[0], 10), dMon = parseInt(dParts[1], 10);
-            var isRealDate = dDay >= 1 && dDay <= 31 && dMon >= 1 && dMon <= 12;
-            if (isRealDate) { docDateFilter = parseDate(dmR[1]); docKeyword = docKeyword.replace(dmR[0],'').trim(); }
-          }
-        }
-
-        await sendTelegramReply(chatId, '🔍 กำลังค้นหาเอกสารใน Odoo...');
-        try {
-          const doc = await odooFindDoc(docType, docKeyword, docDateFilter, docCompany.id);
-          if (!doc) {
-            await sendTelegramReply(chatId, '⚠️⚠️⚠️ ไม่พบเอกสาร "' + rawArg + '" ใน Odoo ครับ');
-            res.status(200).json({ ok: true }); return;
-          }
-          // บันทึก session
-          if (db) {
-            await db.from('tg_report_session').upsert({
-              chat_id: String(chatId),
-              doc_type: docType,
-              doc_id: doc.id,
-              doc_name: doc.name,
-              doc_model: doc.model,
-              uploaded: 0,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'chat_id' });
-          }
-          await sendTelegramReply(chatId,
-            '✅ พบเอกสารแล้วครับ!\n📋 ' + doc.name +
-            '\n\nส่งรูปเข้ากลุ่มได้เลยครับ (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งครบ'
-          );
-        } catch(e) {
-          await sendTelegramReply(chatId, '⚠️⚠️⚠️ เกิดข้อผิดพลาด: ' + e.message);
-        }
+        await sendTelegramReply(chatId,
+          'คำสั่ง /ลงรูป ถูกรวมเข้ากับ /รายงาน แล้วครับ\n\n' +
+          'ใช้ /รายงาน แทนได้เลย เช่น:\n' +
+          '/รายงาน กท.1002 12/6\n' +
+          '/รายงาน po2606001\n\n' +
+          'บอทจะให้ส่งรูป → พิมพ์ /จบรายงาน → ได้ทั้งอัปรูปเข้า Odoo และรายงานในครั้งเดียว'
+        );
         res.status(200).json({ ok: true }); return;
       }
 
-      // ── /จบรายงาน → สรุปจำนวนรูปที่อัป ──────────────────────────────────
+      // ── /จบรายงาน → อัปรูปเข้า Odoo เสร็จแล้ว ดึงรายงานเต็ม (ชื่องาน+รูป) ส่งไปปลายทาง ──
       if (cmdText.startsWith('/จบรายงาน') || lc.startsWith('/endreport')) {
         if (db) {
           const { data: sess } = await db.from('tg_report_session')
             .select('*').eq('chat_id', String(chatId)).maybeSingle();
-          if (!sess) {
+          if (!sess || !sess.doc_model) {
             await sendTelegramReply(chatId, '⚠️ ไม่มี session รายงานที่เปิดอยู่ครับ');
-          } else {
-            await sendTelegramReply(chatId,
-              '✅ จบรายงานแล้วครับ!\n📋 ' + sess.doc_name +
-              '\n📷 อัปรูปทั้งหมด ' + sess.uploaded + ' รูป'
-            );
-            await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
+            res.status(200).json({ ok: true }); return;
           }
+
+          const repTarget = sess.options || '__self__';
+          const LINE_GROUPS = {
+            'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+            'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+          };
+
+          await sendTelegramReply(chatId, '✅ อัปรูป ' + (sess.uploaded || 0) + ' รูปเข้า Odoo แล้ว กำลังสร้างรายงาน...');
+
+          try {
+            const { odooFindDoc, odooDelivery } = await import('./odoo.js');
+            if (sess.doc_model === 'stock.picking') {
+              // ดึง picking ล่าสุด (พร้อมรูปที่เพิ่งอัป) ตามชื่อ แล้วส่งรายงาน
+              const picks = await odooDelivery(sess.doc_name, null);
+              const matched = (picks || []).find(p => Number(p.id) === Number(sess.doc_id)) || (picks && picks[0]);
+              if (matched) {
+                await sendReport(chatId, matched, repTarget, LINE_GROUPS, db);
+              } else {
+                await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่ดึงรายงานไม่สำเร็จ (ไม่พบใบส่งของ)');
+              }
+            } else {
+              // po/so/pr → ดึงเอกสารใหม่ แล้วส่งรายงานเอกสาร
+              const dt = sess.doc_type;
+              const doc = await odooFindDoc(dt, sess.doc_name, null, null);
+              if (doc) {
+                await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
+              } else {
+                await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่ดึงรายงานไม่สำเร็จ (ไม่พบเอกสาร)');
+              }
+            }
+          } catch(e) {
+            await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่สร้างรายงานไม่สำเร็จ: ' + e.message);
+          }
+
+          await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
         }
         res.status(200).json({ ok: true }); return;
       }
@@ -1433,18 +1437,23 @@ export default async function handler(req, res) {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
         };
-        // แปลงเลขที่เลือก → index (ตัดเลขซ้ำ + เลขเกินช่วงออก)
+        // เลือกใบเดียว (flow ใหม่ต้องผูกรูปกับใบเดียว)
         const validNums = [...new Set(pickedNums)].filter(n => n >= 1 && n <= picks.length);
         if (!validNums.length) {
-          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ (เลือกหลายใบได้ เช่น 1 2)');
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
         } else {
-          const selected = validNums.map(n => picks[n - 1]);
+          const onePick = picks[validNums[0] - 1];
           await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
-          if (selected.length === 1) {
-            await sendReport(chatId, selected[0], selSess2.target, LINE_GROUPS3, db);
-          } else {
-            await sendReportMulti(chatId, selected, selSess2.target, LINE_GROUPS3, db);
-          }
+          // เปิด session รอรูป (เก็บ target ไว้ใช้ตอน /จบรายงาน)
+          await db.from('tg_report_session').upsert({
+            chat_id: String(chatId),
+            doc_type: 'picking', doc_id: onePick.id, doc_name: onePick.name, doc_model: 'stock.picking',
+            uploaded: 0, options: selSess2.target || '__self__', updated_at: new Date().toISOString()
+          }, { onConflict: 'chat_id' });
+          await sendTelegramReply(chatId,
+            '✅ เลือกใบส่งของแล้วครับ!\n📋 ' + onePick.name +
+            '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
+          );
         }
         res.status(200).json({ ok: true }); return;
       }
