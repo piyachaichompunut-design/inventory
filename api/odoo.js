@@ -2417,3 +2417,60 @@ export async function odooDelivery(keyword, companyId) {
   }
   return pickings;
 }
+
+// ── ดึง Receipt (รับสินค้า/GR) ที่เพิ่ง validate หลังเวลา sinceIso ──────────────
+// คืน [{ id, name, write_date, write_user, write_login, partner, origin }]
+// ใช้สำหรับแจ้งเตือนเมื่อมีคนอื่นที่ไม่ใช่ Store1 กดรับ
+export async function odooRecentReceipts(sinceIso) {
+  // 1) หา picking_type ที่เป็น incoming (Receipts) ทั้งหมด
+  let typeIds = [];
+  try {
+    const types = await searchRead('stock.picking.type',
+      [['code', '=', 'incoming']], ['id'], 50);
+    typeIds = (types || []).map(t => t.id);
+  } catch (e) { /* ถ้าดึง type ไม่ได้ ใช้ filter code ทีหลัง */ }
+
+  // 2) ดึง picking ที่ state=done + write_date หลัง sinceIso
+  const domain = [
+    '&', '&',
+    ['state', '=', 'done'],
+    ['write_date', '>', sinceIso],
+    (typeIds.length ? ['picking_type_id', 'in', typeIds] : ['picking_type_id.code', '=', 'incoming'])
+  ];
+  const fields = ['id', 'name', 'write_date', 'write_uid', 'partner_id', 'origin', 'date_done'];
+  let rows = [];
+  try {
+    rows = await searchRead('stock.picking', domain, fields, 50);
+  } catch (e) {
+    return { error: e.message, receipts: [] };
+  }
+  if (!rows.length) return { receipts: [] };
+
+  // 3) ดึงชื่อ/login ของคนที่ write (กด validate) ล่าสุด
+  //    write_uid = [id, name] — แต่ต้องการ login ด้วย → query res.users
+  const uidSet = [...new Set(rows.map(r => Array.isArray(r.write_uid) ? r.write_uid[0] : null).filter(Boolean))];
+  const userMap = {};
+  if (uidSet.length) {
+    try {
+      const users = await searchRead('res.users', [['id', 'in', uidSet]], ['id', 'name', 'login'], 50);
+      for (const u of users) userMap[u.id] = { name: u.name, login: u.login };
+    } catch (e) { /* ใช้แค่ name จาก write_uid */ }
+  }
+
+  const receipts = rows.map(r => {
+    const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
+    const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
+    const u = wuid && userMap[wuid] ? userMap[wuid] : {};
+    return {
+      id: r.id,
+      name: r.name || '-',
+      write_date: r.write_date || '',
+      date_done: r.date_done || '',
+      write_user: u.name || wname || '',
+      write_login: u.login || '',
+      partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
+      origin: r.origin || ''
+    };
+  });
+  return { receipts };
+}
