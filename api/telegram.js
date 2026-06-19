@@ -599,67 +599,68 @@ export default async function handler(req, res) {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const msg = update.message || update.channel_post;
 
-    // ── session "รับคืนหน้างาน": รับทั้งรูปและข้อความ สะสมไว้จนกว่าจะ /จบรับคืน ──
+    // ── session "รับคืนหน้างาน": รับทั้งรูปและข้อความ สะสมใน delivery_views ──
     if (msg && db) {
       const rkChatId = msg.chat && msg.chat.id;
       const isPhoto = msg.photo || (msg.document && /^image\//.test(msg.document?.mime_type || ''));
       const textOnly = (msg.text || '').trim();
       const captionTxt = (msg.caption || '').trim();
-      // ข้ามถ้าเป็นคำสั่ง (ขึ้นต้น /) — ปล่อยให้ตัวจัดการคำสั่งทำงาน
       const looksLikeCmd = textOnly.startsWith('/');
       if (rkChatId && (isPhoto || (textOnly && !looksLikeCmd))) {
         const { data: rkSess } = await db.from('tg_report_session')
           .select('*').eq('chat_id', String(rkChatId)).maybeSingle();
-        const rkExtra = rkSess && rkSess.extra ? rkSess.extra : null;
         const rkAge = rkSess ? (Date.now() - new Date(rkSess.updated_at).getTime()) / 60000 : 999;
-        // เป็น session รับคืน + ยังไม่เกิน 15 นาที
-        if (rkExtra && rkExtra.kind === 'rabkuen' && rkAge < 15) {
+        // session รับคืน: mode='rabkuen', doc_name = id ของ draft ใน delivery_views
+        if (rkSess && rkSess.mode === 'rabkuen' && rkAge < 30) {
+          const draftId = rkSess.doc_name;
           const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
-          const images = Array.isArray(rkExtra.images) ? rkExtra.images : [];
-          let notes = Array.isArray(rkExtra.notes) ? rkExtra.notes : [];
           try {
-            // เก็บข้อความ (caption ของรูป หรือ ข้อความเดี่ยว)
-            const addText = captionTxt || (isPhoto ? '' : textOnly);
-            if (addText) notes.push(addText);
+            // อ่าน draft ปัจจุบัน
+            const { data: draft } = await db.from('delivery_views').select('*').eq('id', draftId).maybeSingle();
+            if (draft) {
+              const d = draft.data || {};
+              const images = Array.isArray(d.images) ? d.images : [];
+              let notes = Array.isArray(d.notes) ? d.notes : [];
 
-            // เก็บรูปเข้า Storage
-            if (isPhoto && tgTok) {
-              let fileIdR, mimeR;
-              if (msg.photo && msg.photo.length > 0) {
-                const ph = msg.photo[msg.photo.length - 1];
-                fileIdR = ph.file_id; mimeR = 'image/jpeg';
-              } else if (msg.document) {
-                fileIdR = msg.document.file_id; mimeR = msg.document.mime_type || 'image/jpeg';
-              }
-              if (fileIdR) {
-                const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${fileIdR}`);
-                const info = await infoR.json();
-                if (info.ok) {
-                  const fileUrl = `https://api.telegram.org/file/bot${tgTok}/${info.result.file_path}`;
-                  const fileR = await fetch(fileUrl);
-                  const rawBuf = Buffer.from(await fileR.arrayBuffer());
-                  const { buffer: compBuf, contentType: compMime } = await compressIfImage(rawBuf, mimeR);
-                  const ext = compMime === 'image/jpeg' ? 'jpg' : (info.result.file_path.split('.').pop() || 'jpg');
-                  const safeId = String(rkChatId).replace(/[^0-9-]/g, '');
-                  const storagePath = 'rabkuen/' + safeId + '/' + Date.now() + '_' + Math.random().toString(36).substr(2,4) + '.' + ext;
-                  const { error: upErr } = await db.storage.from('attachments')
-                    .upload(storagePath, compBuf, { contentType: compMime, upsert: true });
-                  if (!upErr) {
-                    const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
-                    images.push({ url: pub.publicUrl, path: storagePath });
+              const addText = captionTxt || (isPhoto ? '' : textOnly);
+              if (addText) notes.push(addText);
+
+              if (isPhoto && tgTok) {
+                let fileIdR, mimeR;
+                if (msg.photo && msg.photo.length > 0) {
+                  const ph = msg.photo[msg.photo.length - 1];
+                  fileIdR = ph.file_id; mimeR = 'image/jpeg';
+                } else if (msg.document) {
+                  fileIdR = msg.document.file_id; mimeR = msg.document.mime_type || 'image/jpeg';
+                }
+                if (fileIdR) {
+                  const infoR = await fetch(`https://api.telegram.org/bot${tgTok}/getFile?file_id=${fileIdR}`);
+                  const info = await infoR.json();
+                  if (info.ok) {
+                    const fileUrl = `https://api.telegram.org/file/bot${tgTok}/${info.result.file_path}`;
+                    const fileR = await fetch(fileUrl);
+                    const rawBuf = Buffer.from(await fileR.arrayBuffer());
+                    const { buffer: compBuf, contentType: compMime } = await compressIfImage(rawBuf, mimeR);
+                    const ext = compMime === 'image/jpeg' ? 'jpg' : (info.result.file_path.split('.').pop() || 'jpg');
+                    const safeId = String(rkChatId).replace(/[^0-9-]/g, '');
+                    const storagePath = 'rabkuen/' + safeId + '/' + Date.now() + '_' + Math.random().toString(36).substr(2,4) + '.' + ext;
+                    const { error: upErr } = await db.storage.from('attachments')
+                      .upload(storagePath, compBuf, { contentType: compMime, upsert: true });
+                    if (!upErr) {
+                      const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath);
+                      images.push({ url: pub.publicUrl, path: storagePath });
+                    }
                   }
                 }
               }
-            }
 
-            // อัปเดต session
-            rkExtra.images = images;
-            rkExtra.notes = notes;
-            await db.from('tg_report_session').update({
-              extra: rkExtra,
-              uploaded: images.length,
-              updated_at: new Date().toISOString()
-            }).eq('chat_id', String(rkChatId));
+              // อัปเดต draft ใน delivery_views
+              d.images = images;
+              d.notes = notes;
+              await db.from('delivery_views').update({ data: d }).eq('id', draftId);
+              // touch session กัน timeout
+              await db.from('tg_report_session').update({ updated_at: new Date().toISOString() }).eq('chat_id', String(rkChatId));
+            }
           } catch(e) { /* เงียบ ไม่ตอบทุกครั้ง */ }
           res.status(200).json({ ok: true }); return;
         }
@@ -674,7 +675,7 @@ export default async function handler(req, res) {
           .select('*').eq('chat_id', String(photoChatId)).maybeSingle();
         // session ต้องไม่เกิน 10 นาที + ต้องไม่ใช่ session รับคืน (จัดการไปแล้วข้างบน)
         const sessionAge = sess ? (Date.now() - new Date(sess.updated_at).getTime()) / 60000 : 999;
-        const isRabkuen = sess && sess.extra && sess.extra.kind === 'rabkuen';
+        const isRabkuen = sess && sess.mode === 'rabkuen';
         if (sess && !isRabkuen && sessionAge < 10) {
           const tgTok = process.env.TELEGRAM_BOT_TOKEN || '';
           try {
@@ -1254,15 +1255,22 @@ export default async function handler(req, res) {
         const nowTh = new Date(Date.now() + 7 * 60 * 60 * 1000);
         const recvDate = nowTh.toISOString().slice(0, 10); // YYYY-MM-DD
 
-        // เปิด session (ใช้ field extra เก็บข้อมูลรับคืน — ไม่ต้องแก้ schema)
+        // สร้าง draft ใน delivery_views (เก็บข้อมูลระหว่างทาง) — ไม่ต้องแก้ schema
+        const draftId = 'RK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+        const { error: draftErr } = await db.from('delivery_views').insert({
+          id: draftId,
+          title: 'รับคืนหน้างาน — ' + jobName,
+          status_label: 'draft',
+          data: { rabkuen: true, jobName: jobName, recvDate: recvDate, images: [], notes: [] }
+        });
+        if (draftErr) { await sendTelegramReply(chatId, '⚠️ เริ่มรับคืนไม่สำเร็จ: ' + draftErr.message); res.status(200).json({ ok: true }); return; }
+
+        // เปิด session — ใช้ field ที่มีจริงในตาราง (mode + doc_name เก็บ draftId)
         await db.from('tg_report_session').upsert({
           chat_id: String(chatId),
-          doc_type: 'rabkuen',
+          mode: 'rabkuen',
           doc_id: 0,
-          doc_name: jobName.slice(0, 80),
-          doc_model: 'rabkuen',
-          uploaded: 0,
-          extra: { kind: 'rabkuen', jobName: jobName, recvDate: recvDate, images: [], notes: [] },
+          doc_name: draftId,
           updated_at: new Date().toISOString()
         }, { onConflict: 'chat_id' });
 
@@ -1282,9 +1290,17 @@ export default async function handler(req, res) {
         if (!db) { await sendTelegramReply(chatId, '⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); res.status(200).json({ ok: true }); return; }
         const { data: sess } = await db.from('tg_report_session')
           .select('*').eq('chat_id', String(chatId)).maybeSingle();
-        const ex = sess && sess.extra ? sess.extra : null;
-        if (!ex || ex.kind !== 'rabkuen') {
+        if (!sess || sess.mode !== 'rabkuen') {
           await sendTelegramReply(chatId, '⚠️ ไม่มีรายการรับคืนที่เปิดอยู่ครับ\nเริ่มด้วย /รับคืนหน้างาน [ชื่องาน]');
+          res.status(200).json({ ok: true }); return;
+        }
+
+        const draftId = sess.doc_name;
+        const { data: draft } = await db.from('delivery_views').select('*').eq('id', draftId).maybeSingle();
+        const ex = draft && draft.data ? draft.data : null;
+        if (!ex) {
+          await sendTelegramReply(chatId, '⚠️ ไม่พบข้อมูลรับคืน (อาจหมดอายุ) — เริ่มใหม่ด้วย /รับคืนหน้างาน [ชื่องาน]');
+          await db.from('tg_report_session').delete().eq('chat_id', String(chatId));
           res.status(200).json({ ok: true }); return;
         }
 
@@ -1293,8 +1309,7 @@ export default async function handler(req, res) {
         const noteText = notes.join(' • ');
         const dateThai = (ex.recvDate || '').split('-').reverse().join('/');
 
-        // สร้างหน้าดูรูป (ใช้ delivery.html — โครงสร้าง picks เหมือนรายงานอื่น)
-        const viewId = 'RK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+        // แปลง draft → view สมบูรณ์ (เขียนทับ record เดิม — ใช้ id เดิม)
         const picks = [{
           name: ex.jobName,
           origin: '',
@@ -1306,18 +1321,16 @@ export default async function handler(req, res) {
           images: images.map((im, i) => ({ id: im.url, name: 'รูปที่ ' + (i + 1), directUrl: im.url }))
         }];
 
-        const { error: insErr } = await db.from('delivery_views').insert({
-          id: viewId,
-          title: 'รับคืนหน้างาน — ' + ex.jobName,
+        const { error: updErr } = await db.from('delivery_views').update({
           status_label: 'รับเมื่อ ' + dateThai,
-          data: { summary: { total: 1 }, picks, rabkuen: true, recvDate: ex.recvDate, note: noteText }
-        });
-        if (insErr) {
-          await sendTelegramReply(chatId, '⚠️ บันทึกไม่สำเร็จ: ' + insErr.message);
+          data: { summary: { total: 1 }, picks, rabkuen: true, jobName: ex.jobName, recvDate: ex.recvDate, note: noteText, images, notes }
+        }).eq('id', draftId);
+        if (updErr) {
+          await sendTelegramReply(chatId, '⚠️ บันทึกไม่สำเร็จ: ' + updErr.message);
           res.status(200).json({ ok: true }); return;
         }
 
-        const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+        const viewUrl = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + draftId;
         let reply = '✅ รับคืนหน้างานเรียบร้อยครับ\n\n' +
           '📋 ชื่องาน: ' + ex.jobName + '\n' +
           '📅 วันที่รับ: ' + dateThai + '\n';
