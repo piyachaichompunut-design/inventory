@@ -211,7 +211,8 @@ function badgeClass(color){
 function gallery(imgs){
   if(!imgs || !imgs.length) return '';
   let thumbs = imgs.map((im,idx)=>{
-    const url = '/api/odoo-image?id=' + encodeURIComponent(im.id);
+    // directUrl = รูปจาก Supabase Storage (เช่น รับคืนหน้างาน) | id = รูปจาก Odoo proxy
+    const url = im.directUrl ? im.directUrl : '/api/odoo-image?id=' + encodeURIComponent(im.id);
     return '<img class="thumb" src="'+url+'" alt="'+esc(im.name)+'" onclick="openLB(this.src)" loading="lazy">';
   }).join('');
   return '<div class="gallery"><div class="gallery-h">📷 รูปงาน ('+imgs.length+')</div><div class="thumbs">'+thumbs+'</div></div>';
