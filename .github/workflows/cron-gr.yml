@@ -1,0 +1,13 @@
+name: GR Receipt Watch
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # ทุก 10 นาที
+  workflow_dispatch:
+
+jobs:
+  gr-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron-gr
+        run: |
+          curl -s "https://inventory-rho-hazel.vercel.app/api/cron-gr"
