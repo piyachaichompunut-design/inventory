@@ -2226,6 +2226,28 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   }
 
   if (!rows.length) return null;
+
+  // เรียงให้ตรงที่สุดมาก่อน: ถ้า keyword ลงท้ายด้วยเลขลำดับ (เช่น "...82/2")
+  // ให้ picking ที่ name/reference ลงท้ายตรงกันมาก่อน (กัน 82/2 โดน 82/1 แทน)
+  const kwTrim = String(keyword).trim().toLowerCase();
+  const tailMatch = kwTrim.match(/(\d+\s*\/\s*\d+)\s*$/);
+  const kwTail = tailMatch ? tailMatch[1].replace(/\s+/g, '') : '';
+  rows.sort((a, b) => {
+    const an = String(a.name || '').trim().toLowerCase();
+    const bn = String(b.name || '').trim().toLowerCase();
+    // 1) ตรงเป๊ะทั้งชื่อ
+    const aExact = an === kwTrim ? 1 : 0;
+    const bExact = bn === kwTrim ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    // 2) ลงท้ายด้วยเลขลำดับเดียวกัน (เช่น 82/2)
+    if (kwTail) {
+      const aTail = an.replace(/\s+/g, '').endsWith(kwTail) ? 1 : 0;
+      const bTail = bn.replace(/\s+/g, '').endsWith(kwTail) ? 1 : 0;
+      if (aTail !== bTail) return bTail - aTail;
+    }
+    return 0;
+  });
+
   return { id: rows[0].id, name: rows[0].name, model: 'stock.picking' };
 }
 
