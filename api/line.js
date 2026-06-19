@@ -1324,27 +1324,13 @@ export default async function handler(req, res) {
         }
         typedClean = typedClean.replace(/@[^\s@]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // กัน false-positive: คนกด "รับงาน"/ตอบรับ ไม่ใช่สั่งงานใหม่
-        // เช่น "รับ so", "ok", "ขอบคุณ", "รับทราบ" → ไม่สร้างงาน
-        // ⚠️ ระวัง: "SO พี่นิค" (หมวด+ชื่อคน) คือสั่งงานจริง — ห้ามตัด
-        // หลักการ: noise = ขึ้นต้นด้วย "รับ"/"ส่ง" แล้วเหลือแค่ keyword สั้นๆ ที่ไม่มีชื่อคน
-        const REPLY_NOISE = /^(ok|okay|โอเค|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|ได้เลย|ได้ครับ|ได้ค่ะ|เรียบร้อย|รับทราบ|รับแล้ว|noted|👍|👌)$/i;
-        // ตัดคำ "รับ"/"ส่ง" นำหน้าออก แล้วดูว่าเหลืออะไร
-        const afterRecvSend = typedClean.replace(/^\s*(รับ|ส่ง)\s+/i, '').trim();
-        const afterWords = afterRecvSend.split(/\s+/).filter(Boolean);
-        // เหลือแค่ keyword ที่ไม่ใช่งาน (so/งาน/แล้ว/ครับ) คำเดียว + เดิมขึ้นต้นด้วย รับ/ส่ง = แค่ตอบรับ
-        const startsRecvSend = /^\s*(รับ|ส่ง)\s+/i.test(typedClean);
-        const leftoverIsKeyword = afterWords.length <= 1 && /^(so|งาน|แล้ว|ครับ|ค่ะ|นะ|แล้วครับ|แล้วค่ะ|so แล้ว)?$/i.test(afterRecvSend);
-        const isNoise = REPLY_NOISE.test(typedClean) || (startsRecvSend && leftoverIsKeyword);
-
-        // ถ้าเป็น noise (กดรับงาน/ตอบรับ) → ไม่สร้างงานเลย
-        // ถ้าไม่ใช่ noise → รวม quotedText (งานเต็ม) + ที่พิมพ์ (หมวด/ชื่อ/วัน) แล้ว parse
-        if (!isNoise) {
-          const combined = quotedText
-            ? (quotedText + ' ' + typedClean).trim()
-            : typedClean;
-          taskData = await parseTaskSmart(combined, db, typedClean);
-        }
+        // reply + แท็กบอท = ตั้งใจสั่งงานเสมอ → สร้างงานทุกครั้ง
+        // รวม quotedText (ข้อความงานเต็มที่ reply) + ที่พิมพ์ (หมวด/ชื่อ/วัน เช่น "รับ so")
+        // ชื่องานจะมาจากข้อความงานเต็ม ไม่ใช่แค่ "so" ที่พิมพ์
+        const combined = quotedText
+          ? (quotedText + ' ' + typedClean).trim()
+          : typedClean;
+        taskData = await parseTaskSmart(combined, db, typedClean);
       }
 
       if (taskData) {
