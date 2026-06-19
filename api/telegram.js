@@ -1187,9 +1187,15 @@ export default async function handler(req, res) {
         else if (/^so\s*/i.test(argNoCompany)) { docType = 'so'; docKeyword = argNoCompany.replace(/^so\s*/i,'').trim(); }
         else if (/^pr\s*/i.test(argNoCompany)) { docType = 'pr'; docKeyword = argNoCompany.replace(/^pr\s*/i,'').trim(); }
         else {
-          // picking — ดึงวันที่ออก
+          // picking — ดึง "วันที่จริง" ออก (วัน 1-31 / เดือน 1-12)
+          // ระวัง: "82/2" คือเลขลำดับใบส่ง ไม่ใช่วันที่ → ห้ามตัดออก
           var dmR = docKeyword.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s*$/);
-          if (dmR) { docDateFilter = parseDate(dmR[1]); docKeyword = docKeyword.replace(dmR[0],'').trim(); }
+          if (dmR) {
+            var dParts = dmR[1].split(/[\/\-]/);
+            var dDay = parseInt(dParts[0], 10), dMon = parseInt(dParts[1], 10);
+            var isRealDate = dDay >= 1 && dDay <= 31 && dMon >= 1 && dMon <= 12;
+            if (isRealDate) { docDateFilter = parseDate(dmR[1]); docKeyword = docKeyword.replace(dmR[0],'').trim(); }
+          }
         }
 
         await sendTelegramReply(chatId, '🔍 กำลังค้นหาเอกสารใน Odoo...');
