@@ -1,15 +1,17 @@
 // ============================================================================
-//  api/cron-gr.js — แจ้งเตือนเมื่อมีคนอื่น (ไม่ใช่ Store1) กด validate Receipt (GR)
+//  api/cron-gr.js — แจ้งเตือนเมื่อมีคนอื่น (ไม่ใช่ Store1) ทำให้สต็อกเปลี่ยน
+//  ครอบคลุม "ทุกการเคลื่อนไหว" ที่ทำให้สต็อกเพิ่ม/ลด:
+//    - รับเข้า (Receipt/GR), ส่งออก (Delivery), Scrap, ปรับสต็อก (Inventory Adj)
+//    - ทั้งที่มาจาก PO/SO และที่สร้างเอง
+//  ดูจาก stock.move (state=done) แยกทิศทางจาก usage ของ location
 //  เรียกทุก ~10 นาที ผ่าน GitHub Actions
-//  - ดึง Receipt (incoming) ที่ state=done + write_date หลังรอบก่อน
-//  - ถ้าคนกด login != STORE1_LOGIN → แจ้งเข้ากลุ่ม Telegram
 //  - กันแจ้งซ้ำด้วย state ที่เก็บใน delivery_views (id='__gr_watch_state__')
 // ============================================================================
-import { odooRecentReceipts, odooConfigured } from './odoo.js';
+import { odooRecentStockMoves, odooConfigured } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
 
 const STATE_ID = '__gr_watch_state__';
-// login ของ Store1 (คนกดปกติ ไม่ต้องแจ้ง) — ตั้งใน env ได้ ถ้าไม่ตั้งใช้ค่า default
+// login ของ Store1 (คนทำปกติ ไม่ต้องแจ้ง)
 const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').toLowerCase();
 // บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) — ตั้ง GR_COMPANY_IDS ทับได้ เช่น "1,2,4"
 const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2')
@@ -34,13 +36,29 @@ async function notifyTelegram(text) {
   } catch (e) { /* เงียบ */ }
 }
 
+// ป้ายบอกประเภทการเคลื่อนไหว จาก usage ต้นทาง-ปลายทาง
+function moveTypeLabel(m) {
+  if (m.scrapped) return '🗑️ ตัดของเสีย (Scrap)';
+  if (m.direction === 'in') {
+    if (m.srcUsage === 'supplier') return '📥 รับเข้าจากผู้ขาย (Receipt)';
+    if (m.srcUsage === 'inventory') return '➕ ปรับสต็อกเพิ่ม (Adjustment)';
+    if (m.srcUsage === 'production') return '🏭 รับเข้าจากการผลิต';
+    return '📥 รับเข้า (สต็อกเพิ่ม)';
+  } else {
+    if (m.destUsage === 'customer') return '📤 ส่งออกให้ลูกค้า (Delivery)';
+    if (m.destUsage === 'inventory') return '➖ ปรับสต็อกลด (Adjustment)';
+    if (m.destUsage === 'production') return '🏭 เบิกไปผลิต';
+    return '📤 ตัดออก (สต็อกลด)';
+  }
+}
+
 export default async function handler(req, res) {
   try {
     if (!odooConfigured()) { res.status(200).json({ ok: false, error: 'Odoo ยังไม่ตั้งค่า' }); return; }
     const db = getDb();
     if (!db) { res.status(200).json({ ok: false, error: 'DB ยังไม่ตั้งค่า' }); return; }
 
-    // อ่าน state รอบก่อน (lastCheck = เวลาล่าสุดที่เช็ค, notified = id ที่แจ้งไปแล้ว)
+    // อ่าน state รอบก่อน
     let lastCheck = null, notified = [];
     try {
       const { data: st } = await db.from('delivery_views').select('data').eq('id', STATE_ID).maybeSingle();
@@ -48,9 +66,9 @@ export default async function handler(req, res) {
         lastCheck = st.data.lastCheck || null;
         notified = Array.isArray(st.data.notified) ? st.data.notified : [];
       }
-    } catch (e) { /* ครั้งแรก ยังไม่มี state */ }
+    } catch (e) { /* ครั้งแรก */ }
 
-    // ครั้งแรก: ตั้ง lastCheck = ตอนนี้ แล้วจบ (ไม่ย้อนดูอดีต กันสแปม)
+    // ครั้งแรก: ตั้ง lastCheck = ตอนนี้ แล้วจบ (ไม่ย้อนอดีต)
     const nowIso = new Date().toISOString();
     if (!lastCheck) {
       await db.from('delivery_views').upsert({
@@ -61,44 +79,61 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ดึง Receipt ที่ validate หลัง lastCheck
-    const { receipts, error } = await odooRecentReceipts(lastCheck, WATCH_COMPANY_IDS);
+    // ดึง stock.move ที่ done หลัง lastCheck
+    const { moves, error } = await odooRecentStockMoves(lastCheck, WATCH_COMPANY_IDS);
     if (error) { res.status(200).json({ ok: false, error }); return; }
 
-    // หาเฉพาะที่คนกด != Store1 และยังไม่เคยแจ้ง
-    const toAlert = (receipts || []).filter(r => {
-      const login = (r.write_login || '').toLowerCase();
-      const isStore1 = login === STORE1_LOGIN;
-      const alreadyNotified = notified.includes(r.id);
-      return !isStore1 && !alreadyNotified;
-    });
+    // กรอง: คนทำ != Store1
+    const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
 
-    // แจ้งเตือนแต่ละใบ
-    for (const r of toAlert) {
-      let msg = '⚠️ <b>มีคนอื่นกดรับสินค้า (GR)</b>\n';
-      msg += '📋 ใบรับ: ' + r.name + '\n';
-      if (r.company) msg += '🏭 บริษัท: ' + r.company + '\n';
-      msg += '👤 คนกด: ' + (r.write_user || r.write_login || 'ไม่ทราบ');
-      if (r.write_login) msg += ' (' + r.write_login + ')';
+    // จัดกลุ่มตามเอกสาร (reference) — 1 ใบมีหลาย move ให้รวมเป็นแจ้งครั้งเดียว
+    const groups = {};
+    for (const m of otherMoves) {
+      const key = (m.ref || ('move-' + m.id)) + '|' + m.direction + '|' + (m.scrapped ? 's' : '');
+      if (!groups[key]) groups[key] = { ...m, lines: [], moveIds: [] };
+      groups[key].lines.push({ product: m.product, qty: m.qty, uom: m.uom });
+      groups[key].moveIds.push(m.id);
+    }
+
+    // กันแจ้งซ้ำ: ใช้ key เป็นตัวเช็ค
+    let alertedCount = 0;
+    const newNotifiedKeys = [];
+    for (const key of Object.keys(groups)) {
+      if (notified.includes(key)) continue; // แจ้งไปแล้ว
+      const g = groups[key];
+
+      let msg = '⚠️ <b>มีคนอื่นทำรายการสต็อก</b>\n';
+      msg += moveTypeLabel(g) + '\n';
+      if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
+      if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
+      msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
+      if (g.write_login) msg += ' (' + g.write_login + ')';
       msg += '\n';
-      if (r.partner) msg += '🏢 ผู้ขาย: ' + r.partner + '\n';
-      if (r.origin) {
-        msg += '📄 อ้างอิง: ' + r.origin + '\n';
-      } else {
-        msg += '📄 อ้างอิง: — (สร้างรับเอง ไม่ผูก PO)\n';
+
+      // รายการสินค้า (สูงสุด 8 บรรทัด)
+      const showLines = g.lines.slice(0, 8);
+      if (showLines.length) {
+        msg += '📦 รายการ:\n';
+        for (const l of showLines) {
+          const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
+          msg += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
+        }
+        if (g.lines.length > 8) msg += '  ...และอีก ' + (g.lines.length - 8) + ' รายการ\n';
       }
       // เวลา (แปลงเป็นเวลาไทย)
-      const wt = r.date_done || r.write_date;
-      if (wt) {
-        const d = new Date(wt.replace(' ', 'T') + 'Z');
+      if (g.date) {
+        const d = new Date(g.date.replace(' ', 'T') + 'Z');
         const th = new Date(d.getTime() + 7 * 60 * 60 * 1000);
         msg += '🕐 เวลา: ' + th.toISOString().slice(0, 16).replace('T', ' ') + ' น.';
       }
+
       await notifyTelegram(msg);
+      alertedCount++;
+      newNotifiedKeys.push(key);
     }
 
-    // อัปเดต state: lastCheck = now, notified = รวม id ใหม่ (เก็บแค่ 200 ตัวล่าสุด กัน list โต)
-    const newNotified = [...notified, ...toAlert.map(r => r.id)].slice(-200);
+    // อัปเดต state (เก็บ key ล่าสุด 300 ตัว)
+    const newNotified = [...notified, ...newNotifiedKeys].slice(-300);
     await db.from('delivery_views').upsert({
       id: STATE_ID, title: 'GR watch state', status_label: 'system',
       data: { lastCheck: nowIso, notified: newNotified }
@@ -106,8 +141,8 @@ export default async function handler(req, res) {
 
     res.status(200).json({
       ok: true,
-      checked: (receipts || []).length,
-      alerted: toAlert.length,
+      movesChecked: (moves || []).length,
+      groupsAlerted: alertedCount,
       lastCheck: nowIso
     });
   } catch (e) {
