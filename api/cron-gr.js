@@ -43,6 +43,56 @@ async function notifyTelegram(text, onlyChat1) {
 }
 
 // ป้ายบอกประเภทการเคลื่อนไหว จาก usage ต้นทาง-ปลายทาง
+// สร้างหน้าดูรายการทั้งหมดใน delivery_views → คืน URL (หรือ '' ถ้าไม่ต้อง/ไม่สำเร็จ)
+// ใช้เมื่อรายการเกิน 5 — ผู้ใช้กดดูครบได้
+async function buildMoveListView(db, g) {
+  try {
+    const viewId = 'MV' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+    const lines = g.lines.map(l => ({
+      name: l.product || '',
+      qty: l.qty || '',
+      uom: l.uom || ''
+    }));
+    const picks = [{
+      name: g.ref || 'รายการสต็อก',
+      origin: g.origin || '',
+      partner: g.partner || '',
+      date: g.date ? (() => { const d = new Date(g.date.replace(' ', 'T') + 'Z'); return new Date(d.getTime() + 7*60*60*1000).toISOString().slice(0,10); })() : '',
+      statusText: g.direction === 'in' ? 'รับเข้า' : 'ตัดออก',
+      statusColor: g.direction === 'in' ? 'green' : 'red',
+      lines
+    }];
+    const { error } = await db.from('delivery_views').insert({
+      id: viewId,
+      title: 'รายการสต็อก — ' + (g.ref || ''),
+      status_label: (g.write_user || '') + (g.company ? ' • ' + g.company : ''),
+      data: { summary: { total: 1 }, picks }
+    });
+    if (error) return '';
+    return 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
+  } catch (e) { return ''; }
+}
+
+// ประกอบบล็อกรายการสินค้า (สูงสุด 5) + ลิงก์ดูทั้งหมดถ้าเกิน
+async function buildLinesBlock(db, g) {
+  const MAX = 5;
+  let block = '';
+  const showLines = g.lines.slice(0, MAX);
+  if (showLines.length) {
+    block += '📦 รายการ (' + g.lines.length + '):\n';
+    for (const l of showLines) {
+      const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
+      block += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
+    }
+    if (g.lines.length > MAX) {
+      block += '  ...และอีก ' + (g.lines.length - MAX) + ' รายการ\n';
+      const url = await buildMoveListView(db, g);
+      if (url) block += '🔗 ดูรายการทั้งหมด: ' + url + '\n';
+    }
+  }
+  return block;
+}
+
 function moveTypeLabel(m) {
   if (m.scrapped) return '🗑️ ตัดของเสีย (Scrap)';
   if (m.direction === 'in') {
@@ -124,15 +174,7 @@ export default async function handler(req, res) {
         msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
         if (g.write_login) msg += ' (' + g.write_login + ')';
         msg += '\n';
-        const showLines = g.lines.slice(0, 8);
-        if (showLines.length) {
-          msg += '📦 รายการ:\n';
-          for (const l of showLines) {
-            const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
-            msg += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
-          }
-          if (g.lines.length > 8) msg += '  ...และอีก ' + (g.lines.length - 8) + ' รายการ\n';
-        }
+        msg += await buildLinesBlock(db, g);
         if (g.date) {
           const d = new Date(g.date.replace(' ', 'T') + 'Z');
           const th = new Date(d.getTime() + 7 * 60 * 60 * 1000);
@@ -206,15 +248,7 @@ export default async function handler(req, res) {
       msg += '\n';
 
       // รายการสินค้า (สูงสุด 8 บรรทัด)
-      const showLines = g.lines.slice(0, 8);
-      if (showLines.length) {
-        msg += '📦 รายการ:\n';
-        for (const l of showLines) {
-          const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
-          msg += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
-        }
-        if (g.lines.length > 8) msg += '  ...และอีก ' + (g.lines.length - 8) + ' รายการ\n';
-      }
+      msg += await buildLinesBlock(db, g);
       // เวลา (แปลงเป็นเวลาไทย)
       if (g.date) {
         const d = new Date(g.date.replace(' ', 'T') + 'Z');
