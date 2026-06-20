@@ -7,7 +7,7 @@
 //  เรียกทุก ~10 นาที ผ่าน GitHub Actions
 //  - กันแจ้งซ้ำด้วย state ที่เก็บใน delivery_views (id='__gr_watch_state__')
 // ============================================================================
-import { odooRecentStockMoves, odooConfigured } from './odoo.js';
+import { odooRecentStockMoves, odooBilledNotReceived, odooConfigured } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
 
 const STATE_ID = '__gr_watch_state__';
@@ -90,6 +90,19 @@ async function buildLinesBlock(db, g) {
       if (url) block += '🔗 ดูรายการทั้งหมด: ' + url + '\n';
     }
   }
+  return block;
+}
+
+// บล็อกรายการสินค้าที่ค้างรับ (แสดงรหัส [xxx] + ชื่อ, สูงสุด 5)
+function buildMissingLinesBlock(bill) {
+  const lines = bill.missingLines || [];
+  if (!lines.length) return '';
+  let block = '📦 รายการค้างรับ (' + lines.length + '):\n';
+  for (const l of lines.slice(0, 5)) {
+    const pname = (l.product || '').slice(0, 70);  // คงรหัส [xxx]
+    block += '  • ' + pname + ' — ค้าง ' + l.missing + ' ' + (l.uom || '') + '\n';
+  }
+  if (lines.length > 5) block += '  ...และอีก ' + (lines.length - 5) + ' รายการ\n';
   return block;
 }
 
@@ -184,12 +197,37 @@ export default async function handler(req, res) {
         await notifyTelegram(msg, true);
       }
 
+      // ── ทดสอบเช็ค Bill จ่าย/วางบิลแล้ว แต่ยังรับไม่ครบ ──
+      let billTestCount = 0;
+      try {
+        const { bills } = await odooBilledNotReceived(sinceTest, WATCH_COMPANY_IDS);
+        if (bills && bills.length) {
+          await notifyTelegram('🧪 พบบิลที่ยังรับเข้าไม่ครบ: ' + bills.length + ' ใบ 👇', true);
+          for (const bill of bills.slice(0, 5)) {
+            let msg = '🚨 <b>จ่ายเงิน/วางบิลแล้ว แต่ยังรับเข้าไม่ครบ!</b> (ทดสอบ)\n';
+            msg += bill.paidLabel + '\n';
+            msg += '🧾 ใบบิล: ' + bill.name + '\n';
+            if (bill.po) msg += '🔗 PO: ' + bill.po + '\n';
+            if (bill.partner) msg += '🏢 ผู้ขาย: ' + bill.partner + '\n';
+            if (bill.company) msg += '🏭 บริษัท: ' + bill.company + '\n';
+            msg += '📦 สั่ง ' + bill.ordered + ' • รับแล้ว ' + bill.received +
+                   ' • <b>ค้างรับ ' + bill.missing + '</b>\n';
+            msg += buildMissingLinesBlock(bill);
+          if (bill.amount) msg += '💰 มูลค่าบิล: ' + Number(bill.amount).toLocaleString('th-TH') + ' บาท\n';
+            if (bill.date) msg += '🕐 วันที่บิล: ' + bill.date;
+            await notifyTelegram(msg, true);
+          }
+          billTestCount = bills.length;
+        }
+      } catch (e) { /* ทดสอบบิลล้มเหลว ไม่กระทบ */ }
+
       res.status(200).json({
         ok: true, test: true, lookbackMins: mins,
         movesFound: (moves || []).length,
         otherMoves: otherMoves.length,
         documents: keys.length,
-        sentToChat1: Math.min(keys.length, 5)
+        sentToChat1: Math.min(keys.length, 5),
+        billsNotReceived: billTestCount
       });
       return;
     }
@@ -262,6 +300,31 @@ export default async function handler(req, res) {
       alertedCount++;
       newNotifiedKeys.push(key);
     }
+
+    // ── เช็ค Bill ที่จ่าย/วางบิลแล้ว แต่ยังรับเข้าไม่ครบ ──────────────────────
+    try {
+      const { bills, error: billErr } = await odooBilledNotReceived(lastCheck, WATCH_COMPANY_IDS);
+      if (!billErr && bills && bills.length) {
+        for (const bill of bills) {
+          const billKey = 'bill|' + bill.id + '|' + bill.paymentState;
+          if (notified.includes(billKey)) continue; // แจ้งไปแล้ว
+          let msg = '🚨 <b>จ่ายเงิน/วางบิลแล้ว แต่ยังรับเข้าไม่ครบ!</b>\n';
+          msg += bill.paidLabel + '\n';
+          msg += '🧾 ใบบิล: ' + bill.name + '\n';
+          if (bill.po) msg += '🔗 PO: ' + bill.po + '\n';
+          if (bill.partner) msg += '🏢 ผู้ขาย: ' + bill.partner + '\n';
+          if (bill.company) msg += '🏭 บริษัท: ' + bill.company + '\n';
+          msg += '📦 สั่ง ' + bill.ordered + ' • รับแล้ว ' + bill.received +
+                 ' • <b>ค้างรับ ' + bill.missing + '</b>\n';
+          msg += buildMissingLinesBlock(bill);
+          if (bill.amount) msg += '💰 มูลค่าบิล: ' + Number(bill.amount).toLocaleString('th-TH') + ' บาท\n';
+          if (bill.date) msg += '🕐 วันที่บิล: ' + bill.date;
+          await notifyTelegram(msg);
+          alertedCount++;
+          newNotifiedKeys.push(billKey);
+        }
+      }
+    } catch (e) { /* เช็คบิลล้มเหลว ไม่กระทบการแจ้งสต็อก */ }
 
     // อัปเดต state (เก็บ key ล่าสุด 300 ตัว)
     const newNotified = [...notified, ...newNotifiedKeys].slice(-300);
