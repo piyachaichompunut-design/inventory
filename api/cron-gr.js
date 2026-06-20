@@ -67,10 +67,24 @@ export default async function handler(req, res) {
     // ── โหมดทดสอบ: /api/cron-gr?test=1&mins=120 ──────────────────────────────
     //   มองย้อนหลัง mins นาที (default 120) | ส่งเข้า chat 1 เท่านั้น | ไม่บันทึก state
     //   ใช้ดูว่าระบบจับการเคลื่อนไหวได้ไหม + ข้อความหน้าตาเป็นยังไง (ไม่ต้องแตะสต็อกจริง)
-    const isTest = req.query?.test === '1' || (req.url || '').includes('test=1');
+    // อ่าน query หลายวิธี (Vercel serverless อาจส่งมาต่างกัน)
+    let qTest = '', qMins = '';
+    try {
+      if (req.query && typeof req.query === 'object') {
+        qTest = String(req.query.test || '');
+        qMins = String(req.query.mins || '');
+      }
+      // เผื่อ req.query ไม่มี → parse จาก req.url เอง
+      if (!qTest && req.url) {
+        const u = new URL(req.url, 'http://x');
+        qTest = u.searchParams.get('test') || '';
+        qMins = u.searchParams.get('mins') || '';
+      }
+    } catch (e) { /* ใช้ค่าว่าง */ }
+
+    const isTest = qTest === '1' || (req.url || '').includes('test=1');
     if (isTest) {
-      const minsMatch = (req.url || '').match(/mins=(\d+)/);
-      const mins = req.query?.mins ? parseInt(req.query.mins, 10) : (minsMatch ? parseInt(minsMatch[1], 10) : 120);
+      const mins = qMins ? parseInt(qMins, 10) : 120;
       const sinceTest = new Date(Date.now() - mins * 60 * 1000).toISOString();
 
       const { moves, error } = await odooRecentStockMoves(sinceTest, WATCH_COMPANY_IDS);
@@ -87,10 +101,14 @@ export default async function handler(req, res) {
 
       const keys = Object.keys(grps);
       // ส่งหัวข้อทดสอบ + ผลรวม เข้า chat 1
+      // นับว่ามี move ของ Store1 กี่ตัว (เพื่อ debug ว่า query เจอของแต่กรองออกหมดไหม)
+      const store1Moves = (moves || []).filter(m => (m.write_login || '').toLowerCase() === STORE1_LOGIN);
       let head = '🧪 <b>ทดสอบระบบแจ้งเตือนสต็อก</b>\n';
       head += 'มองย้อนหลัง ' + mins + ' นาที\n';
       head += 'พบ move ทั้งหมด: ' + (moves || []).length + '\n';
-      head += 'ที่ไม่ใช่ Store1: ' + otherMoves.length + ' รายการ (' + keys.length + ' เอกสาร)\n';
+      head += '  • ของ Store1: ' + store1Moves.length + ' (ไม่แจ้ง)\n';
+      head += '  • ของคนอื่น: ' + otherMoves.length + ' รายการ (' + keys.length + ' เอกสาร)\n';
+      head += 'บริษัทที่เฝ้า: ' + WATCH_COMPANY_IDS.join(',') + ' | Store1 = ' + STORE1_LOGIN + '\n';
       head += (keys.length ? '\nตัวอย่างการแจ้งเตือน 👇' : '\n(ไม่พบการเคลื่อนไหวจากคนอื่นในช่วงนี้)');
       await notifyTelegram(head, true);
 
