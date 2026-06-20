@@ -2491,7 +2491,7 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
   if (Array.isArray(companyIds) && companyIds.length) {
     domain = ['&', ['company_id', 'in', companyIds], ...domain];
   }
-  const fields = ['id', 'reference', 'product_id', 'product_uom_qty', 'product_uom',
+  const fields = ['id', 'reference', 'origin', 'partner_id', 'product_id', 'product_uom_qty', 'product_uom',
     'location_id', 'location_dest_id', 'write_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
   let rows = [];
   try {
@@ -2525,6 +2525,16 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     } catch (e) { /* ใช้ name จาก write_uid */ }
   }
 
+  // ดึง partner จาก picking (move.partner_id มักว่าง — partner อยู่ที่ picking)
+  const pickIds = [...new Set(rows.map(r => Array.isArray(r.picking_id) ? r.picking_id[0] : null).filter(Boolean))];
+  const pickPartner = {};
+  if (pickIds.length) {
+    try {
+      const picks = await searchRead('stock.picking', [['id', 'in', pickIds]], ['id', 'partner_id'], 200);
+      for (const p of picks) pickPartner[p.id] = Array.isArray(p.partner_id) ? p.partner_id[1] : '';
+    } catch (e) { /* ใช้ partner จาก move แทน */ }
+  }
+
   const moves = [];
   for (const r of rows) {
     const srcId = Array.isArray(r.location_id) ? r.location_id[0] : null;
@@ -2543,9 +2553,13 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
     const u = wuid && userMap[wuid] ? userMap[wuid] : {};
 
+    const pkId = Array.isArray(r.picking_id) ? r.picking_id[0] : null;
+    const partnerName = (Array.isArray(r.partner_id) ? r.partner_id[1] : '') || (pkId ? pickPartner[pkId] : '') || '';
     moves.push({
       id: r.id,
       ref: r.reference || '',
+      origin: r.origin || '',
+      partner: partnerName,
       product: Array.isArray(r.product_id) ? r.product_id[1] : '',
       qty: r.product_uom_qty || 0,
       uom: Array.isArray(r.product_uom) ? r.product_uom[1] : '',
