@@ -118,6 +118,8 @@ export default async function handler(req, res) {
         let msg = '⚠️ <b>มีคนอื่นทำรายการสต็อก</b> (ทดสอบ)\n';
         msg += moveTypeLabel(g) + '\n';
         if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
+        if (g.origin) msg += '🔗 อ้างอิง PO/SO: ' + g.origin + '\n';
+        if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
         if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
         msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
         if (g.write_login) msg += ' (' + g.write_login + ')';
@@ -196,6 +198,8 @@ export default async function handler(req, res) {
       let msg = '⚠️ <b>มีคนอื่นทำรายการสต็อก</b>\n';
       msg += moveTypeLabel(g) + '\n';
       if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
+      if (g.origin) msg += '🔗 อ้างอิง PO/SO: ' + g.origin + '\n';
+      if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
       if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
       msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
       if (g.write_login) msg += ' (' + g.write_login + ')';
