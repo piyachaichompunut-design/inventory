@@ -2539,25 +2539,31 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     } catch (e) { /* ใช้ partner จาก move แทน */ }
   }
 
-  // fallback: picking ที่ partner ว่าง → ตาม origin (เลข PO) ไปดึง vendor จาก purchase.order
-  const emptyOrigins = [...new Set(
-    Object.keys(pickPartner)
-      .filter(pid => !pickPartner[pid] && pickOrigin[pid])
-      .map(pid => pickOrigin[pid])
-  )];
-  const originPartner = {}; // origin (PO name) → vendor name
-  if (emptyOrigins.length) {
+  // ตาม origin (เลข PO/SO) ไปดึง vendor + หมายเหตุ (Remark) จาก PO/SO
+  // ดึงทุก origin ที่มี (ไม่ใช่แค่ตอน partner ว่าง) เพราะ note ควรแสดงเสมอ
+  const allOrigins = [...new Set(Object.values(pickOrigin).filter(Boolean))];
+  const originPartner = {}; // origin → vendor name
+  const originNote = {};    // origin → หมายเหตุ (Remark)
+  if (allOrigins.length) {
     try {
-      // origin อาจเป็น "PO2606056" หรือมีข้อความอื่นปน → ค้นด้วย name in
       const pos = await searchRead('purchase.order',
-        [['name', 'in', emptyOrigins]], ['name', 'partner_id'], 200);
-      for (const po of pos) originPartner[po.name] = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
+        [['name', 'in', allOrigins]], ['name', 'partner_id', 'notes'], 200);
+      for (const po of pos) {
+        originPartner[po.name] = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
+        // notes อาจเป็น HTML → ตัด tag ออก + ตัดช่องว่างเกิน
+        const rawNote = (po.notes && typeof po.notes === 'string') ? po.notes : '';
+        originNote[po.name] = rawNote.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      }
       // เผื่อ origin เป็น SO (กรณีส่งออก) → ดึงจาก sale.order ด้วย
-      const stillEmpty = emptyOrigins.filter(o => !originPartner[o]);
+      const stillEmpty = allOrigins.filter(o => !originPartner[o] && !originNote[o]);
       if (stillEmpty.length) {
         const sos = await searchRead('sale.order',
-          [['name', 'in', stillEmpty]], ['name', 'partner_id'], 200);
-        for (const so of sos) originPartner[so.name] = Array.isArray(so.partner_id) ? so.partner_id[1] : '';
+          [['name', 'in', stillEmpty]], ['name', 'partner_id', 'note'], 200);
+        for (const so of sos) {
+          originPartner[so.name] = Array.isArray(so.partner_id) ? so.partner_id[1] : '';
+          const rawNote = (so.note && typeof so.note === 'string') ? so.note : '';
+          originNote[so.name] = rawNote.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        }
       }
     } catch (e) { /* ดึงไม่ได้ ก็ปล่อยว่าง */ }
   }
@@ -2586,11 +2592,13 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
       (Array.isArray(r.partner_id) ? r.partner_id[1] : '') ||
       (pkId ? pickPartner[pkId] : '') ||
       (pkOrigin ? originPartner[pkOrigin] : '') || '';
+    const noteText = pkOrigin ? (originNote[pkOrigin] || '') : '';
     moves.push({
       id: r.id,
       ref: r.reference || '',
       origin: r.origin || '',
       partner: partnerName,
+      note: noteText,
       product: Array.isArray(r.product_id) ? r.product_id[1] : '',
       qty: r.product_uom_qty || 0,
       uom: Array.isArray(r.product_uom) ? r.product_uom[1] : '',
