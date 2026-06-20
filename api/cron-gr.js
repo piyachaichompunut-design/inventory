@@ -81,7 +81,7 @@ async function buildLinesBlock(db, g) {
   if (showLines.length) {
     block += '📦 รายการ (' + g.lines.length + '):\n';
     for (const l of showLines) {
-      const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
+      const pname = (l.product || '').slice(0, 70);  // แสดงทั้งรหัส [xxx] + ชื่อ
       block += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
     }
     if (g.lines.length > MAX) {
