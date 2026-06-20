@@ -2527,12 +2527,39 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
 
   // ดึง partner จาก picking (move.partner_id มักว่าง — partner อยู่ที่ picking)
   const pickIds = [...new Set(rows.map(r => Array.isArray(r.picking_id) ? r.picking_id[0] : null).filter(Boolean))];
-  const pickPartner = {};
+  const pickPartner = {};   // picking_id → ชื่อ vendor/customer
+  const pickOrigin = {};    // picking_id → origin (เลข PO/SO)
   if (pickIds.length) {
     try {
-      const picks = await searchRead('stock.picking', [['id', 'in', pickIds]], ['id', 'partner_id'], 200);
-      for (const p of picks) pickPartner[p.id] = Array.isArray(p.partner_id) ? p.partner_id[1] : '';
+      const picks = await searchRead('stock.picking', [['id', 'in', pickIds]], ['id', 'partner_id', 'origin'], 200);
+      for (const p of picks) {
+        pickPartner[p.id] = Array.isArray(p.partner_id) ? p.partner_id[1] : '';
+        pickOrigin[p.id] = p.origin || '';
+      }
     } catch (e) { /* ใช้ partner จาก move แทน */ }
+  }
+
+  // fallback: picking ที่ partner ว่าง → ตาม origin (เลข PO) ไปดึง vendor จาก purchase.order
+  const emptyOrigins = [...new Set(
+    Object.keys(pickPartner)
+      .filter(pid => !pickPartner[pid] && pickOrigin[pid])
+      .map(pid => pickOrigin[pid])
+  )];
+  const originPartner = {}; // origin (PO name) → vendor name
+  if (emptyOrigins.length) {
+    try {
+      // origin อาจเป็น "PO2606056" หรือมีข้อความอื่นปน → ค้นด้วย name in
+      const pos = await searchRead('purchase.order',
+        [['name', 'in', emptyOrigins]], ['name', 'partner_id'], 200);
+      for (const po of pos) originPartner[po.name] = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
+      // เผื่อ origin เป็น SO (กรณีส่งออก) → ดึงจาก sale.order ด้วย
+      const stillEmpty = emptyOrigins.filter(o => !originPartner[o]);
+      if (stillEmpty.length) {
+        const sos = await searchRead('sale.order',
+          [['name', 'in', stillEmpty]], ['name', 'partner_id'], 200);
+        for (const so of sos) originPartner[so.name] = Array.isArray(so.partner_id) ? so.partner_id[1] : '';
+      }
+    } catch (e) { /* ดึงไม่ได้ ก็ปล่อยว่าง */ }
   }
 
   const moves = [];
@@ -2554,7 +2581,11 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     const u = wuid && userMap[wuid] ? userMap[wuid] : {};
 
     const pkId = Array.isArray(r.picking_id) ? r.picking_id[0] : null;
-    const partnerName = (Array.isArray(r.partner_id) ? r.partner_id[1] : '') || (pkId ? pickPartner[pkId] : '') || '';
+    const pkOrigin = pkId ? pickOrigin[pkId] : '';
+    const partnerName =
+      (Array.isArray(r.partner_id) ? r.partner_id[1] : '') ||
+      (pkId ? pickPartner[pkId] : '') ||
+      (pkOrigin ? originPartner[pkOrigin] : '') || '';
     moves.push({
       id: r.id,
       ref: r.reference || '',
