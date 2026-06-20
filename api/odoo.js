@@ -2475,3 +2475,89 @@ export async function odooRecentReceipts(sinceIso, companyIds) {
   });
   return { receipts };
 }
+
+// ── ดึง stock.move ที่เพิ่งทำเสร็จ (done) หลัง sinceIso — ทุกการเคลื่อนไหวสต็อก ──
+// แยกทิศทาง เพิ่ม/ลด จาก usage ของ location ต้นทาง-ปลายทาง
+// internal = คลังจริง | customer/supplier/inventory/production/transit = ไม่ใช่คลังจริง
+// คืน { moves: [{ id, ref, product, qty, uom, write_user, write_login, company,
+//                 direction:'in'|'out', srcUsage, destUsage, picking, scrapName, date }] }
+export async function odooRecentStockMoves(sinceIso, companyIds) {
+  // ดึง move ที่ state=done + write_date หลัง sinceIso
+  let domain = ['&', '&',
+    ['state', '=', 'done'],
+    ['write_date', '>', sinceIso],
+    ['date', '!=', false]
+  ];
+  if (Array.isArray(companyIds) && companyIds.length) {
+    domain = ['&', ['company_id', 'in', companyIds], ...domain];
+  }
+  const fields = ['id', 'reference', 'product_id', 'product_uom_qty', 'product_uom',
+    'location_id', 'location_dest_id', 'write_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
+  let rows = [];
+  try {
+    rows = await searchRead('stock.move', domain, fields, 100);
+  } catch (e) {
+    return { error: e.message, moves: [] };
+  }
+  if (!rows.length) return { moves: [] };
+
+  // ดึง usage ของ location ทั้งหมดที่เกี่ยวข้อง
+  const locIds = new Set();
+  rows.forEach(r => {
+    if (Array.isArray(r.location_id)) locIds.add(r.location_id[0]);
+    if (Array.isArray(r.location_dest_id)) locIds.add(r.location_dest_id[0]);
+  });
+  const locUsage = {};
+  if (locIds.size) {
+    try {
+      const locs = await searchRead('stock.location', [['id', 'in', [...locIds]]], ['id', 'usage'], 200);
+      for (const l of locs) locUsage[l.id] = l.usage;
+    } catch (e) { /* ถ้าดึงไม่ได้ ใช้ usage ว่าง */ }
+  }
+
+  // ดึงชื่อ/login ผู้กด
+  const uidSet = [...new Set(rows.map(r => Array.isArray(r.write_uid) ? r.write_uid[0] : null).filter(Boolean))];
+  const userMap = {};
+  if (uidSet.length) {
+    try {
+      const users = await searchRead('res.users', [['id', 'in', uidSet]], ['id', 'name', 'login'], 50);
+      for (const u of users) userMap[u.id] = { name: u.name, login: u.login };
+    } catch (e) { /* ใช้ name จาก write_uid */ }
+  }
+
+  const moves = [];
+  for (const r of rows) {
+    const srcId = Array.isArray(r.location_id) ? r.location_id[0] : null;
+    const destId = Array.isArray(r.location_dest_id) ? r.location_dest_id[0] : null;
+    const srcUsage = locUsage[srcId] || '';
+    const destUsage = locUsage[destId] || '';
+
+    // หาทิศทาง: เข้า internal = เพิ่ม | ออกจาก internal = ลด | internal→internal = ข้าม (สุทธิไม่เปลี่ยน)
+    let direction = null;
+    if (destUsage === 'internal' && srcUsage !== 'internal') direction = 'in';   // สต็อกเพิ่ม
+    else if (srcUsage === 'internal' && destUsage !== 'internal') direction = 'out'; // สต็อกลด
+    // internal→internal หรือ non→non = ข้าม
+    if (!direction) continue;
+
+    const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
+    const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
+    const u = wuid && userMap[wuid] ? userMap[wuid] : {};
+
+    moves.push({
+      id: r.id,
+      ref: r.reference || '',
+      product: Array.isArray(r.product_id) ? r.product_id[1] : '',
+      qty: r.product_uom_qty || 0,
+      uom: Array.isArray(r.product_uom) ? r.product_uom[1] : '',
+      write_user: u.name || wname || '',
+      write_login: u.login || '',
+      company: Array.isArray(r.company_id) ? r.company_id[1] : '',
+      direction,
+      srcUsage, destUsage,
+      picking: Array.isArray(r.picking_id) ? r.picking_id[1] : '',
+      scrapped: r.scrapped === true,
+      date: r.date || ''
+    });
+  }
+  return { moves };
+}
