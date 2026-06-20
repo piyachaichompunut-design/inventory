@@ -2421,7 +2421,7 @@ export async function odooDelivery(keyword, companyId) {
 // ── ดึง Receipt (รับสินค้า/GR) ที่เพิ่ง validate หลังเวลา sinceIso ──────────────
 // คืน [{ id, name, write_date, write_user, write_login, partner, origin }]
 // ใช้สำหรับแจ้งเตือนเมื่อมีคนอื่นที่ไม่ใช่ Store1 กดรับ
-export async function odooRecentReceipts(sinceIso) {
+export async function odooRecentReceipts(sinceIso, companyIds) {
   // 1) หา picking_type ที่เป็น incoming (Receipts) ทั้งหมด
   let typeIds = [];
   try {
@@ -2430,14 +2430,14 @@ export async function odooRecentReceipts(sinceIso) {
     typeIds = (types || []).map(t => t.id);
   } catch (e) { /* ถ้าดึง type ไม่ได้ ใช้ filter code ทีหลัง */ }
 
-  // 2) ดึง picking ที่ state=done + write_date หลัง sinceIso
-  const domain = [
-    '&', '&',
-    ['state', '=', 'done'],
-    ['write_date', '>', sinceIso],
-    (typeIds.length ? ['picking_type_id', 'in', typeIds] : ['picking_type_id.code', '=', 'incoming'])
-  ];
-  const fields = ['id', 'name', 'write_date', 'write_uid', 'partner_id', 'origin', 'date_done'];
+  // 2) ดึง picking ที่ state=done + write_date หลัง sinceIso + เฉพาะบริษัทที่ระบุ
+  const typeCond = typeIds.length ? ['picking_type_id', 'in', typeIds] : ['picking_type_id.code', '=', 'incoming'];
+  let domain = ['&', '&', ['state', '=', 'done'], ['write_date', '>', sinceIso], typeCond];
+  // กรองเฉพาะบริษัทที่ต้องการ (เช่น [1,2] = อาคเนย์ + เมิร์ค)
+  if (Array.isArray(companyIds) && companyIds.length) {
+    domain = ['&', ['company_id', 'in', companyIds], ...domain];
+  }
+  const fields = ['id', 'name', 'write_date', 'write_uid', 'partner_id', 'origin', 'date_done', 'company_id'];
   let rows = [];
   try {
     rows = await searchRead('stock.picking', domain, fields, 50);
@@ -2469,7 +2469,8 @@ export async function odooRecentReceipts(sinceIso) {
       write_user: u.name || wname || '',
       write_login: u.login || '',
       partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '',
-      origin: r.origin || ''
+      origin: r.origin || '',
+      company: Array.isArray(r.company_id) ? r.company_id[1] : ''
     };
   });
   return { receipts };
