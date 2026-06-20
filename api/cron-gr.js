@@ -170,6 +170,7 @@ export default async function handler(req, res) {
         if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
         if (g.origin) msg += '🔗 อ้างอิง PO/SO: ' + g.origin + '\n';
         if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
+        if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
         if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
         msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
         if (g.write_login) msg += ' (' + g.write_login + ')';
@@ -242,6 +243,7 @@ export default async function handler(req, res) {
       if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
       if (g.origin) msg += '🔗 อ้างอิง PO/SO: ' + g.origin + '\n';
       if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
+      if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
       if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
       msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
       if (g.write_login) msg += ' (' + g.write_login + ')';
