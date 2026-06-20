@@ -11,6 +11,9 @@ import { createClient } from '@supabase/supabase-js';
 const STATE_ID = '__gr_watch_state__';
 // login ของ Store1 (คนกดปกติ ไม่ต้องแจ้ง) — ตั้งใน env ได้ ถ้าไม่ตั้งใช้ค่า default
 const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').toLowerCase();
+// บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) — ตั้ง GR_COMPANY_IDS ทับได้ เช่น "1,2,4"
+const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2')
+  .split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 
 function getDb() {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -59,7 +62,7 @@ export default async function handler(req, res) {
     }
 
     // ดึง Receipt ที่ validate หลัง lastCheck
-    const { receipts, error } = await odooRecentReceipts(lastCheck);
+    const { receipts, error } = await odooRecentReceipts(lastCheck, WATCH_COMPANY_IDS);
     if (error) { res.status(200).json({ ok: false, error }); return; }
 
     // หาเฉพาะที่คนกด != Store1 และยังไม่เคยแจ้ง
@@ -74,6 +77,7 @@ export default async function handler(req, res) {
     for (const r of toAlert) {
       let msg = '⚠️ <b>มีคนอื่นกดรับสินค้า (GR)</b>\n';
       msg += '📋 ใบรับ: ' + r.name + '\n';
+      if (r.company) msg += '🏭 บริษัท: ' + r.company + '\n';
       msg += '👤 คนกด: ' + (r.write_user || r.write_login || 'ไม่ทราบ');
       if (r.write_login) msg += ' (' + r.write_login + ')';
       msg += '\n';
