@@ -395,23 +395,34 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 
 // ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
-export async function odooFindDoc(docType, keyword, dateFilter) {
+export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const words = smartWords(keyword);
 
   if (docType === 'po') {
     const rows = await safeSearchRead('purchase.order',
-      ['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]],
+      withCompany(['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    return { id: rows[0].id, name: rows[0].name, model: 'purchase.order' };
+    const best = sortExactFirst(rows, keyword)[0];
+    return { id: best.id, name: best.name, model: 'purchase.order' };
   }
 
   if (docType === 'so') {
     const rows = await safeSearchRead('sale.order',
-      ['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]],
+      withCompany(['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]], companyId),
       ['id', 'name', 'partner_id'], 5);
     if (!rows.length) return null;
-    return { id: rows[0].id, name: rows[0].name, model: 'sale.order' };
+    const best = sortExactFirst(rows, keyword)[0];
+    return { id: best.id, name: best.name, model: 'sale.order' };
+  }
+
+  if (docType === 'pr') {
+    const rows = await safeSearchRead('purchase.request',
+      withCompany([['name', 'ilike', keyword]], companyId),
+      ['id', 'name'], 5);
+    if (!rows.length) return null;
+    const best = sortExactFirst(rows, keyword)[0];
+    return { id: best.id, name: best.name, model: 'purchase.request' };
   }
 
   // picking — ค้นแบบ odooDelivery + กรองวันที่
@@ -436,17 +447,35 @@ export async function odooFindDoc(docType, keyword, dateFilter) {
   };
 
   let rows = [];
-  try { rows = await searchRead('stock.picking', buildDomain('full'), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
-    try { rows = await searchRead('stock.picking', buildDomain('simple'), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
+  try { rows = await searchRead('stock.picking', withCompany(buildDomain('full'), companyId), ['id', 'name', 'scheduled_date'], 20); } catch (e) {
+    try { rows = await searchRead('stock.picking', withCompany(buildDomain('simple'), companyId), ['id', 'name', 'scheduled_date'], 20); } catch (e2) {}
   }
 
-  // กรองวันที่ถ้าระบุ
   if (dateFilter && rows.length) {
     const filtered = rows.filter(p => String(p.scheduled_date || '').slice(0, 10) === dateFilter);
     if (filtered.length) rows = filtered;
   }
 
   if (!rows.length) return null;
+
+  // เรียงให้ตรงที่สุดมาก่อน (กัน 82/2 โดน 82/1)
+  const kwTrim = String(keyword).trim().toLowerCase();
+  const tailMatch = kwTrim.match(/(\d+\s*\/\s*\d+)\s*$/);
+  const kwTail = tailMatch ? tailMatch[1].replace(/\s+/g, '') : '';
+  rows.sort((a, b) => {
+    const an = String(a.name || '').trim().toLowerCase();
+    const bn = String(b.name || '').trim().toLowerCase();
+    const aExact = an === kwTrim ? 1 : 0;
+    const bExact = bn === kwTrim ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    if (kwTail) {
+      const aTail = an.replace(/\s+/g, '').endsWith(kwTail) ? 1 : 0;
+      const bTail = bn.replace(/\s+/g, '').endsWith(kwTail) ? 1 : 0;
+      if (aTail !== bTail) return bTail - aTail;
+    }
+    return 0;
+  });
+
   return { id: rows[0].id, name: rows[0].name, model: 'stock.picking' };
 }
 
@@ -541,13 +570,1814 @@ export async function odooDelivery(keyword, companyId) {
   return pickings;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  ฟังก์ชันเพิ่มเติม (gR watch, electrical, guardrail, picking, compare, PDF)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── helper: เรียงผลลัพธ์ให้ตัวที่ตรงเป๊ะขึ้นก่อน ──────────────────────────────
+function sortExactFirst(rows, keyword) {
+  const kw = String(keyword).trim().toLowerCase();
+  const idx = rows.findIndex(r => String(r.name || '').trim().toLowerCase() === kw);
+  if (idx > 0) {
+    const [exact] = rows.splice(idx, 1);
+    rows.unshift(exact);
+  }
+  return rows;
+}
+
+// ── companyById (เผื่อไฟล์เก่าไม่มี) ──────────────────────────────────────────
+const _COMPANY_ALL = [
+  { id: 1, name: 'อาคเนย์' }, { id: 2, name: 'เมิร์ค' },
+  { id: 4, name: 'ซิลิกัล' }, { id: 5, name: 'ศรีอาคเนย์' },
+];
+export function companyById(id) {
+  return _COMPANY_ALL.find(c => c.id === id) || { id: 1, name: 'อาคเนย์' };
+}
+
+// ── normalize รายการสินค้าของเอกสาร SO/PO/PR ─────────────────────────────────
+export function normalizeDocLines(doc, type) {
+  const lines = doc.lines || [];
+  return lines.map(l => {
+    const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+    const code = prod[0] ? String(prod[0]) : '';
+    const name = prod[1] || l.name || '';
+    let qty = 0, uomField = null;
+    if (type === 'so') { qty = l.product_uom_qty || 0; uomField = l.product_uom; }
+    else if (type === 'po') { qty = l.product_qty || 0; uomField = l.product_uom; }
+    else if (type === 'pr') { qty = l.product_qty || 0; uomField = l.product_uom_id; }
+    const unit = Array.isArray(uomField) ? (uomField[1] || '') : '';
+    return { code, name, unit, qty: +qty };
+  });
+}
+
+export function normalizePickingLines(picking) {
+  const lines = picking.lines || [];
+  return lines.map(l => {
+    const prod = Array.isArray(l.product_id) ? l.product_id : [0, ''];
+    const code = prod[0] ? String(prod[0]) : '';
+    const name = prod[1] || l.name || '';
+    const unit = Array.isArray(l.product_uom) ? (l.product_uom[1] || '') : '';
+    return { code, name, unit, qtyPlanned: +(l.product_uom_qty || 0), qtyDone: +(l.quantity || 0) };
+  });
+}
+
+// ── เทียบเอกสารกับใบส่งของ ────────────────────────────────────────────────────
+export async function odooCompareWithDelivery(otherType, otherNum, picking, companyId) {
+  const fetchDoc = async (type, num) => {
+    if (type === 'so') return await odooSO(num, companyId);
+    if (type === 'po') return await odooPO(num, companyId);
+    if (type === 'pr') return await odooPR(num, companyId);
+    throw new Error('ไม่รู้จักประเภทเอกสาร: ' + type);
+  };
+  const docs = await fetchDoc(otherType, otherNum);
+  if (!docs.length) throw new Error('ไม่พบ ' + otherType.toUpperCase() + otherNum);
+  const otherDoc = docs[0];
+  const otherLines = normalizeDocLines(otherDoc, otherType);
+  const pickLines = normalizePickingLines(picking);
+  const mapOther = new Map(); otherLines.forEach(l => mapOther.set(l.code || l.name, l));
+  const mapPick = new Map(); pickLines.forEach(l => mapPick.set(l.code || l.name, l));
+  const allKeys = new Set([...mapOther.keys(), ...mapPick.keys()]);
+  const rows = [];
+  for (const k of allKeys) {
+    const o = mapOther.get(k), p = mapPick.get(k);
+    const qtyOther = o ? o.qty : 0, qtyPlanned = p ? p.qtyPlanned : 0, qtyDone = p ? p.qtyDone : 0;
+    const diff = qtyOther - qtyDone;
+    let status = 'ok';
+    if (!o) status = 'missing_a'; else if (!p) status = 'missing_b'; else if (diff !== 0) status = 'diff';
+    rows.push({ code: (o||p).code, name: (o||p).name, unit: (o||p).unit || '', qtyOther, qtyPlanned, qtyDone, diff, status });
+  }
+  rows.sort((a, b) => {
+    const order = { missing_a: 0, missing_b: 1, diff: 2, ok: 3 };
+    return (order[a.status] || 3) - (order[b.status] || 3);
+  });
+  return { otherDoc, otherType, otherNum, picking, rows };
+}
+
+// ── ดึง PDF ใบส่งสินค้าจาก Odoo ──────────────────────────────────────────────
+export async function odooDeliveryPDF(pickIds) {
+  if (!Array.isArray(pickIds) || !pickIds.length) throw new Error('ไม่ได้ระบุใบส่งของ');
+  const webPassword = process.env.ODOO_PASSWORD || ODOO_KEY;
+  const loginRes = await fetch(ODOO_URL + '/web/session/authenticate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', params: { db: ODOO_DB, login: ODOO_USER, password: webPassword } })
+  });
+  const setCookie = loginRes.headers.get('set-cookie') || '';
+  const sessionId = (setCookie.match(/session_id=([^;]+)/) || [])[1];
+  if (!sessionId) {
+    const j = await loginRes.json().catch(() => ({}));
+    const msg = j.error?.data?.message || j.error?.message || 'Access Denied';
+    throw new Error('Odoo web session ล้มเหลว: ' + msg + ' (ต้องตั้ง ODOO_PASSWORD = รหัสผ่านจริงใน Vercel)');
+  }
+  const cookie = 'session_id=' + sessionId;
+  const ids = pickIds.join(',');
+  const reportUrl = ODOO_URL + '/report/pdf/stock.report_deliveryslip/' + ids;
+  const pdfRes = await fetch(reportUrl, { headers: { Cookie: cookie } });
+  if (!pdfRes.ok) throw new Error('ดึง PDF จาก Odoo ไม่สำเร็จ (HTTP ' + pdfRes.status + ')');
+  const buf = Buffer.from(await pdfRes.arrayBuffer());
+  if (buf.length < 100 || buf.slice(0, 4).toString() !== '%PDF') {
+    throw new Error('ไฟล์ที่ได้ไม่ใช่ PDF (อาจไม่มีสิทธิ์ หรือ report name ไม่ตรง)');
+  }
+  return buf.toString('base64');
+}
+
+export async function odooAllProductIds() {
+  const uid = await odooAuth();
+  const rows = await jsonRpc('object', 'execute_kw', [
+    ODOO_DB, uid, ODOO_KEY, 'product.product', 'search_read',
+    [[['default_code', '!=', false]]],
+    { fields: ['id', 'default_code', 'name'], limit: 10000 }
+  ]);
+  return rows.map(r => ({ id: r.id, code: r.default_code, name: r.name }));
+}
+
+export async function odooFindOperationType(keyword, companyId) {
+  const domain = withCompany([['name', 'ilike', keyword]], companyId);
+  const rows = await searchRead('stock.picking.type', domain,
+    ['id', 'name', 'warehouse_id', 'default_location_src_id', 'default_location_dest_id', 'code'], 20);
+  const outgoing = rows.filter(r => r.code === 'outgoing');
+  return outgoing.length ? outgoing : rows;
+}
+
+export async function odooCreatePickingFromLines(pickingTypeId, lines, scheduledDate, sourceDoc, companyId) {
+  const uid = await odooAuth();
+  const ptRows = await searchRead('stock.picking.type', [['id', '=', pickingTypeId]],
+    ['default_location_src_id', 'default_location_dest_id', 'name'], 1);
+  if (!ptRows.length) throw new Error('ไม่พบ Operation Type id=' + pickingTypeId);
+  const pt = ptRows[0];
+  const srcLocId  = Array.isArray(pt.default_location_src_id)  ? pt.default_location_src_id[0]  : pt.default_location_src_id;
+  const destLocId = Array.isArray(pt.default_location_dest_id) ? pt.default_location_dest_id[0] : pt.default_location_dest_id;
+  const codes = lines.map(l => l.productCode).filter(Boolean);
+  let codeMap = new Map();
+  if (codes.length) {
+    const prodByCode = await searchRead('product.product', [['default_code', 'in', codes]],
+      ['id', 'default_code', 'name', 'uom_id'], codes.length + 5);
+    codeMap = new Map(prodByCode.map(r => [String(r.default_code), r]));
+  }
+  const cleanName = (s) => String(s || '').replace(/-{2,}/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const results = lines.map(line => {
+    if (line.productCode && codeMap.has(String(line.productCode))) {
+      return { line, status: 'code', product: codeMap.get(String(line.productCode)) };
+    }
+    return { line, status: 'notfound', product: null };
+  });
+  const needNameSearch = results.filter(r => r.status === 'notfound' && r.line.productName);
+  if (needNameSearch.length) {
+    const nameDomain = needNameSearch.map(r => ['name', 'ilike', String(r.line.productName).replace(/-{2,}/g, ' ').trim()]);
+    let domain;
+    if (nameDomain.length === 1) { domain = [nameDomain[0]]; }
+    else { domain = []; for (let i = 0; i < nameDomain.length - 1; i++) domain.push('|'); domain = domain.concat(nameDomain); }
+    const nameRows = await searchRead('product.product', domain, ['id', 'default_code', 'name', 'uom_id'], needNameSearch.length * 3 + 5);
+    for (const r of needNameSearch) {
+      const nm = cleanName(r.line.productName);
+      const searchNm = nm.split(' ')[0];
+      const candidates = nameRows.filter(p => cleanName(p.name).includes(searchNm) || searchNm.includes(cleanName(p.name).split(' ')[0]));
+      if (candidates.length) {
+        const exact = candidates.find(p => cleanName(p.name) === nm);
+        r.product = exact || candidates[0]; r.status = 'name';
+      }
+    }
+  }
+  const pickingVals = {
+    picking_type_id: pickingTypeId, location_id: srcLocId, location_dest_id: destLocId,
+    origin: sourceDoc || '',
+    ...(scheduledDate ? { scheduled_date: scheduledDate } : {}),
+    ...(companyId ? { company_id: companyId } : {}),
+  };
+  const pickingId = await jsonRpc('object', 'execute_kw', [ODOO_DB, uid, ODOO_KEY, 'stock.picking', 'create', [pickingVals]]);
+  const moveVals = results.filter(r => r.product).map(r => {
+    const prod = r.product;
+    const uomId = Array.isArray(prod.uom_id) ? prod.uom_id[0] : prod.uom_id;
+    return {
+      name: prod.name || r.line.productCode || r.line.productName || '-',
+      picking_id: pickingId, product_id: prod.id,
+      product_uom_qty: parseFloat(r.line.qty) || 1, product_uom: uomId,
+      location_id: srcLocId, location_dest_id: destLocId,
+    };
+  });
+  if (moveVals.length) {
+    await jsonRpc('object', 'execute_kw', [ODOO_DB, uid, ODOO_KEY, 'stock.move', 'create', [moveVals]]);
+  }
+  const matchedCode = results.filter(r => r.status === 'code');
+  const matchedName = results.filter(r => r.status === 'name');
+  const notFound = results.filter(r => r.status === 'notfound');
+  return { pickingId, results, matchedCode, matchedName, notFound };
+}
+
+// ── รายการการ์ดเรล (สำหรับ /อัพเดทสต็อกการ์ดเรล) ─────────────────────────────
+export const GUARDRAIL_PRODUCTS = [
+  { code: '15FG-FG2-02-01-01-00-00-00-00', label: 'แผ่นการ์ดเรล หนา 3.2mm ยาว 4.32m', group: 'plate' },
+  { code: '15FG-FG2-02-01-02-00-00-00-00', label: 'แผ่นการ์ดเรล หนา 2.5mm ยาว 4.32m', group: 'plate' },
+  { code: '15FG-FG2-03-01-00-00-00-00-00', label: 'แผ่นประกับเฉียงการ์ดเรล', group: 'plate' },
+  { code: '15FG-FG2-04-01-02-00-00-00-00', label: 'แผ่นปลายการ์ดเรล หนา 3.2mm', group: 'plate' },
+  { code: '15FG-FG2-01-01-01-00-00-00-00', label: 'BLOCK OUT กลม 101.6x4x250mm', group: 'plate' },
+  { code: '15FG-FG2-04-01-02-01-00-00-00', label: 'แผ่นปลายการ์ดเรล หนา 3.2mm (Bull Nose)', group: 'plate' },
+  { code: '15FG-FG2-05-01-00-00-00-00-00', label: 'แผ่นเสริมกำลังการ์ดเรล', group: 'plate' },
+  { code: '15FG-FG2-06-02-01-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 3.2mm', group: 'plate' },
+  { code: '15FG-FG2-06-02-02-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 2.5mm', group: 'plate' },
+  { code: '07RP-055-04-01-01-00-00-00-00', label: 'แผ่นปลายการ์ดเรล ติดสะพาน กว้าง370mm ยาว700mm หนา3.2mm', group: 'plate' },
+  { code: '15FG-FG2-06-01-06-00-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2600mm เจาะ4รู (ทล.)', group: 'post' },
+  { code: '15FG-FG2-06-01-07-01-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2m เจาะ1รู (กทม.)', group: 'post' },
+  { code: '15FG-FG2-07-01-01-00-00-00-00', label: 'เสาองศาการ์ดเรล 60° ยาว2000mm', group: 'post' },
+  { code: '15FG-FG2-07-01-02-00-00-00-00', label: 'เสาองศาการ์ดเรล 60° ยาว2500mm', group: 'post' },
+  { code: '15FG-FG2-08-01-01-00-00-00-00', label: 'เสาองศาการ์ดเรล 30° ยาว2000mm', group: 'post' },
+  { code: '15FG-FG2-08-01-02-00-00-00-00', label: 'เสาองศาการ์ดเรล 30° ยาว2500mm', group: 'post' },
+  { code: '15FG-GP1-00-01-01-01-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2000mm เจาะ2รู แบบเชื่อมฝา+Steel plate (ทล.)', group: 'post' },
+  { code: '15FG-GP1-01-02-01-01-00-00-00', label: 'เสาการ์ดเรล เจาะ2รู ยาว2000mm (กทม.)', group: 'post' },
+  { code: '15FG-GP1-02-02-01-01-00-00-00', label: 'เสาการ์ดเรล เจาะ2รู+เพลทฐาน ยาว920mm (กทม.)', group: 'post' },
+  { code: '07RP-057-03-01-04-00-00-00-00', label: 'เสาการ์ดเรล 101.6mm ยาว2500mm เจาะ2รู (ทล.)', group: 'post' },
+  { code: '15FG-GP1-00-01-02-01-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2000mm เจาะ1รู แบบเชื่อมฝา (ทช.)', group: 'post' },
+  { code: '07RP-037-17-01-01-00-00-00-00', label: 'นอตการ์ดเรล สั้น 5/8"x1-1/4"', group: 'accessory' },
+  { code: '07RP-037-15-01-01-00-00-00-00', label: 'นอตการ์ดเรล กลาง 5/8"x2-1/2"', group: 'accessory' },
+  { code: '07RP-037-16-01-02-00-00-00-00', label: 'นอตการ์ดเรล ยาว 5/8"x7-1/4"', group: 'accessory' },
+  { code: '07RP-040-01-01-01-00-00-00-00', label: 'BLOCK OUT ตัวซีการ์ดเรล 150x75x330mm', group: 'accessory' },
+  { code: '07RP-017-00-02-01-00-00-00-00', label: 'ประกับนอตยาวการ์ดเรล 60x60x15mm', group: 'accessory' },
+  { code: '07RP-017-02-02-01-00-00-00-00', label: 'ประกับนอตยาวการ์ดเรล 50x60x15mm', group: 'accessory' },
+  { code: '07RP-010-00-01-03-00-00-00-00', label: 'ฐานเสาการ์ดเรล ตอม่อ 0.70x0.70x0.80m (1 โบลท์)', group: 'accessory' },
+  { code: '07RP-010-00-01-03-01-00-00-00', label: 'ฐานเสาการ์ดเรล ตอม่อ 0.70x0.70x0.80m (I-Bolt 2ตัว)', group: 'accessory' },
+  { code: '07RP-018-02-01-01-00-00-00-00', label: 'เป้าคางหมู 100x150mm', group: 'accessory' },
+  { code: '07RP-018-01-01-01-00-00-00-00', label: 'เป้ากลม 100mm', group: 'accessory' },
+  { code: '10RB-004-01-01-01-01-00-00-00', label: 'เป้าสะท้อนแสงการ์ดเรล ทรงโค้ง 350x90mm เจาะ2รู (กทม.)', group: 'accessory' },
+];
+
+// ── รายการอุปกรณ์ไฟฟ้า (1392 รหัส) สำหรับ /อัพเดทสต็อกอุปกรณ์ไฟฟ้า ──
+export const ELECTRICAL_PRODUCTS = [
+  { code: '07RP-0106-04-00-02-01-01-04-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0114-00-00-00-01-01-00-00', label: 'ปลอกหุ้มหางปลา----V-5-สี-ดำ--', group: 'lug' },
+  { code: '07RP-0114-00-00-00-01-02-00-00', label: 'ปลอกหุ้มหางปลา----V-5-สี-เทา--', group: 'lug' },
+  { code: '07RP-0114-00-00-00-01-03-00-00', label: 'ปลอกหุ้มหางปลา----V-5-สี-น้ำเงิน--', group: 'lug' },
+  { code: '07RP-0114-00-00-00-01-04-00-00', label: 'ปลอกหุ้มหางปลา----V-5-สี-น้ำตาล--', group: 'lug' },
+  { code: '07RP-031-05-01-00-02-00-00-01', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ CL16-6----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-05-01-00-03-00-00-01', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ CL35-8----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-05-01-00-04-00-00-01', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ CL10-8----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-05-01-00-05-00-00-01', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ CL25-8----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-05-01-00-06-00-01-00', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ ST6-8---ขั้นต่ำ100ชิ้น-', group: 'lug' },
+  { code: '07RP-031-06-01-00-01-00-00-01', label: 'หางปลา-ชนิดกลม หุ้มปลอก สีน้ำเงิน-ทองแดง--เบอร์ RF2.5-6----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-07-01-00-01-00-00-01', label: 'หางปลา-ชนิดแฉก หุ้มปลอก สีน้ำเงิน-ทองแดง--เบอร์ YF2.5-5s----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-043-01-01-01-00-00-00-00', label: 'แคล้ม-หัวใจ-เหล็กชุบทองแดง-ขนาด 5/8"-----', group: 'clamp' },
+  { code: '07RP-043-02-01-01-00-00-00-00', label: 'แคล้ม-ประกับรัดท่อ IMC-ชุบขาว SC-ขนาด 2"-----', group: 'clamp' },
+  { code: '07RP-043-02-01-02-00-00-00-00', label: 'แคล้ม-ประกับรัดท่อ IMC-ชุบขาว SC-ขนาด 1/2"-----', group: 'clamp' },
+  { code: '07RP-049-01-00-01-01-BK-00-01', label: 'เทป-พันสายไฟ--ขนาด 3/4” ยาว 10 เมตร-No.Temflex 150-สี-ดำ--ยี่ห้อ 3M', group: 'tape' },
+  { code: '07RP-049-02-00-01-00-RD-00-00', label: 'เทป-ฝังใต้ดิน/เทปเตือนอันตราย--ขนาด 6" ยาว 305 เมตร--สี-แดง--', group: 'tape' },
+  { code: '07RP-049-03-00-01-01-BK-00-01', label: 'เทป-พันละลาย--ขนาด 3/4” ยาว 30 ฟุต-Scotch No.23-สี-ดำ--ยี่ห้อ 3M', group: 'tape' },
+  { code: '06RM-BR12-02-00-00-01-00-00-00', label: 'หางปลา-ชนิดแฉก หุ้มปลอก---เบอร์ SV 5.5-5----', group: 'lug' },
+  { code: '06RM-BR12-02-01-00-01-00-00-01', label: 'หางปลา-ชนิดแฉก หุ้มปลอก-ทองแดง--เบอร์ YF4-4----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-010-00-01-05-00-00-00-00', label: 'ฐานเสาไฟฟ้า 9 เมตร ตอม่อ--ฐานปูน-ขนาด 0.80x0.40 สูง 1.20 เมตร-----', group: 'base' },
+  { code: '07RP-0106-00-00-00-00-00-00-00', label: 'สายไฟ-ขนาด ------ ใช้รหัสนี้สั่งซื้อ ในกรณีที่ยังไม่ทราบยี่ห้อ', group: 'wire_other' },
+  { code: '07RP-0106-01-00-01-01-01-01-01', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-02', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-03', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-04', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-05', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-06', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-01-07', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-01', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-02', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-03', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-04', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-05', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-06', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-02-07', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-01', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-02', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-03', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-04', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-05', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-06', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-03-07', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-01', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-02', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-03', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-04', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-05', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-06', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-01-01-01-04-07', label: 'สายไฟ-CV--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-01', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-02', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-03', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-04', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-05', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-06', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-01-07', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-01', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-02', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-03', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-04', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-05', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-06', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-02-07', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-01', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-02', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-03', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-04', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-05', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-06', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-03-07', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-01', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-02', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-03', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-04', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-05', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-06', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-02-01-01-04-07', label: 'สายไฟ-CV--2x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-01', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-02', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-03', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-04', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-05', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-06', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-01-07', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-01', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-02', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-03', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-04', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-05', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-06', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-02-07', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-01', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-02', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-03', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-04', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-05', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-06', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-03-07', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-01', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ/ยาวตลอด-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-02', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-03', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-04', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ/ยาวตลอด-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-05', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-06', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-03-01-01-04-07', label: 'สายไฟ-CV--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-01', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-02', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-03', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-04', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-05', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-06', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-01-07', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-01', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-02', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-03', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-04', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-05', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-06', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-02-07', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-01', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-02', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-03', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-04', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-05', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-06', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-03-07', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-01', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ/ยาวตลอด-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-02', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-03', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-04', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ/ยาวตลอด-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-05', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-06', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-04-01-01-04-07', label: 'สายไฟ-CV--2x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-01', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-02', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-03', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-04', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-05', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-06', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-01-07', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-01', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-02', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-03', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-04', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-05', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-06', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-02-07', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-01', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-02', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-03', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-04', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-05', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-06', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-03-07', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-01', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-02', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-03', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-04', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-05', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-06', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-05-01-01-04-07', label: 'สายไฟ-CV--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-01', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-02', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-03', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-04', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-05', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-06', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-01-07', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-01', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-02', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-03', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-04', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-05', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-06', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-02-07', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-01', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-02', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-03', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-04', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-05', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-06', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-03-07', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-01', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-02', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-03', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-04', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-05', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-06', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-06-01-01-04-07', label: 'สายไฟ-CV--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-01', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-02', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-03', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-04', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-05', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-06', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-01-07', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-01', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-02', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-03', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-04', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-05', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-06', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-02-07', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-01', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-02', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-03', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-04', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-05', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-06', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-03-07', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-01', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-02', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-03', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-04', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-05', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-06', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-07-01-01-04-07', label: 'สายไฟ-CV--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-01', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-02', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-03', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-04', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-05', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-06', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-01-07', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-01', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-02', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-03', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-04', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-05', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-06', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-02-07', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-01', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-02', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-03', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-04', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-05', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-06', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-03-07', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-01', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-02', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-03', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-04', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-05', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-06', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-08-01-01-04-07', label: 'สายไฟ-CV--3x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-01', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-02', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-03', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-04', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-05', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-06', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-01-07', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-01', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-02', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-03', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-04', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-05', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-06', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-02-07', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-01', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-02', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-03', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-04', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-05', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-06', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-03-07', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-01', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-02', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-03', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-04', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-05', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-06', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-09-01-01-04-07', label: 'สายไฟ-CV--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-01', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-02', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-03', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-04', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-05', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-06', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-01-07', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-01', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-02', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-03', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-04', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-05', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-06', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-02-07', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-01', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-02', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-03', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-04', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-05', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-06', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-03-07', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-01', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-02', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-03', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-04', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-05', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-06', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-10-01-01-04-07', label: 'สายไฟ-CV--3x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-01', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-02', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-03', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-04', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-05', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-06', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-01-07', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-01', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-02', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-03', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-04', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-05', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-06', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-02-07', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-01', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-02', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-03', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-04', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-05', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-06', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-03-07', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-01', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-02', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-03', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-04', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-05', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-06', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-11-01-01-04-07', label: 'สายไฟ-CV--4x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-01', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-02', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-03', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-04', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-05', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-06', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-01-07', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-01', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-02', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-03', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-04', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-05', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-06', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-02-07', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-01', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-02', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-03', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-04', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-05', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-06', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-03-07', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-01', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-02', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-03', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-04', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-05', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-06', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-12-01-01-04-07', label: 'สายไฟ-CV--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-01', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-02', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-03', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-04', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-05', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-06', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-01-07', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-01', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-02', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-03', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-04', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-05', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-06', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-02-07', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-01', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-02', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-03', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-04', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-05', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-06', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-03-07', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-01', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-02', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-03', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-04', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-05', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-06', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-13-01-01-04-07', label: 'สายไฟ-CV--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-14-01-01-01-01', label: 'สายไฟ-CV--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-14-01-01-02-01', label: 'สายไฟ-CV--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-14-01-01-03-01', label: 'สายไฟ-CV--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-14-01-01-04-01', label: 'สายไฟ-CV--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-15-01-01-01-01', label: 'สายไฟ-CV--4x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-15-01-01-02-01', label: 'สายไฟ-CV--4x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-15-01-01-03-01', label: 'สายไฟ-CV--4x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-01-00-15-01-01-04-01', label: 'สายไฟ-CV--4x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ UNITED CABLE', group: 'wire_CV' },
+  { code: '07RP-0106-02-00-01-01-01-01-01', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-02', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-03', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-04', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-05', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-06', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-01-07', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-01', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-02', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-03', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-04', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-05', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-06', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-02-07', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-01', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-02', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-03', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-04', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-05', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-06', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-03-07', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-01', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-02', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-03', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-04', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-05', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-06', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-01-01-01-04-07', label: 'สายไฟ-NYY--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-01', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-02', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-03', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-04', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-05', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-06', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-01-07', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-01', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-02', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-03', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-04', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-05', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-06', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-02-07', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-01', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-02', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-03', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-04', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-05', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-06', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-03-07', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-01', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-02', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-03', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-04', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-05', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-06', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-02-01-01-04-07', label: 'สายไฟ-NYY--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-01', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-02', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-03', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-04', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-05', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-06', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-01-07', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-01', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-02', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-03', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-04', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-05', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-06', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-02-07', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-01', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-02', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-03', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-04', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-05', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-06', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-03-07', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-01', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-02', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-03', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-04', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-05', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-06', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-03-01-01-04-07', label: 'สายไฟ-NYY--2x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-01', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-02', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-03', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-04', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-05', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-06', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-01-07', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-01', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-02', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-03', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-04', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-05', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-06', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-02-07', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-01', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-02', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-03', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-04', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-05', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-06', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-03-07', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-01', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-02', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-03', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-04', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-05', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-06', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-04-01-01-04-07', label: 'สายไฟ-NYY--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-01', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-02', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-03', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-04', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-05', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-06', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-01-07', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-01', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-02', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-03', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-04', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-05', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-06', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-02-07', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-01', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-02', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-03', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-04', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-05', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-06', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-03-07', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-01', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-02', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-03', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-04', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-05', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-06', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-05-01-01-04-07', label: 'สายไฟ-NYY--3x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-01', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-02', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-03', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-04', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-05', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-06', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-01-07', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-01', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-02', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-03', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-04', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-05', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-06', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-02-07', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-01', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-02', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-03', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-04', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-05', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-06', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-03-07', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-01', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-02', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-03', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-04', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-05', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-06', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-06-01-01-04-07', label: 'สายไฟ-NYY--4x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-01', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-02', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-03', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-04', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-05', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-06', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-01-07', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-01', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-02', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-03', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-04', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-05', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-06', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-02-07', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-01', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-02', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-03', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-04', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-05', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-06', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-03-07', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-01', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-02', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-03', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-04', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-05', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-06', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-07-01-01-04-07', label: 'สายไฟ-NYY--4x25mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-01-01', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-01-02', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-02-01', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-02-02', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-03-01', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-03-02', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-04-01', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-08-01-01-04-02', label: 'สายไฟ-NYY--2x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ BANGKOK CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-09-01-01-02-01', label: 'สายไฟ-NYY--4x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-09-01-01-03-01', label: 'สายไฟ-NYY--4x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-09-01-01-04-01', label: 'สายไฟ-NYY--4x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-01-01', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-01-02', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-02-01', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-02-02', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-03-01', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-03-02', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-04-01', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-04-02', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-10-01-01-04-03', label: 'สายไฟ-NYY--4x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ YASAKI', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-11-01-01-01-01', label: 'สายไฟ-NYY--4x1.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-11-01-01-02-01', label: 'สายไฟ-NYY--4x1.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-11-01-01-03-01', label: 'สายไฟ-NYY--4x1.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-11-01-01-04-01', label: 'สายไฟ-NYY--4x1.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-02-00-12-01-01-01-01', label: 'สายไฟ-NYY--2x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ ยาวตลอด-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-01', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-02', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-03', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-04', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-05', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-06', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-01-07', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-01', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-02', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-03', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-04', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-05', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-06', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-02-07', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-01', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-02', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-03', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-04', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-05', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-06', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-03-07', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-01', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-02', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-03', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-04', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-05', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-06', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-01-01-01-04-07', label: 'สายไฟ-NYY-G--3C 2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-01', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-02', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-03', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-04', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-05', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-06', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-01-07', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-01', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-02', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-03', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-04', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-05', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-06', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-02-07', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-01', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-02', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-03', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-04', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-05', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-06', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-03-07', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-01', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-02', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-03', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-04', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-05', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-06', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_NYY' },
+  { code: '07RP-0106-03-00-02-01-01-04-07', label: 'สายไฟ-NYY-G--3x16/16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_NYY' },
+  { code: '07RP-0106-04-00-01-01-01-01-01', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-02', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-03', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-04', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-05', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-06', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-01-07', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-01', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-02', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-03', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-04', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-05', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-06', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-02-07', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-01', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-02', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-03', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-04', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-05', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-06', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-03-07', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-01', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-02', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-03', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-04', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-05', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-06', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-01-01-01-04-07', label: 'สายไฟ-THW--1x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-01-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-02-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-03-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-01-04-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-01-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-02-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-03-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-02-04-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-01-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-02-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-03-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-01', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-02', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-03', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-04', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-05', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-06', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-02-01-03-04-07', label: 'สายไฟ-THW--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-01-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีขาว-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-02-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-03-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-04-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-05-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีแดง-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-06-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีน้ำตาล-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-01-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-02-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-03-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-01', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-02', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-03', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-04', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-05', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-06', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-03-01-07-04-07', label: 'สายไฟ-THW--1x2.5mm-มาตรฐาน มอก.--สีฟ้า-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-01', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-02', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-03', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-04', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-05', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-06', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-01-07', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-01', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-02', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-03', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-04', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-05', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-06', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-02-07', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-01', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-02', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-03', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-04', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-05', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-06', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-03-07', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-01', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-02', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-03', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-04', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-05', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-06', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-04-01-01-04-07', label: 'สายไฟ-THW--1x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-05-01-01-01-01', label: 'สายไฟ-THW--2x1mm-มาตรฐาน มอก.--สีดำ-แดง-100เมตร/ม้วน-ยี่ห้อ SUN', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-05-01-01-02-01', label: 'สายไฟ-THW--2x1mm-มาตรฐาน มอก.--สีดำ-แดง-500เมตร/ม้วน-ยี่ห้อ SUN', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-05-01-01-03-01', label: 'สายไฟ-THW--2x1mm-มาตรฐาน มอก.--สีดำ-แดง-1000เมตร/ม้วน-ยี่ห้อ SUN', group: 'wire_THW' },
+  { code: '07RP-0106-04-00-05-01-01-04-01', label: 'สายไฟ-THW--2x1mm-มาตรฐาน มอก.--สีดำ-แดง-ตัดเศษ-ยี่ห้อ SUN', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-01', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-02', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-03', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-04', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-05', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-06', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-01-07', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-01', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-02', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-03', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-04', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-05', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-06', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-02-07', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-01', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-02', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-03', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-04', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-05', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-06', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-03-07', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-01', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-02', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-03', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-04', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-05', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-06', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-01-01-01-04-07', label: 'สายไฟ-THW-A--1x16mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-01', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-02', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-03', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-04', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-05', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-06', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-01-07', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-01', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-02', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-03', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-04', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-05', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-06', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-02-07', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-01', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-02', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-03', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-04', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-05', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-06', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-03-07', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-01', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-02', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-03', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-04', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-05', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-06', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-02-01-01-04-07', label: 'สายไฟ-THW-A--1x2.5mm-มาตรฐาน มอก.--สีเขียว-เหลือง-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-01', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-02', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-03', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-04', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-05', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-06', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-01-07', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-01', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-02', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-03', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-04', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-05', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-06', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-02-07', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-01', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-02', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-03', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-04', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-05', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-06', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-03-07', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-01', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-02', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-03', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-04', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-05', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-06', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_THW' },
+  { code: '07RP-0106-05-00-03-01-01-04-07', label: 'สายไฟ-THW-A--1x50mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_THW' },
+  { code: '07RP-0106-06-00-01-01-01-01-01', label: 'สายไฟ-VAF--1x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_VAF' },
+  { code: '07RP-0106-06-00-01-01-01-02-01', label: 'สายไฟ-VAF--1x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_VAF' },
+  { code: '07RP-0106-06-00-01-01-01-03-01', label: 'สายไฟ-VAF--1x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ BANGKOK CABLE', group: 'wire_VAF' },
+  { code: '07RP-0106-06-00-01-01-01-04-01', label: 'สายไฟ-VAF--1x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ BANGKOK CABLE', group: 'wire_VAF' },
+  { code: '07RP-0106-07-00-01-01-01-01-01', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-02', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-03', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-04', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-05', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-06', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-01-07', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-01', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-02', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-03', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-04', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-05', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-06', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-02-07', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-01', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-02', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-03', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-04', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-05', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-06', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-03-07', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-01', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-02', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-03', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-04', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-05', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-06', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-01-01-01-04-07', label: 'สายไฟ-VCT--2x15mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-01', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-02', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-03', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-04', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-05', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-06', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-01-07', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-01', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-02', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-03', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-04', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-05', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-06', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-02-07', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-01', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-02', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-03', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-04', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-05', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-06', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-03-07', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-01', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-02', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-03', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-04', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-05', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-06', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-02-01-01-04-07', label: 'สายไฟ-VCT--2x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-01', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-02', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-03', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-04', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-05', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-06', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-01-07', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-01', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-02', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-03', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-04', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-05', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-06', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-02-07', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-01', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-02', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-03', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-04', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-05', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-06', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-03-07', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-01', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-02', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-03', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-04', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-05', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-06', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-03-01-01-04-07', label: 'สายไฟ-VCT--3x10mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-01', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-02', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-03', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-04', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-05', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-06', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-01-07', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-01', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-02', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-03', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-04', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-05', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-06', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-02-07', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-01', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-02', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-03', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-04', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-05', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-06', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-03-07', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-01', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-02', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-03', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-04', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-05', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-06', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-04-01-01-04-07', label: 'สายไฟ-VCT--3x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-01', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-02', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-03', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-04', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-05', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-06', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-01-07', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-01', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-02', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-03', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-04', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-05', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-06', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-02-07', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-01', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-02', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-03', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-04', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-05', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-06', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-03-07', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-01', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-02', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-03', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-04', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-05', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-06', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-05-01-01-04-07', label: 'สายไฟ-VCT--3x2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-01', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-02', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-03', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-04', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-05', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-06', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-01-07', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-01', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-02', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-03', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-04', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-05', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-06', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-02-07', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-01', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-02', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-03', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-04', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-05', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-06', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-03-07', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-01', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-02', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-03', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-04', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-05', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-06', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-06-01-01-04-07', label: 'สายไฟ-VCT--3x35mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-01', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-02', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-03', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-04', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-05', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-06', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-01-07', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-01', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-02', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-03', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-04', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-05', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-06', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-02-07', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-01', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-02', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-03', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-04', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-05', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-06', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-03-07', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-01', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-02', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-03', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-04', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-05', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-06', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-07-01-01-04-07', label: 'สายไฟ-VCT--4x1mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-01', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-02', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-03', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-04', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-05', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-06', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-01-07', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-01', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-02', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-03', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-04', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-05', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-06', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-02-07', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-01', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-02', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-03', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-04', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-05', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-06', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-03-07', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-01', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-02', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-03', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-04', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-05', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-06', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-07-00-08-01-01-04-07', label: 'สายไฟ-VCT--4x6mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-01', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-02', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-03', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-04', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-05', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-06', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-01-07', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-01', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-02', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-03', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-04', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-05', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-06', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-02-07', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-01', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-02', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-03', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-04', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-05', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-06', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-03-07', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-01', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ ENTERNAL CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-02', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ THAI UNION', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-03', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ S.SUPER CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-04', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-05', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ VENINE CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-06', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ TRIPLE N', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-01-01-01-04-07', label: 'สายไฟ-VCT-G--4x4/4mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ NATION CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-02-02-01-01-01', label: 'สายไฟ-VCT-G--2x2.5/2.5mm-มาตรฐาน มอก.--สีดำ-100เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-02-02-01-02-01', label: 'สายไฟ-VCT-G--2x2.5/2.5mm-มาตรฐาน มอก.--สีดำ-500เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-02-02-01-03-01', label: 'สายไฟ-VCT-G--2x2.5/2.5mm-มาตรฐาน มอก.--สีดำ-1000เมตร/ม้วน-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-0106-08-00-02-02-01-04-01', label: 'สายไฟ-VCT-G--2x2.5/2.5mm-มาตรฐาน มอก.--สีดำ-ตัดเศษ-ยี่ห้อ UNITED CABLE', group: 'wire_VCT' },
+  { code: '07RP-014-00-00-01-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร-----', group: 'ground' },
+  { code: '07RP-014-00-00-02-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร เชื่อมสาย + บาร์L ชุบกัลวาไนซ์-----', group: 'ground' },
+  { code: '07RP-014-00-00-03-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร เชื่อมสาย+แหวน-----', group: 'ground' },
+  { code: '07RP-014-00-00-04-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร เชื่อมสาย+หัวใจ-----', group: 'ground' },
+  { code: '07RP-014-00-00-05-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร เชื่อมสายยาว 2 เมตร+เข้าหางปลาเบอร์ 16-----', group: 'ground' },
+  { code: '07RP-014-00-00-06-00-00-00-00', label: 'แท่งกราวด์ทองแดง---ขนาด (5/8")16mmx2.4 เมตร เชื่อมสาย + บาร์Z ชุบกัลวาไนซ์-----', group: 'ground' },
+  { code: '07RP-014-01-00-00-00-00-00-00', label: 'แท่งกราวด์ทองแดง-ชนิด Exothermic Welding-------', group: 'ground' },
+  { code: '07RP-031-03-01-00-01-00-00-00', label: 'หางปลา-แบบแฉก เปลือย-ทองแดง--เบอร์ Y2.5-6----', group: 'lug' },
+  { code: '07RP-031-03-01-00-02-00-00-00', label: 'หางปลา-แบบแฉก เปลือย-ทองแดง--เบอร์ Y2.5-5S----', group: 'lug' },
+  { code: '07RP-031-05-01-00-01-00-00-01', label: 'หางปลา-ชนิดกลม รุ่นหนา ทรงยุโรป-ทองแดง--เบอร์ CL10-6----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-031-08-01-00-01-00-00-01', label: 'หางปลา-แรงสูง 2รู-ทองแดง--เบอร์ HTL35-8----ยี่ห้อ T-LUG', group: 'lug' },
+  { code: '07RP-037-13-01-01-00-00-00-00', label: 'นอต-สำหรับจับยึดเสาไฟ-เหล็กชุบกัลวาไนซ์-ขนาด 5/8" สกรูหัวสี่เหลี่ยม ยาว 14"(เกลียวขนาด6") ', group: 'bolt' },
+  { code: '07RP-043-02-01-03-00-00-00-00', label: 'แคล้ม-ประกับรัดท่อ IMC-ชุบขาว SC-ขนาด 1-1/2"-----', group: 'clamp' },
+  { code: '07RP-043-02-01-04-00-00-00-00', label: 'แคล้ม-ประกับรัดท่อ IMC-ชุบขาว SC-ขนาด 1-1/4"-----', group: 'clamp' },
+  { code: '07RP-043-02-01-05-00-00-00-00', label: 'แคล้ม-ประกับรัดท่อ IMC-ชุบขาว SC-ขนาด 2"1/2', group: 'clamp' },
+  { code: '07RP-043-03-01-01-00-00-00-00', label: 'แคล้ม-กราวด์ (U-Clamp)-ทองเหลือง-2สกรู 240-300-----', group: 'clamp' },
+  { code: '07RP-044-01-01-00-01-00-00-01', label: 'สลิป-ข้อต่อสาย แบบย้ำเปลือย-ทองแดง--เบอร์ CSL 10x25mm----ยี่ห้อ T-LUG', group: 'sleeve' },
+  { code: '07RP-044-01-01-00-02-00-00-01', label: 'สลิป-ข้อต่อสาย แบบย้ำเปลือย-ทองแดง--เบอร์ CSL 16x33mm----ยี่ห้อ T-LUG', group: 'sleeve' },
+  { code: '07RP-044-01-01-00-03-00-00-01', label: 'สลิป-ข้อต่อสาย แบบย้ำเปลือย-ทองแดง--เบอร์ CSL 25x33mm----ยี่ห้อ T-LUG', group: 'sleeve' },
+  { code: '07RP-044-01-01-00-04-00-00-01', label: 'สลิป-ข้อต่อสาย แบบย้ำเปลือย-ทองแดง--เบอร์ CSL 35x38mm----ยี่ห้อ T-LUG', group: 'sleeve' },
+  { code: '07RP-045-01-01-01-00-00-00-00', label: 'คอนเนคเตอร์-ท่ออ่อน-เหล็กกันน้ำ สีเทา ขอบเหลือง-ขนาด 2"-----', group: 'connector' },
+  { code: '07RP-045-01-01-02-00-00-00-00', label: 'คอนเนคเตอร์-ท่ออ่อน-เหล็กกันน้ำ สีเทา ขอบเหลือง-ขนาด 1/2"-----', group: 'connector' },
+  { code: '07RP-045-01-01-03-00-00-00-00', label: 'คอนเนคเตอร์-ท่ออ่อน-เหล็กกันน้ำ สีเทา ขอบเหลือง-ขนาด 1-1/2"-----', group: 'connector' },
+  { code: '07RP-045-01-01-04-00-00-00-00', label: 'คอนเนคเตอร์-ท่ออ่อน-เหล็กกันน้ำ สีเทา ขอบเหลือง-ขนาด 2-1/2"-----', group: 'connector' },
+  { code: '07RP-046-01-02-02-00-00-00-00', label: 'รางซี C-Channel-แบบตื้น-ธรรมดา-ขนาด 25x40cm หนา 1.5mm ยาว 1.2m-----', group: 'channel' },
+  { code: '07RP-057-02-01-01-00-01-00-00', label: 'ท่อ-ร้อยสายไฟ-HDPE-ขนาด 50mm--สี-ดำคาดแดง---', group: 'pipe' },
+  { code: '07RP-057-02-02-01-00-00-00-00', label: 'ท่อ-ร้อยสายไฟ-ท่อเหล็กประปาคาดเหลือง-ขนาด 2" ยาว 6 เมตร-----', group: 'pipe' },
+  { code: '07RP-057-02-03-01-00-00-00-00', label: 'ท่อ-ร้อยสายไฟ-IMC-ขนาด 1.1/4"-----', group: 'pipe' },
+  { code: '07RP-057-02-03-02-00-00-00-00', label: 'ท่อ-ร้อยสายไฟ-IMC-ขนาด 1.1/2"-----', group: 'pipe' },
+  { code: '07RP-057-02-03-03-00-00-00-00', label: 'ท่อ-ร้อยสายไฟ-IMC-ขนาด 2"', group: 'pipe' },
+  { code: '07RP-057-04-01-01-00-00-00-01', label: 'ท่อ-RSC-เหล็กชุบกัลวาไนซ์-ขนาด 2" ยาว 3m-----ยี่ห้อ DAIWA', group: 'pipe' },
+  { code: '07RP-057-04-01-02-00-00-00-01', label: 'ท่อ-RSC-เหล็กชุบกัลวาไนซ์-ขนาด 1/2" ยาว 3m-----ยี่ห้อ DAIWA', group: 'pipe' },
+  { code: '07RP-057-04-01-03-00-00-00-01', label: 'ท่อ-RSC-เหล็กชุบกัลวาไนซ์-ขนาด 1-1/2" ยาว 3m-----ยี่ห้อ DAIWA', group: 'pipe' },
+  { code: '07RP-057-04-01-04-00-00-00-01', label: 'ท่อ-RSC-เหล็กชุบกัลวาไนซ์-ขนาด 2-1/2" ยาว 3m-----ยี่ห้อ DAIWA', group: 'pipe' },
+  { code: '07RP-057-04-01-05-00-00-00-00', label: 'ท่อ-RSC-เหล็กชุบกัลวาไนซ์-ขนาด 1" ยาว 3m-----', group: 'pipe' },
+  { code: '07RP-064-01-00-01-00-00-00-00', label: 'ข้อ-งอ RSC--ขนาด 2 1/2"-----', group: 'pipe' },
+  { code: '07RP-064-02-00-01-00-00-00-00', label: 'ข้อ-ต่อตรง RSC--ขนาด 2 1/2"-----', group: 'pipe' },
+  { code: '07RP-101-00-00-00-00-00-00-00', label: 'กล่องควบคุม--สวิตซ์+ท่อFlex ชนิดกันน้ำ-- ขนาด 1"พร้อมสายไฟเข้าตู้และป้ายไฟ', group: 'box' },
+];
+
+// ── เช็คสต็อกการ์ดเรลทุกรหัส ──────────────────────────────────────────────────
+export async function odooGuardrailStock(companyId) {
+  const codes = GUARDRAIL_PRODUCTS.map(p => p.code);
+  const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
+  const rows = await searchRead('product.product', [['default_code', 'in', codes]],
+    ['default_code', 'name', 'qty_available', 'uom_id'], codes.length + 5, ctx);
+  const byCode = new Map();
+  for (const r of rows) byCode.set(r.default_code, r);
+  return GUARDRAIL_PRODUCTS.map(p => {
+    const r = byCode.get(p.code);
+    return { code: p.code, label: p.label, group: p.group, found: !!r,
+      qty: r ? r.qty_available : null, uom: (r && Array.isArray(r.uom_id)) ? r.uom_id[1] : '' };
+  });
+}
+
+// ── เช็คสต็อกอุปกรณ์ไฟฟ้า (batch 300 กัน timeout) ─────────────────────────────
+export async function odooElectricalStock(companyId) {
+  const ctx = companyId ? { allowed_company_ids: [companyId], company_id: companyId, force_company: companyId } : null;
+  const byCode = new Map();
+  const BATCH = 300;
+  const allCodes = ELECTRICAL_PRODUCTS.map(p => p.code);
+  for (let i = 0; i < allCodes.length; i += BATCH) {
+    const chunk = allCodes.slice(i, i + BATCH);
+    const rows = await searchRead('product.product', [['default_code', 'in', chunk]],
+      ['default_code', 'name', 'qty_available', 'uom_id'], chunk.length + 5, ctx);
+    for (const r of rows) byCode.set(r.default_code, r);
+  }
+  return ELECTRICAL_PRODUCTS.map(p => {
+    const r = byCode.get(p.code);
+    return { code: p.code, label: p.label, group: p.group, found: !!r,
+      qty: r ? r.qty_available : null, uom: (r && Array.isArray(r.uom_id)) ? r.uom_id[1] : '' };
+  });
+}
+
+// ── ดึงรายละเอียดเอกสาร + รูป สำหรับ /รายงาน ─────────────────────────────────
+export async function odooDocDetail(model, id) {
+  let doc = {};
+  if (model === 'purchase.order') {
+    const rows = await searchRead('purchase.order', [['id','=',id]], ['name','partner_id','date_order','amount_total'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('purchase.order.line', [['order_id','=',id]], ['product_id','name','product_qty','product_uom'], 50);
+    doc = { name: 'PO ' + r.name, partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
+      date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
+      lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
+  } else if (model === 'sale.order') {
+    const rows = await searchRead('sale.order', [['id','=',id]], ['name','partner_id','date_order','amount_total'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('sale.order.line', [['order_id','=',id]], ['product_id','name','product_uom_qty','product_uom'], 50);
+    doc = { name: 'SO ' + r.name, partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ลูกค้า',
+      date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
+      lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_uom_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
+  } else if (model === 'purchase.request') {
+    const rows = await searchRead('purchase.request', [['id','=',id]], ['name','requested_by','date_start'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const lines = await searchRead('purchase.request.line', [['request_id','=',id]], ['product_id','name','product_qty','product_uom_id'], 50);
+    doc = { name: 'PR ' + r.name, partner: Array.isArray(r.requested_by) ? r.requested_by[1] : '', partnerLabel: 'ผู้ขอ',
+      date: String(r.date_start || '').slice(0,10), total: 0,
+      lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_qty || 0, uom: Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : '' })) };
+  } else { return null; }
+  try {
+    const atts = await searchRead('ir.attachment',
+      ['&','&',['res_model','=',model],['res_id','=',id],['mimetype','ilike','image']], ['id','name'], 50);
+    doc.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
+  } catch(e) { doc.images = []; }
+  return doc;
+}
+
+// ── ดึง stock.move ที่เพิ่งทำเสร็จ (done) หลัง sinceIso — ทุกการเคลื่อนไหวสต็อก ──
+export async function odooRecentStockMoves(sinceIso, companyIds) {
+  let domain = ['&', '&',
+    ['state', '=', 'done'], ['write_date', '>', sinceIso], ['date', '!=', false]
+  ];
+  if (Array.isArray(companyIds) && companyIds.length) {
+    domain = ['&', ['company_id', 'in', companyIds], ...domain];
+  }
+  const fields = ['id', 'reference', 'origin', 'partner_id', 'product_id', 'product_uom_qty', 'product_uom',
+    'location_id', 'location_dest_id', 'write_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
+  let rows = [];
+  try {
+    rows = await searchRead('stock.move', domain, fields, 60);
+  } catch (e) {
+    return { error: e.message, moves: [] };
+  }
+  if (!rows.length) return { moves: [] };
+
+  const locIds = new Set();
+  rows.forEach(r => {
+    if (Array.isArray(r.location_id)) locIds.add(r.location_id[0]);
+    if (Array.isArray(r.location_dest_id)) locIds.add(r.location_dest_id[0]);
+  });
+  const locUsage = {};
+  if (locIds.size) {
+    try {
+      const locs = await searchRead('stock.location', [['id', 'in', [...locIds]]], ['id', 'usage'], 200);
+      for (const l of locs) locUsage[l.id] = l.usage;
+    } catch (e) { /* ใช้ usage ว่าง */ }
+  }
+
+  const uidSet = [...new Set(rows.map(r => Array.isArray(r.write_uid) ? r.write_uid[0] : null).filter(Boolean))];
+  const userMap = {};
+  if (uidSet.length) {
+    try {
+      const users = await searchRead('res.users', [['id', 'in', uidSet]], ['id', 'name', 'login'], 50);
+      for (const u of users) userMap[u.id] = { name: u.name, login: u.login };
+    } catch (e) { /* ใช้ name จาก write_uid */ }
+  }
+
+  const pickIds = [...new Set(rows.map(r => Array.isArray(r.picking_id) ? r.picking_id[0] : null).filter(Boolean))];
+  const pickPartner = {}, pickOrigin = {};
+  if (pickIds.length) {
+    try {
+      const picks = await searchRead('stock.picking', [['id', 'in', pickIds]], ['id', 'partner_id', 'origin'], 200);
+      for (const p of picks) {
+        pickPartner[p.id] = Array.isArray(p.partner_id) ? p.partner_id[1] : '';
+        pickOrigin[p.id] = p.origin || '';
+      }
+    } catch (e) { /* ใช้ partner จาก move แทน */ }
+  }
+
+  const allOrigins = [...new Set(Object.values(pickOrigin).filter(Boolean))];
+  const originPartner = {}, originNote = {};
+  if (allOrigins.length) {
+    try {
+      const pos = await searchRead('purchase.order', [['name', 'in', allOrigins]], ['name', 'partner_id', 'notes'], 200);
+      for (const po of pos) {
+        originPartner[po.name] = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
+        const rawNote = (po.notes && typeof po.notes === 'string') ? po.notes : '';
+        originNote[po.name] = rawNote.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+      const stillEmpty = allOrigins.filter(o => !originPartner[o] && !originNote[o]);
+      if (stillEmpty.length) {
+        const sos = await searchRead('sale.order', [['name', 'in', stillEmpty]], ['name', 'partner_id', 'note'], 200);
+        for (const so of sos) {
+          originPartner[so.name] = Array.isArray(so.partner_id) ? so.partner_id[1] : '';
+          const rawNote = (so.note && typeof so.note === 'string') ? so.note : '';
+          originNote[so.name] = rawNote.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+      }
+    } catch (e) { /* ปล่อยว่าง */ }
+  }
+
+  const moves = [];
+  for (const r of rows) {
+    const srcId = Array.isArray(r.location_id) ? r.location_id[0] : null;
+    const destId = Array.isArray(r.location_dest_id) ? r.location_dest_id[0] : null;
+    const srcUsage = locUsage[srcId] || '';
+    const destUsage = locUsage[destId] || '';
+    let direction = null;
+    if (destUsage === 'internal' && srcUsage !== 'internal') direction = 'in';
+    else if (srcUsage === 'internal' && destUsage !== 'internal') direction = 'out';
+    if (!direction) continue;
+    const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
+    const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
+    const u = wuid && userMap[wuid] ? userMap[wuid] : {};
+    const pkId = Array.isArray(r.picking_id) ? r.picking_id[0] : null;
+    const pkOrigin = pkId ? pickOrigin[pkId] : '';
+    const partnerName =
+      (Array.isArray(r.partner_id) ? r.partner_id[1] : '') ||
+      (pkId ? pickPartner[pkId] : '') ||
+      (pkOrigin ? originPartner[pkOrigin] : '') || '';
+    const noteText = pkOrigin ? (originNote[pkOrigin] || '') : '';
+    moves.push({
+      id: r.id, ref: r.reference || '', origin: r.origin || '',
+      partner: partnerName, note: noteText,
+      product: Array.isArray(r.product_id) ? r.product_id[1] : '',
+      qty: r.product_uom_qty || 0,
+      uom: Array.isArray(r.product_uom) ? r.product_uom[1] : '',
+      write_user: u.name || wname || '', write_login: u.login || '',
+      company: Array.isArray(r.company_id) ? r.company_id[1] : '',
+      direction, srcUsage, destUsage,
+      picking: Array.isArray(r.picking_id) ? r.picking_id[1] : '',
+      scrapped: r.scrapped === true, date: r.date || ''
+    });
+  }
+  return { moves };
+}
+
 // ── ตรวจ Vendor Bill ที่จ่าย/วางบิลแล้ว แต่ของยังรับเข้าไม่ครบ ─────────────────
 // แจ้งเตือนปัญหา "จ่ายเงินแล้วแต่ยังไม่ได้ทำ GR รับเข้า"
-// sinceIso = ดู bill ที่ write_date หลังเวลานี้
-// คืน { bills: [{ id, name, po, partner, amount, paymentState, paidLabel,
-//                 ordered, received, missing, company, date }] }
 export async function odooBilledNotReceived(sinceIso, companyIds) {
-  // 1) ดึง Vendor Bill (in_invoice) ที่ posted + เพิ่งเปลี่ยน
   let domain = ['&', '&', '&',
     ['move_type', '=', 'in_invoice'],
     ['state', '=', 'posted'],
@@ -561,34 +2391,33 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
     'payment_state', 'company_id', 'invoice_date', 'write_date'];
   let bills = [];
   try {
-    bills = await searchRead('account.move', domain, fields, 50);
+    bills = await searchRead('account.move', domain, fields, 30);
   } catch (e) {
-    return { error: e.message, bills: [] };
+    try {
+      bills = await searchRead('account.move', domain,
+        ['id', 'name', 'invoice_origin', 'partner_id', 'amount_total', 'payment_state', 'company_id'], 30);
+    } catch (e2) {
+      return { error: e2.message, bills: [] };
+    }
   }
-  if (!bills.length) return { bills: [] };
+  if (!bills || !bills.length) return { bills: [] };
 
-  // 2) รวบรวมเลข PO จาก invoice_origin (อาจมีหลายเลขคั่นด้วย , หรือช่องว่าง)
-  //    เช่น "2602120" หรือ "2602120, 2602121"
   const allPoNames = new Set();
-  const billPoNames = {}; // bill.id → [po names]
+  const billPoNames = {};
   for (const b of bills) {
     const origin = String(b.invoice_origin || '');
-    // แยกเลข PO (กลุ่มตัวเลข 6+ หลัก หรือคำที่คั่นด้วย , )
     const names = origin.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
     billPoNames[b.id] = names;
     names.forEach(n => allPoNames.add(n));
   }
 
-  // 3) ดึง PO ทั้งหมดที่เกี่ยวข้อง + เช็คว่ารับครบไหม
-  const poByName = {}; // po name → { ordered, received }
+  const poByName = {};
   if (allPoNames.size) {
     try {
       const pos = await searchRead('purchase.order',
-        [['name', 'in', [...allPoNames]]],
-        ['id', 'name', 'order_line'], 100);
-      // ดึง order_line ทั้งหมดทีเดียว
+        [['name', 'in', [...allPoNames]]], ['id', 'name', 'order_line'], 100);
       const allLineIds = [];
-      const poLineIds = {}; // po name → [line ids]
+      const poLineIds = {};
       for (const po of pos) {
         poLineIds[po.name] = po.order_line || [];
         (po.order_line || []).forEach(id => allLineIds.push(id));
@@ -608,7 +2437,6 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
           if (l) {
             const lo = l.product_qty || 0, lr = l.qty_received || 0;
             ordered += lo; received += lr;
-            // line ที่รับไม่ครบ → เก็บรหัส+ชื่อ+จำนวนค้าง
             if (lo - lr > 0.0001) {
               missingLines.push({
                 product: Array.isArray(l.product_id) ? l.product_id[1] : '',
@@ -623,7 +2451,6 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
     } catch (e) { /* ดึงไม่ได้ ปล่อยว่าง */ }
   }
 
-  // 4) สร้างรายการแจ้งเตือน — เฉพาะที่รับไม่ครบ
   const paidLabelMap = {
     'paid': '💸 จ่ายเงินแล้ว (PAID)',
     'in_payment': '💸 อยู่ระหว่างจ่าย (In Payment)',
@@ -634,7 +2461,6 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
   const result = [];
   for (const b of bills) {
     const names = billPoNames[b.id] || [];
-    // รวม ordered/received ของทุก PO ใน bill นี้
     let ordered = 0, received = 0, foundPo = false;
     let missingLines = [];
     for (const n of names) {
@@ -645,9 +2471,9 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
         foundPo = true;
       }
     }
-    if (!foundPo) continue;           // หา PO ไม่เจอ ข้าม
+    if (!foundPo) continue;
     const missing = ordered - received;
-    if (missing <= 0.0001) continue;  // รับครบแล้ว ข้าม
+    if (missing <= 0.0001) continue;
 
     result.push({
       id: b.id,
