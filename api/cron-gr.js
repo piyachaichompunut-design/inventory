@@ -23,17 +23,23 @@ function getDb() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function notifyTelegram(text) {
+async function notifyTelegram(text, onlyChat1) {
   const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-  const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
-  if (!TG_TOKEN || !TG_CHAT) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true })
-    });
-  } catch (e) { /* เงียบ */ }
+  // ปกติส่งทั้ง 2 กลุ่ม | onlyChat1=true → ส่งเฉพาะ chat 1 (โหมดทดสอบ)
+  const chatIds = (onlyChat1
+    ? [process.env.TELEGRAM_CHAT_ID || '']
+    : [process.env.TELEGRAM_CHAT_ID || '', process.env.TELEGRAM_CHAT_ID_2 || '']
+  ).filter(Boolean);
+  if (!TG_TOKEN || !chatIds.length) return;
+  for (const chatId of chatIds) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
+      });
+    } catch (e) { /* เงียบ — ส่งกลุ่มอื่นต่อ */ }
+  }
 }
 
 // ป้ายบอกประเภทการเคลื่อนไหว จาก usage ต้นทาง-ปลายทาง
@@ -57,6 +63,73 @@ export default async function handler(req, res) {
     if (!odooConfigured()) { res.status(200).json({ ok: false, error: 'Odoo ยังไม่ตั้งค่า' }); return; }
     const db = getDb();
     if (!db) { res.status(200).json({ ok: false, error: 'DB ยังไม่ตั้งค่า' }); return; }
+
+    // ── โหมดทดสอบ: /api/cron-gr?test=1&mins=120 ──────────────────────────────
+    //   มองย้อนหลัง mins นาที (default 120) | ส่งเข้า chat 1 เท่านั้น | ไม่บันทึก state
+    //   ใช้ดูว่าระบบจับการเคลื่อนไหวได้ไหม + ข้อความหน้าตาเป็นยังไง (ไม่ต้องแตะสต็อกจริง)
+    const isTest = req.query?.test === '1' || (req.url || '').includes('test=1');
+    if (isTest) {
+      const minsMatch = (req.url || '').match(/mins=(\d+)/);
+      const mins = req.query?.mins ? parseInt(req.query.mins, 10) : (minsMatch ? parseInt(minsMatch[1], 10) : 120);
+      const sinceTest = new Date(Date.now() - mins * 60 * 1000).toISOString();
+
+      const { moves, error } = await odooRecentStockMoves(sinceTest, WATCH_COMPANY_IDS);
+      if (error) { res.status(200).json({ ok: false, test: true, error }); return; }
+
+      const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
+      // จัดกลุ่ม
+      const grps = {};
+      for (const m of otherMoves) {
+        const key = (m.ref || ('move-' + m.id)) + '|' + m.direction + '|' + (m.scrapped ? 's' : '');
+        if (!grps[key]) grps[key] = { ...m, lines: [] };
+        grps[key].lines.push({ product: m.product, qty: m.qty, uom: m.uom });
+      }
+
+      const keys = Object.keys(grps);
+      // ส่งหัวข้อทดสอบ + ผลรวม เข้า chat 1
+      let head = '🧪 <b>ทดสอบระบบแจ้งเตือนสต็อก</b>\n';
+      head += 'มองย้อนหลัง ' + mins + ' นาที\n';
+      head += 'พบ move ทั้งหมด: ' + (moves || []).length + '\n';
+      head += 'ที่ไม่ใช่ Store1: ' + otherMoves.length + ' รายการ (' + keys.length + ' เอกสาร)\n';
+      head += (keys.length ? '\nตัวอย่างการแจ้งเตือน 👇' : '\n(ไม่พบการเคลื่อนไหวจากคนอื่นในช่วงนี้)');
+      await notifyTelegram(head, true);
+
+      // ส่งตัวอย่างแจ้งเตือน (สูงสุด 5 เอกสาร) เข้า chat 1 เท่านั้น
+      for (const key of keys.slice(0, 5)) {
+        const g = grps[key];
+        let msg = '⚠️ <b>มีคนอื่นทำรายการสต็อก</b> (ทดสอบ)\n';
+        msg += moveTypeLabel(g) + '\n';
+        if (g.ref) msg += '📋 เอกสาร: ' + g.ref + '\n';
+        if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
+        msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
+        if (g.write_login) msg += ' (' + g.write_login + ')';
+        msg += '\n';
+        const showLines = g.lines.slice(0, 8);
+        if (showLines.length) {
+          msg += '📦 รายการ:\n';
+          for (const l of showLines) {
+            const pname = (l.product || '').replace(/^\[[^\]]+\]\s*/, '').slice(0, 40);
+            msg += '  • ' + pname + ' × ' + l.qty + ' ' + (l.uom || '') + '\n';
+          }
+          if (g.lines.length > 8) msg += '  ...และอีก ' + (g.lines.length - 8) + ' รายการ\n';
+        }
+        if (g.date) {
+          const d = new Date(g.date.replace(' ', 'T') + 'Z');
+          const th = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+          msg += '🕐 เวลา: ' + th.toISOString().slice(0, 16).replace('T', ' ') + ' น.';
+        }
+        await notifyTelegram(msg, true);
+      }
+
+      res.status(200).json({
+        ok: true, test: true, lookbackMins: mins,
+        movesFound: (moves || []).length,
+        otherMoves: otherMoves.length,
+        documents: keys.length,
+        sentToChat1: Math.min(keys.length, 5)
+      });
+      return;
+    }
 
     // อ่าน state รอบก่อน
     let lastCheck = null, notified = [];
