@@ -82,7 +82,11 @@ export default async function handler(req, res) {
       if (r.write_login) msg += ' (' + r.write_login + ')';
       msg += '\n';
       if (r.partner) msg += '🏢 ผู้ขาย: ' + r.partner + '\n';
-      if (r.origin)  msg += '📄 อ้างอิง: ' + r.origin + '\n';
+      if (r.origin) {
+        msg += '📄 อ้างอิง: ' + r.origin + '\n';
+      } else {
+        msg += '📄 อ้างอิง: — (สร้างรับเอง ไม่ผูก PO)\n';
+      }
       // เวลา (แปลงเป็นเวลาไทย)
       const wt = r.date_done || r.write_date;
       if (wt) {
