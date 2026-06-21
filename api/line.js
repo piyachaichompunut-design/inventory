@@ -394,6 +394,10 @@ function smartParseDate(text) {
   const thMonth = { 'มกราคม':1,'ม.ค':1,'กุมภาพันธ์':2,'ก.พ':2,'มีนาคม':3,'มี.ค':3,'เมษายน':4,'เม.ย':4,'พฤษภาคม':5,'พ.ค':5,'มิถุนายน':6,'มิ.ย':6,'กรกฎาคม':7,'ก.ค':7,'สิงหาคม':8,'ส.ค':8,'กันยายน':9,'ก.ย':9,'ตุลาคม':10,'ต.ค':10,'พฤศจิกายน':11,'พ.ย':11,'ธันวาคม':12,'ธ.ค':12 };
   const monthAlt = Object.keys(thMonth).sort((a,b)=>b.length-a.length).join('|');
 
+  // FIX: ตัดรูปแบบ "ขนาดนิ้ว/เศษส่วน" เช่น 1-1/2" หรือ 3/4" ออกก่อนหาวันที่
+  //      กันบอทเข้าใจผิดว่าขนาดท่อ/สินค้าเป็นวันที่ (เคย bug: 1-1/2" → อ่านเป็นวันที่ผิด)
+  text = text.replace(/\d{1,2}(?:-\d{1,2})?\/\d{1,2}\s*(?:["”″']|นิ้ว|inch)/gi, ' ');
+
   if (/วันนี้/.test(text)) { const d=now; return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
   if (/พรุ่งนี้/.test(text)) { const d=new Date(now.getTime()+86400000); return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
   if (/มะรืน/.test(text)) { const d=new Date(now.getTime()+2*86400000); return fmt(d.getFullYear(), d.getMonth()+1, d.getDate()); }
