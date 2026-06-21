@@ -105,9 +105,12 @@ function parseTaskFromText(text, catKeyword, forceDuration) {
   const kw = (catKeyword || '').trim();
 
   // ── วันที่ — ดึงจาก catKeyword ก่อน (สิ่งที่พิมพ์ต่อจาก @บอท) แล้วค่อย fallback ไปหาในข้อความ ──
+  // FIX: ตัดรูปแบบ "ขนาดนิ้ว/เศษส่วน" เช่น 1-1/2" หรือ 3/4" ออกก่อนหาวันที่
+  //      กันบอทเข้าใจผิดว่าขนาดท่อ/สินค้าเป็นวันที่ (เคย bug: 1-1/2" → อ่านเป็น 1/1 = วันที่ 1 ม.ค.)
+  const stripSizeNotation = (s) => s.replace(/\d{1,2}(?:-\d{1,2})?\/\d{1,2}\s*(?:["”″']|นิ้ว|inch)/gi, ' ');
   const dateRe = /(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/;
-  const dateFromKw = kw.match(dateRe);
-  const dateFromText = t.match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+  const dateFromKw = stripSizeNotation(kw).match(dateRe);
+  const dateFromText = stripSizeNotation(t).match(/(?:วันที่\s*)?(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
   const rawDate = dateFromKw ? dateFromKw[1] : (dateFromText ? dateFromText[1] : null);
   const actionDate = rawDate ? (parseDate(rawDate) || todayStr()) : todayStr();
 
