@@ -524,19 +524,20 @@ export async function odooDelivery(keyword, companyId) {
 
   const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
   let pickings = [];
-  // 1) ค้นแบบเต็ม (ทุก field รวม relational)
+  let lastErr = null;
+  // 1) ค้นแบบเต็ม (มี relational partner_id.name + group_id.name)
   try {
     pickings = await searchRead('stock.picking', buildDomain('full'), fields, 40);
-  } catch (e) { /* relational field อาจไม่รองรับ → ลอง fallback */ }
-  // 2) ถ้าพัง/ไม่เจอ → ลอง dest/group (ยังมี relational)
+  } catch (e) { lastErr = e; /* relational อาจพัง → fallback */ }
+  // 2) ถ้าพัง/ไม่เจอ → dest/group
   if (!pickings.length) {
-    try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) {}
+    try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) { lastErr = e; }
   }
-  // 3) ยังไม่เจอ → simple (name/origin/partner — ปลอดภัย ไม่มี relational ซับซ้อน)
+  // 3) ยังไม่เจอ → simple (name/origin)
   if (!pickings.length) {
-    try { pickings = await searchRead('stock.picking', buildDomain('simple'), fields, 40); } catch (e) {}
+    try { pickings = await searchRead('stock.picking', buildDomain('simple'), fields, 40); } catch (e) { lastErr = e; }
   }
-  // 4) สุดท้าย → ค้นแค่ name+origin เท่านั้น (safe มากที่สุด)
+  // 4) สุดท้าย → name+origin เท่านั้น (safe สุด)
   if (!pickings.length) {
     const safeOneWord = (w) => ['|', ['name', 'ilike', w], ['origin', 'ilike', w]];
     const safeDomain = (wds) => {
@@ -549,8 +550,10 @@ export async function odooDelivery(keyword, companyId) {
       }
       return withCompany(d, companyId);
     };
-    try { pickings = await searchRead('stock.picking', safeDomain(words), fields, 40); } catch (e) {}
+    try { pickings = await searchRead('stock.picking', safeDomain(words), fields, 40); } catch (e) { lastErr = e; }
   }
+  // ถ้าทุก level พัง (ไม่ใช่แค่ไม่เจอ) → แนบ error ไว้ที่ผลลัพธ์ (telegram อ่านได้)
+  if (!pickings.length && lastErr) { pickings._error = lastErr.message; }
 
   for (const p of pickings) {
     try {
