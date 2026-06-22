@@ -931,7 +931,7 @@ export default async function handler(req, res) {
         }
 
         try {
-          const { odooDelivery, parseCompany } = await import('./odoo.js');
+          const { odooDelivery, parseCompany, odooSO, odooPO } = await import('./odoo.js');
           const { keyword: dkw, company: dCo } = parseCompany(repKw);
 
           // ค้นใบส่งของ — ลองหลายแบบให้ครอบคลุม (เลขใบส่ง 02070 / SO2605047 / 2605047)
@@ -946,6 +946,24 @@ export default async function handler(req, res) {
             const stripped = dkw.replace(/^(so|po|pr)\s*/i, '').trim();
             if (stripped && stripped !== dkw) {
               allPicks = await odooDelivery(stripped, null);
+            }
+          }
+          // 4) ยังไม่เจอ + เป็น so/po → ค้นตัว SO/PO ใน Odoo ก่อน เอา "ชื่อจริง" (เช่น S2506016) มาหา delivery
+          //    (แก้กรณีเลขที่พิมพ์ ≠ เลขใน origin ของ delivery)
+          if (!allPicks.length) {
+            const mDoc = dkw.match(/^(so|po)\s*0*(\d+)$/i);
+            if (mDoc) {
+              try {
+                const isSO = mDoc[1].toLowerCase() === 'so';
+                const docs = isSO ? await odooSO(dkw, null) : await odooPO(dkw, null);
+                // ลองทุกชื่อ SO/PO ที่เจอ ไปค้น delivery ที่ origin = ชื่อนั้น
+                for (const doc of (docs || [])) {
+                  if (doc && doc.name) {
+                    const byOrigin = await odooDelivery(doc.name, null);
+                    if (byOrigin.length) { allPicks = byOrigin; break; }
+                  }
+                }
+              } catch (e) { /* ค้น SO/PO ไม่ได้ ข้าม */ }
             }
           }
 
