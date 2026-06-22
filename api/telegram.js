@@ -884,11 +884,10 @@ export default async function handler(req, res) {
           repTarget = '__self__'; // ไม่ระบุปลายทาง → ส่งกลับกลุ่มที่พิมพ์คำสั่ง
         }
 
-        // ตรวจว่าเป็น po/so/pr หรือใบส่งของ
+        // /รายงาน เน้นค้น "ใบส่งของ" เป็นหลักเสมอ (ผู้ใช้ลงรูปใบส่งของ)
+        // ไม่ตัด prefix so/po/pr ออก — เก็บเลขเต็มไว้ค้นทั้งเลขใบส่ง + origin (SO/PO)
+        // เช่น "so2605047" หรือ "2605047" หรือ "02070" (เลขใบส่งจริง) ค้นเจอหมด
         var repDocType = 'picking';
-        if (/^po\s*/i.test(repKw)) { repDocType = 'po'; repKw = repKw.replace(/^po\s*/i,'').trim(); }
-        else if (/^so\s*/i.test(repKw)) { repDocType = 'so'; repKw = repKw.replace(/^so\s*/i,'').trim(); }
-        else if (/^pr\s*/i.test(repKw)) { repDocType = 'pr'; repKw = repKw.replace(/^pr\s*/i,'').trim(); }
 
         await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
 
@@ -934,14 +933,29 @@ export default async function handler(req, res) {
         try {
           const { odooDelivery, parseCompany } = await import('./odoo.js');
           const { keyword: dkw, company: dCo } = parseCompany(repKw);
-          const allPicks = await odooDelivery(dkw, dCo.id);
+
+          // ค้นใบส่งของ — ลองหลายแบบให้ครอบคลุม (เลขใบส่ง 02070 / SO2605047 / 2605047)
+          // 1) ค้นตามที่พิมพ์ (กรอง company ถ้าระบุตัวย่อบริษัทมา)
+          let allPicks = await odooDelivery(dkw, dCo.id);
+          // 2) ถ้าไม่เจอ → ค้นข้ามทุกบริษัท (ใบส่งของอาจอยู่บริษัทไหนก็ได้)
+          if (!allPicks.length) {
+            allPicks = await odooDelivery(dkw, null);
+          }
+          // 3) ยังไม่เจอ + คำค้นขึ้นต้น so/po/pr → ลองถอด prefix แล้วค้นเลขล้วน (เผื่อ origin เก็บคนละรูปแบบ)
+          if (!allPicks.length) {
+            const stripped = dkw.replace(/^(so|po|pr)\s*/i, '').trim();
+            if (stripped && stripped !== dkw) {
+              allPicks = await odooDelivery(stripped, null);
+            }
+          }
 
           let repPicks = repDate
             ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
             : allPicks;
 
           if (!repPicks.length) {
-            await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + repKw + '"' + (repDate ? ' วันที่ ' + repDm[1] : '') + ' ครับ');
+            const errHint = (allPicks && allPicks._error) ? ('\n\n⚠️ Odoo error: ' + allPicks._error) : '';
+            await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + repKw + '"' + (repDate ? ' วันที่ ' + repDm[1] : '') + ' ครับ\n\n💡 ลองค้นด้วย: เลขใบส่งของ, เลข SO (เช่น SO2605047), หรือชื่อโครงการ/ลูกค้า' + errHint);
             res.status(200).json({ ok: true }); return;
           }
 
