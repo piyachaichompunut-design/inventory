@@ -429,10 +429,9 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const buildDomain = (level) => {
     const oneWord = (w) => {
       if (level === 'full') {
-        return ['|', '|', '|', '|',
+        return ['|', '|', '|',
           ['name', 'ilike', w], ['origin', 'ilike', w],
           ['partner_id.name', 'ilike', w],
-          ['location_dest_id.complete_name', 'ilike', w],
           ['group_id.name', 'ilike', w]
         ];
       }
@@ -491,26 +490,25 @@ export async function odooDelivery(keyword, companyId) {
   const buildDomain = (level) => {
     const oneWord = (w) => {
       if (level === 'full') {
-        return ['|', '|', '|', '|',
+        // partner_id.name + group_id.name = relational → บาง Odoo อาจพัง
+        // ไม่ใส่ location_dest_id.complete_name ใน domain (ใช้ได้แค่ตอน read ไม่ใช่ filter)
+        return ['|', '|', '|',
           ['name', 'ilike', w],
           ['origin', 'ilike', w],
           ['partner_id.name', 'ilike', w],
-          ['location_dest_id.complete_name', 'ilike', w],
           ['group_id.name', 'ilike', w]
         ];
       }
       if (level === 'dest') {
-        return ['|', '|',
+        return ['|',
           ['origin', 'ilike', w],
-          ['location_dest_id.complete_name', 'ilike', w],
           ['group_id.name', 'ilike', w]
         ];
       }
-      // simple
-      return ['|', '|',
+      // simple — ปลอดภัยที่สุด
+      return ['|',
         ['name', 'ilike', w],
-        ['origin', 'ilike', w],
-        ['partner_id.name', 'ilike', w]
+        ['origin', 'ilike', w]
       ];
     };
     let domain;
@@ -526,24 +524,32 @@ export async function odooDelivery(keyword, companyId) {
 
   const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
   let pickings = [];
-  // 1) ค้นแบบเต็ม (ทุก field)
+  // 1) ค้นแบบเต็ม (ทุก field รวม relational)
   try {
     pickings = await searchRead('stock.picking', buildDomain('full'), fields, 40);
-  } catch (e) {
-    // 2) บาง field อาจไม่มี → ลองเฉพาะ dest/group
-    try {
-      pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40);
-    } catch (e2) {
-      pickings = [];
-    }
-  }
-  // 3) ถ้ายังไม่เจอ → ลอง dest/group อย่างเดียว (เผื่อชื่ออยู่แค่ปลายทาง)
+  } catch (e) { /* relational field อาจไม่รองรับ → ลอง fallback */ }
+  // 2) ถ้าพัง/ไม่เจอ → ลอง dest/group (ยังมี relational)
   if (!pickings.length) {
     try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) {}
   }
-  // 4) สุดท้าย fallback simple
+  // 3) ยังไม่เจอ → simple (name/origin/partner — ปลอดภัย ไม่มี relational ซับซ้อน)
   if (!pickings.length) {
     try { pickings = await searchRead('stock.picking', buildDomain('simple'), fields, 40); } catch (e) {}
+  }
+  // 4) สุดท้าย → ค้นแค่ name+origin เท่านั้น (safe มากที่สุด)
+  if (!pickings.length) {
+    const safeOneWord = (w) => ['|', ['name', 'ilike', w], ['origin', 'ilike', w]];
+    const safeDomain = (wds) => {
+      let d;
+      if (wds.length <= 1) { d = safeOneWord(wds[0] || ''); }
+      else {
+        d = [];
+        for (let i = 0; i < wds.length - 1; i++) d.push('&');
+        wds.forEach(w => d.push(...safeOneWord(w)));
+      }
+      return withCompany(d, companyId);
+    };
+    try { pickings = await searchRead('stock.picking', safeDomain(words), fields, 40); } catch (e) {}
   }
 
   for (const p of pickings) {
