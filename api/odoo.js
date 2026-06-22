@@ -103,6 +103,21 @@ function smartWords(keyword) {
   return s.split(/\s+/).filter(w => w.length > 0);
 }
 
+// ── สร้างคำค้นทางเลือกของ "คำเดียว" ──────────────────────────────────────────
+// คืน array ของรูปแบบที่ควรลองค้นทั้งหมด เพื่อให้เจอไม่ว่า Odoo จะเก็บแบบไหน
+// เช่น "so2605047" → ['so2605047', '2605047']  (origin อาจเก็บมี SO หรือไม่มีก็ได้)
+//      "2605047"   → ['2605047']
+//      "po2606025" → ['po2606025', '2606025']
+function wordVariants(w) {
+  const out = [w];
+  const m = String(w).match(/^(so|po|pr)0*(\d+)$/i);
+  if (m) {
+    // ถอด prefix → เลขล้วน (เผื่อ origin เก็บแค่เลข)
+    if (!out.includes(m[2])) out.push(m[2]);
+  }
+  return out;
+}
+
 // ── parse keyword ก่อนค้น: รองรับ [รหัส], ---, ชื่อสินค้า ─────────────────────
 // ตัวอย่าง:
 //   "[07RP-016-00-00-02] แบตเตอรี่---12V 7.5Ah" → code="07RP-016-00-00-02", name="แบตเตอรี่ 12V 7.5Ah"
@@ -488,28 +503,43 @@ export async function odooDelivery(keyword, companyId) {
   //   location_dest_id.complete_name = ปลายทาง (มีชื่อโครงการเต็ม)
   //   group_id.name = Reference ที่จัดกลุ่ม (เช่น "ถนนสาย กท.1001 ถนนกัลปพฤกษ์")
   const buildDomain = (level) => {
+    // ค้น field เดียวด้วยทุก variant ของคำ (เช่น so2605047 + 2605047) เชื่อมด้วย OR
+    const fieldVariants = (field, w) => {
+      const vs = wordVariants(w);
+      if (vs.length === 1) return [[field, 'ilike', vs[0]]];
+      // หลาย variant → OR กัน: ['|', cond1, cond2, ...]
+      const parts = [];
+      for (let i = 0; i < vs.length - 1; i++) parts.push('|');
+      vs.forEach(v => parts.push([field, 'ilike', v]));
+      return parts;
+    };
     const oneWord = (w) => {
+      let conds = [];
       if (level === 'full') {
-        // partner_id.name + group_id.name = relational → บาง Odoo อาจพัง
-        // ไม่ใส่ location_dest_id.complete_name ใน domain (ใช้ได้แค่ตอน read ไม่ใช่ filter)
-        return ['|', '|', '|',
-          ['name', 'ilike', w],
-          ['origin', 'ilike', w],
-          ['partner_id.name', 'ilike', w],
-          ['group_id.name', 'ilike', w]
+        // ค้น 4 field × ทุก variant — เชื่อมทั้งหมดด้วย OR
+        conds = [
+          ...fieldVariants('name', w),
+          ...fieldVariants('origin', w),
+          ...fieldVariants('partner_id.name', w),
+          ...fieldVariants('group_id.name', w)
+        ];
+      } else if (level === 'dest') {
+        conds = [
+          ...fieldVariants('origin', w),
+          ...fieldVariants('group_id.name', w)
+        ];
+      } else {
+        // simple — ปลอดภัยสุด
+        conds = [
+          ...fieldVariants('name', w),
+          ...fieldVariants('origin', w)
         ];
       }
-      if (level === 'dest') {
-        return ['|',
-          ['origin', 'ilike', w],
-          ['group_id.name', 'ilike', w]
-        ];
-      }
-      // simple — ปลอดภัยที่สุด
-      return ['|',
-        ['name', 'ilike', w],
-        ['origin', 'ilike', w]
-      ];
+      // นับจำนวน leaf condition (array ที่ไม่ใช่ '|') แล้วใส่ '|' นำหน้าให้ครบ
+      const leafCount = conds.filter(c => Array.isArray(c)).length;
+      const ors = [];
+      for (let i = 0; i < leafCount - 1; i++) ors.push('|');
+      return [...ors, ...conds.filter(c => Array.isArray(c))];
     };
     let domain;
     if (words.length <= 1) {
