@@ -229,9 +229,14 @@ function buildWordsDomain(words) {
 
 // ── ดูใบสั่งซื้อ (PO) พร้อมรายการสินค้า ──────────────────────────────────────
 export async function odooPO(poNumber, companyId) {
-  const orders = await searchRead(
-    'purchase.order',
-    withCompany(['|', ['name', 'ilike', poNumber], ['partner_ref', 'ilike', poNumber]], companyId),
+  // ค้นด้วยทุก variant (po2606025 + 2606025) เผื่อ Odoo เก็บคนละรูปแบบ
+  const vs = wordVariants(String(poNumber).trim());
+  const nameOr = [];
+  for (let i = 0; i < vs.length - 1; i++) nameOr.push('|');
+  vs.forEach(v => nameOr.push(['name', 'ilike', v]));
+  const dom = ['|', ...nameOr, ['partner_ref', 'ilike', poNumber]];
+  const orders = await searchRead('purchase.order',
+    withCompany(dom, companyId),
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'partner_ref'],
     5
   );
@@ -263,9 +268,14 @@ async function safeSearchRead(model, domain, fields, limit) {
 
 // ── ดูใบสั่งขาย (SO) พร้อมรายการสินค้า ───────────────────────────────────────
 export async function odooSO(soNumber, companyId) {
-  const orders = await safeSearchRead(
-    'sale.order',
-    withCompany(['|', ['name', 'ilike', soNumber], ['client_order_ref', 'ilike', soNumber]], companyId),
+  // ค้นด้วยทุก variant (so2605047 + 2605047) เผื่อ Odoo เก็บคนละรูปแบบ
+  const vs = wordVariants(String(soNumber).trim());
+  const nameOr = [];
+  for (let i = 0; i < vs.length - 1; i++) nameOr.push('|');
+  vs.forEach(v => nameOr.push(['name', 'ilike', v]));
+  const dom = ['|', ...nameOr, ['client_order_ref', 'ilike', soNumber]];
+  const orders = await safeSearchRead('sale.order',
+    withCompany(dom, companyId),
     ['name', 'partner_id', 'state', 'date_order', 'amount_total', 'client_order_ref'],
     5
   );
