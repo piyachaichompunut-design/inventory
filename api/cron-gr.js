@@ -7,7 +7,7 @@
 //  เรียกทุก ~10 นาที ผ่าน GitHub Actions
 //  - กันแจ้งซ้ำด้วย state ที่เก็บใน delivery_views (id='__gr_watch_state__')
 // ============================================================================
-import { odooRecentStockMoves, odooBilledNotReceived, odooConfigured } from './odoo.js';
+import { odooRecentStockMoves, odooBilledNotReceived, odooConfigured, odooReceiveDeliveryStatus } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
 
 const STATE_ID = '__gr_watch_state__';
@@ -106,6 +106,42 @@ function buildMissingLinesBlock(bill) {
   return block;
 }
 
+// แสดงจำนวนสวยๆ (ตัด .0)
+function fmtQtyGr(n) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+}
+
+// บล็อกสถานะรับ/ส่ง (รับครบ / ค้างรับ + ยอดค้าง) — ใช้ HTML <b>
+function buildReceiveStatusBlockGr(status) {
+  if (!status || !status.found) return '';
+  const isPO = status.type === 'po';
+  const verb = isPO ? 'รับ' : 'ส่ง';
+  const docLabel = isPO ? 'PO' : 'SO';
+
+  if (status.complete) {
+    return '\n✅ <b>' + verb + 'ครบ ' + docLabel +
+           (status.docName ? ' (' + status.docName + ')' : '') + '</b> — ครบทุกรายการแล้ว\n';
+  }
+
+  let block = '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
+  block += '<b>📌 ' + docLabel + (status.docName ? ' ' + status.docName : '') +
+           ' ยังค้าง' + verb + 'อีก ' + fmtQtyGr(status.totalRemain) + ' หน่วย</b>\n';
+  const rl = status.remainLines || [];
+  if (rl.length) {
+    block += '<b>รายการที่ค้าง' + verb + ':</b>\n';
+    for (const l of rl.slice(0, 5)) {
+      const pname = String(l.product || '').replace(/-{2,}/g, ' ').trim().slice(0, 55);
+      block += '  🔻 ' + pname + '\n' +
+               '       สั่ง ' + fmtQtyGr(l.ordered) + ' • ' + verb + 'แล้ว ' + fmtQtyGr(l.done) +
+               ' • <b>ค้าง ' + fmtQtyGr(l.remain) + ' ' + (l.uom || '') + '</b>\n';
+    }
+    if (rl.length > 5) block += '  ...และอีก ' + (rl.length - 5) + ' รายการ\n';
+  }
+  block += '<b>‼️ โปรดตรวจสอบว่าคีย์จำนวนถูกต้องหรือไม่</b>\n';
+  return block;
+}
+
 function moveTypeLabel(m) {
   if (m.scrapped) return '🗑️ ตัดของเสีย (Scrap)';
   if (m.direction === 'in') {
@@ -123,6 +159,29 @@ function moveTypeLabel(m) {
 
 export default async function handler(req, res) {
   try {
+    // ── กันคนอื่นยิง URL มั่ว: ถ้าตั้ง env CRON_SECRET ไว้ ต้องส่ง key ให้ตรง ──
+    //   เรียกได้ 2 วิธี: ?key=xxx ต่อท้าย URL  หรือ  header Authorization: Bearer xxx
+    //   ถ้าไม่ได้ตั้ง CRON_SECRET → ไม่บังคับ (เปิดให้เรียกได้เลย)
+    const CRON_SECRET = process.env.CRON_SECRET || '';
+    if (CRON_SECRET) {
+      let key = '';
+      try {
+        if (req.query && req.query.key) key = String(req.query.key);
+        if (!key && req.url) {
+          const u = new URL(req.url, 'http://x');
+          key = u.searchParams.get('key') || '';
+        }
+        if (!key && req.headers) {
+          const auth = req.headers.authorization || req.headers.Authorization || '';
+          if (auth.startsWith('Bearer ')) key = auth.slice(7).trim();
+        }
+      } catch (e) { /* ใช้ key ว่าง */ }
+      if (key !== CRON_SECRET) {
+        res.status(401).json({ ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+
     if (!odooConfigured()) { res.status(200).json({ ok: false, error: 'Odoo ยังไม่ตั้งค่า' }); return; }
     const db = getDb();
     if (!db) { res.status(200).json({ ok: false, error: 'DB ยังไม่ตั้งค่า' }); return; }
@@ -189,6 +248,13 @@ export default async function handler(req, res) {
         if (g.write_login) msg += ' (' + g.write_login + ')';
         msg += '\n';
         msg += await buildLinesBlock(db, g);
+        // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คครบไหม กันคีย์จำนวนผิด
+        if (g.origin) {
+          try {
+            const st = await odooReceiveDeliveryStatus(g.origin);
+            msg += buildReceiveStatusBlockGr(st);
+          } catch (e) { /* ข้าม */ }
+        }
         if (g.date) {
           const d = new Date(g.date.replace(' ', 'T') + 'Z');
           const th = new Date(d.getTime() + 7 * 60 * 60 * 1000);
@@ -289,6 +355,15 @@ export default async function handler(req, res) {
 
       // รายการสินค้า (สูงสุด 8 บรรทัด)
       msg += await buildLinesBlock(db, g);
+
+      // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คว่าครบไหม กันคีย์จำนวนผิด
+      if (g.origin) {
+        try {
+          const st = await odooReceiveDeliveryStatus(g.origin);
+          msg += buildReceiveStatusBlockGr(st);
+        } catch (e) { /* เช็คไม่ได้ ข้าม */ }
+      }
+
       // เวลา (แปลงเป็นเวลาไทย)
       if (g.date) {
         const d = new Date(g.date.replace(' ', 'T') + 'Z');
