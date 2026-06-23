@@ -14,6 +14,17 @@ const ODOO_KEY  = process.env.ODOO_API_KEY  || '';
 
 let _uid = null; // cache uid ไว้ใช้ซ้ำใน request เดียว
 
+// ── รหัสสินค้าที่ไม่ต้องแจ้งเตือนใดๆ (ค่าบริการ ฯลฯ ไม่ใช่สต็อกจริง) ───────────
+// เพิ่มรหัสที่ต้องการข้ามได้ที่นี่ (เทียบแบบไม่สนตัวพิมพ์เล็ก-ใหญ่)
+const IGNORE_PRODUCT_CODES = [
+  '01SV-SVS-03-00-00-00-00-00-00',  // Service - ค่าบริการ
+];
+// เช็คว่าชื่อสินค้า (ที่มักมีรูปแบบ "[รหัส] ชื่อ") มีรหัสที่ต้องข้ามไหม
+function isIgnoredProduct(productName) {
+  const s = String(productName || '').toLowerCase();
+  return IGNORE_PRODUCT_CODES.some(code => s.includes(code.toLowerCase()));
+}
+
 // ── แผนที่ตัวย่อบริษัท → company_id ──────────────────────────────────────────
 //   ไม่ใส่ตัวย่อ = อาคเนย์ทร้าฟฟิค (id 1) เป็นค่าเริ่มต้น
 //   md = เมิร์ค (2) | cg = ซิลิกัล (4) | sep = ศรีอาคเนย์ (5)
@@ -2398,6 +2409,9 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     if (destUsage === 'internal' && srcUsage !== 'internal') direction = 'in';
     else if (srcUsage === 'internal' && destUsage !== 'internal') direction = 'out';
     if (!direction) continue;
+    // ข้ามสินค้าที่ไม่ต้องแจ้งเตือน (ค่าบริการ ฯลฯ)
+    const prodName = Array.isArray(r.product_id) ? r.product_id[1] : '';
+    if (isIgnoredProduct(prodName)) continue;
     const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
     const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
     const u = wuid && userMap[wuid] ? userMap[wuid] : {};
@@ -2484,11 +2498,14 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
         for (const lid of (poLineIds[po.name] || [])) {
           const l = lineMap[lid];
           if (l) {
+            const prodName = Array.isArray(l.product_id) ? l.product_id[1] : '';
+            // ข้ามค่าบริการ — ไม่นับ ไม่แจ้งเตือน
+            if (isIgnoredProduct(prodName)) continue;
             const lo = l.product_qty || 0, lr = l.qty_received || 0;
             ordered += lo; received += lr;
             if (lo - lr > 0.0001) {
               missingLines.push({
-                product: Array.isArray(l.product_id) ? l.product_id[1] : '',
+                product: prodName,
                 ordered: lo, received: lr, missing: lo - lr,
                 uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
               });
@@ -2523,6 +2540,8 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
     if (!foundPo) continue;
     const missing = ordered - received;
     if (missing <= 0.0001) continue;
+    // ถ้าหลังกรองค่าบริการแล้วไม่เหลือรายการค้างจริง → ไม่แจ้ง
+    if (!missingLines.length) continue;
 
     result.push({
       id: b.id,
@@ -2566,12 +2585,14 @@ export async function odooReceiveDeliveryStatus(origin) {
         const detail = [];
         let totalRemain = 0;
         for (const l of lines) {
+          const prodName = Array.isArray(l.product_id) ? l.product_id[1] : '';
+          if (isIgnoredProduct(prodName)) continue;  // ข้ามค่าบริการ
           const ordered = l.product_qty || 0;
           const done = l.qty_received || 0;
           const remain = ordered - done;
           if (ordered > 0) {
             detail.push({
-              product: Array.isArray(l.product_id) ? l.product_id[1] : '',
+              product: prodName,
               ordered, done, remain,
               uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
             });
@@ -2602,12 +2623,14 @@ export async function odooReceiveDeliveryStatus(origin) {
         const detail = [];
         let totalRemain = 0;
         for (const l of lines) {
+          const prodName = Array.isArray(l.product_id) ? l.product_id[1] : '';
+          if (isIgnoredProduct(prodName)) continue;  // ข้ามค่าบริการ
           const ordered = l.product_uom_qty || 0;
           const done = l.qty_delivered || 0;
           const remain = ordered - done;
           if (ordered > 0) {
             detail.push({
-              product: Array.isArray(l.product_id) ? l.product_id[1] : '',
+              product: prodName,
               ordered, done, remain,
               uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
             });
