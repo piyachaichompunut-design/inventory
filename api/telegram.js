@@ -325,6 +325,46 @@ function addHistory(chatId, role, content) {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 // ── ส่งรายงานใบส่งของเข้า LINE หรือ Telegram กลุ่ม 2 ──────────────────────────
+// ── สร้างบล็อกสถานะการรับ/ส่ง (รับครบ / รับไม่ครบ + ยอดค้าง) สำหรับใส่ในรายงาน ──
+//   ใช้ HTML parse_mode → <b> ตัวหนา, สีแดงแจ้งเตือนใช้ emoji 🔴 + ตัวหนา
+//   status = ผลจาก odooReceiveDeliveryStatus(origin)
+function buildReceiveStatusBlock(status) {
+  if (!status || !status.found) return '';
+  const isPO = status.type === 'po';
+  const verb = isPO ? 'รับ' : 'ส่ง';        // PO=รับเข้า, SO=ส่งออก
+  const docLabel = isPO ? 'PO' : 'SO';
+
+  if (status.complete) {
+    // ครบ → เขียวสบายใจ
+    return '\n✅ <b>' + verb + 'ครบ ' + docLabel +
+           (status.docName ? ' (' + status.docName + ')' : '') + '</b> — ครบทุกรายการแล้ว\n';
+  }
+
+  // ไม่ครบ → แดงแจ้งเตือนชัดๆ
+  let block = '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
+  block += '<b>📌 ' + docLabel + (status.docName ? ' ' + status.docName : '') +
+           ' ยังค้าง' + verb + 'อีก ' + fmtQty(status.totalRemain) + ' หน่วย</b>\n';
+  const rl = status.remainLines || [];
+  if (rl.length) {
+    block += '<b>รายการที่ค้าง' + verb + ':</b>\n';
+    for (const l of rl.slice(0, 5)) {
+      const pname = String(l.product || '').replace(/-{2,}/g, ' ').trim().slice(0, 55);
+      block += '  🔻 ' + pname + '\n' +
+               '       สั่ง ' + fmtQty(l.ordered) + ' • ' + verb + 'แล้ว ' + fmtQty(l.done) +
+               ' • <b>ค้าง ' + fmtQty(l.remain) + ' ' + (l.uom || '') + '</b>\n';
+    }
+    if (rl.length > 5) block += '  ...และอีก ' + (rl.length - 5) + ' รายการ\n';
+  }
+  block += '<b>‼️ โปรดตรวจสอบว่าคีย์จำนวนถูกต้องหรือไม่</b>\n';
+  return block;
+}
+
+// แสดงจำนวนสวยๆ (ตัด .0 ถ้าเป็นจำนวนเต็ม)
+function fmtQty(n) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+}
+
 async function sendReport(fromChatId, picking, target, lineGroups, db) {
   try {
     const { odooDelivery, parseCompany } = await import('./odoo.js');
@@ -379,17 +419,29 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     });
     const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
+    // เช็คสถานะรับ/ส่ง จาก origin (กันคีย์จำนวนผิด)
+    let statusBlock = '';
+    try {
+      const { odooReceiveDeliveryStatus } = await import('./odoo.js');
+      const st = await odooReceiveDeliveryStatus(origin);
+      statusBlock = buildReceiveStatusBlock(st);
+    } catch (e) { /* เช็คไม่ได้ ข้าม */ }
+
     const msg =
       '📊 รายงาน: ' + name + '\n' +
       (origin ? '📋 โครงการ: ' + origin + '\n' : '') +
       '📅 วันที่: ' + date + '\n' +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
-      lineItems + '\n\n' +
+      lineItems + '\n' +
+      statusBlock + '\n' +
       '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\n' +
       'เรียบร้อยครับ ✅';
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+
+    // เวอร์ชัน plain (ตัด HTML tag) สำหรับ LINE ที่ไม่รองรับ HTML
+    const msgPlain = msg.replace(/<\/?b>/g, '');
 
     if (target === '__self__' || target === 'เทเลแกรม') {
       // __self__ → ส่งกลับกลุ่มที่พิมพ์คำสั่ง | เทเลแกรม → ส่งเข้า TELEGRAM_CHAT_ID_2
@@ -398,7 +450,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: destId, text: msg, parse_mode: 'HTML' })
       });
       if (target !== '__self__') {
         await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
@@ -411,7 +463,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
       const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
-        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msgPlain }] })
       });
       if (!lineRes.ok) {
         const lineResJson = await lineRes.json();
@@ -444,6 +496,12 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       const p = allPicks.find(x => x.id === picking.id) || picking;
       const images = p.images || [];
       totalImages += images.length;
+      // เช็คสถานะรับ/ส่ง จาก origin (กันคีย์จำนวนผิด)
+      let recvStatus = null;
+      try {
+        const { odooReceiveDeliveryStatus } = await import('./odoo.js');
+        recvStatus = await odooReceiveDeliveryStatus(p.origin || '');
+      } catch (e) { /* ข้าม */ }
       picksData.push({
         name: p.name,
         origin: p.origin || '',
@@ -451,6 +509,7 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
         date: String(p.scheduled_date || '').slice(0, 10),
         statusText: stMap[p.state] || 'รอส่ง',
         statusColor: p.state === 'done' ? 'red' : (p.state === 'cancel' ? 'gray' : 'green'),
+        recvStatus,
         lines: (p.lines || []).map(l => ({
           name: Array.isArray(l.product_id) ? l.product_id[1] : '',
           qty: l.quantity || l.product_uom_qty || 0,
@@ -481,16 +540,18 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       '📷 รูปงานรวม: ' + totalImages + ' รูป\n\n' +
       picksData.map(p =>
         '📋 ' + p.name + ' — ' + (p.statusText) + '\n' +
-        '   ' + p.lines.length + ' รายการสินค้า'
+        '   ' + p.lines.length + ' รายการสินค้า' +
+        buildReceiveStatusBlock(p.recvStatus)
       ).join('\n') + '\n\n' +
       '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\nเรียบร้อยครับ ✅';
+    const msgPlain = msg.replace(/<\/?b>/g, '');
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
     if (target === '__self__' || target === 'เทเลแกรม') {
       const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: destId, text: msg, parse_mode: 'HTML' })
       });
       if (target !== '__self__') {
         await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า Telegram เรียบร้อยครับ');
@@ -500,7 +561,7 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       const LINE_TOKEN = process.env.LINE_CHANNEL_TOKEN || '';
       await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
-        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msgPlain }] })
       });
       await sendTelegramReply(fromChatId, '✅ ส่งรายงาน ' + picksData.length + ' ใบเข้า LINE กลุ่ม "' + target + '" เรียบร้อยครับ');
     }
@@ -553,6 +614,14 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     });
     const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
+    // เช็คสถานะรับ/ส่ง จากชื่อเอกสาร (PO/SO) — กันคีย์จำนวนผิด
+    let statusBlock = '';
+    try {
+      const { odooReceiveDeliveryStatus } = await import('./odoo.js');
+      const st = await odooReceiveDeliveryStatus(d.name || '');
+      statusBlock = buildReceiveStatusBlock(st);
+    } catch (e) { /* ข้าม */ }
+
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
@@ -560,9 +629,11 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
-      lineItems + '\n\n' +
+      lineItems + '\n' +
+      statusBlock + '\n' +
       '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\n' +
       'เรียบร้อยครับ ✅';
+    const msgPlain = msg.replace(/<\/?b>/g, '');
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
     if (target === '__self__' || target === 'เทเลแกรม') {
@@ -570,7 +641,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       if (!destId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2'); return; }
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: destId, text: msg })
+        body: JSON.stringify({ chat_id: destId, text: msg, parse_mode: 'HTML' })
       });
       if (target !== '__self__') {
         await sendTelegramReply(fromChatId, '✅ ส่งรายงานเข้า Telegram เรียบร้อยครับ');
@@ -582,7 +653,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOKEN },
-        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msg }] })
+        body: JSON.stringify({ to: groupId, messages: [{ type: 'text', text: msgPlain }] })
       });
       if (!lineRes.ok) {
         const j = await lineRes.json();
