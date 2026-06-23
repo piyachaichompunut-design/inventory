@@ -2540,3 +2540,89 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
   }
   return { bills: result };
 }
+
+// ── เช็คสถานะการรับ/ส่งจาก origin ของใบส่งของ (กันคีย์จำนวนผิด) ───────────────
+//   origin เป็น PO → เทียบ product_qty vs qty_received (รับเข้าครบไหม)
+//   origin เป็น SO → เทียบ product_uom_qty vs qty_delivered (ส่งออกครบไหม)
+//   คืน: { type:'po'|'so'|null, complete:bool, lines:[{product, ordered, done, remain, uom}], totalRemain }
+export async function odooReceiveDeliveryStatus(origin) {
+  const raw = String(origin || '').trim();
+  if (!raw) return { type: null, found: false };
+
+  // origin อาจมีหลายเลข (เช่น "P2606044, P2606050") → แยกเอาเลขแรกที่เจอ
+  const tokens = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+
+  // ลองหา PO ก่อน (รับเข้า)
+  for (const tok of tokens) {
+    try {
+      const pos = await searchRead('purchase.order',
+        ['|', ['name', '=', tok], ['name', 'ilike', tok]],
+        ['id', 'name', 'order_line'], 3);
+      if (pos.length) {
+        const po = pos[0];
+        const lines = await searchRead('purchase.order.line',
+          [['order_id', '=', po.id]],
+          ['product_id', 'product_qty', 'qty_received', 'product_uom'], 200);
+        const detail = [];
+        let totalRemain = 0;
+        for (const l of lines) {
+          const ordered = l.product_qty || 0;
+          const done = l.qty_received || 0;
+          const remain = ordered - done;
+          if (ordered > 0) {
+            detail.push({
+              product: Array.isArray(l.product_id) ? l.product_id[1] : '',
+              ordered, done, remain,
+              uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+            });
+            if (remain > 0.0001) totalRemain += remain;
+          }
+        }
+        return {
+          type: 'po', found: true, docName: po.name,
+          complete: totalRemain <= 0.0001,
+          lines: detail, totalRemain,
+          remainLines: detail.filter(d => d.remain > 0.0001)
+        };
+      }
+    } catch (e) { /* ลอง token ถัดไป */ }
+  }
+
+  // ไม่เจอ PO → ลองหา SO (ส่งออก)
+  for (const tok of tokens) {
+    try {
+      const sos = await searchRead('sale.order',
+        ['|', ['name', '=', tok], ['name', 'ilike', tok]],
+        ['id', 'name', 'order_line'], 3);
+      if (sos.length) {
+        const so = sos[0];
+        const lines = await searchRead('sale.order.line',
+          [['order_id', '=', so.id]],
+          ['product_id', 'product_uom_qty', 'qty_delivered', 'product_uom'], 200);
+        const detail = [];
+        let totalRemain = 0;
+        for (const l of lines) {
+          const ordered = l.product_uom_qty || 0;
+          const done = l.qty_delivered || 0;
+          const remain = ordered - done;
+          if (ordered > 0) {
+            detail.push({
+              product: Array.isArray(l.product_id) ? l.product_id[1] : '',
+              ordered, done, remain,
+              uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+            });
+            if (remain > 0.0001) totalRemain += remain;
+          }
+        }
+        return {
+          type: 'so', found: true, docName: so.name,
+          complete: totalRemain <= 0.0001,
+          lines: detail, totalRemain,
+          remainLines: detail.filter(d => d.remain > 0.0001)
+        };
+      }
+    } catch (e) { /* ลอง token ถัดไป */ }
+  }
+
+  return { type: null, found: false };
+}
