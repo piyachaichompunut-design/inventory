@@ -791,7 +791,11 @@ export default async function handler(req, res) {
           const { data } = await db.from('line_messages')
             .select('text').eq('message_id', quotedId).maybeSingle();
           if (data && data.text) quotedText = data.text;
-        } catch (e) {}
+          // DEBUG: log เพื่อหาสาเหตุ reply ดึงไม่เจอ
+          console.log('[WD-DEBUG] quotedId=' + quotedId + ' | found=' + (data ? 'YES' : 'NO') + ' | text=' + (data?.text || '(null)').slice(0, 40));
+        } catch (e) {
+          console.log('[WD-DEBUG] quotedId=' + quotedId + ' | ERROR=' + e.message);
+        }
       }
 
       const tt = text.trim();
