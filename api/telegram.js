@@ -18,6 +18,12 @@ const db = (SUPABASE_URL && SERVICE_KEY)
   : null;
 
 const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,5).toUpperCase();
+
+// ── ระบบเบิกของ: กลุ่มเบิกของ (แผนกอื่น) → แจ้งเข้า chat 1 ──────────────────────
+// บอทเงียบในกลุ่มนี้ ไม่ตอบใคร แค่ดึงข้อความ/รูปเบิกของส่งเข้า chat 1
+const WITHDRAW_GROUP_ID = process.env.WITHDRAW_GROUP_ID || '-1001698212414'; // กลุ่ม SET เบิกของ Store
+// คำที่ถือว่าเป็น "ทักทาย/ตอบรับ" ล้วนๆ → ไม่ต้องส่งเข้า chat 1
+const WITHDRAW_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗)[\s\S]{0,15}$/i;
 const todayStr = () => new Date().toISOString().slice(0,10);
 
 // escape อักขระ HTML สำหรับ Telegram parse_mode=HTML (กัน < > & ทำให้ส่งไม่ได้)
@@ -673,6 +679,75 @@ export default async function handler(req, res) {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const msg = update.message || update.channel_post;
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  ระบบเบิกของ: ข้อความ/รูปจากกลุ่มเบิกของ → แจ้งเข้า chat 1 (บอทเงียบ)
+    // ════════════════════════════════════════════════════════════════════════
+    if (msg && String(msg.chat?.id) === String(WITHDRAW_GROUP_ID)) {
+      const TG_TOK = process.env.TELEGRAM_BOT_TOKEN || '';
+      const CHAT1 = process.env.TELEGRAM_CHAT_ID || '';
+      const wText = (msg.text || msg.caption || '').trim();
+      const wHasPhoto = !!(msg.photo || (msg.document && /^image\//.test(msg.document?.mime_type || '')));
+      const wHasMention = /@/.test(wText);
+      const wHasBerk = /เบิก/.test(wText);
+
+      // เงื่อนไข "เบิกของจริง" → มีรูป / มีคำว่าเบิก / มี @แท็ก
+      // และต้องไม่ใช่คำทักทายล้วนๆ
+      const isGreetingOnly = wText && WITHDRAW_GREETING_ONLY.test(wText) && !wHasBerk && !wHasMention;
+      const isWithdraw = (wHasPhoto || wHasBerk || wHasMention) && !isGreetingOnly;
+
+      if (isWithdraw && TG_TOK && CHAT1) {
+        try {
+          // หัวข้อแจ้งเตือน
+          const sender = msg.from
+            ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim()
+            : '';
+          const header = '📦 <b>มีแผนกอื่นเบิกของครับ</b>' + (sender ? '\n👤 จาก: ' + tgEsc(sender) : '');
+
+          // ส่งหัวข้อก่อน (เพื่อให้ลูกน้อง reply อันนี้ตอนเสร็จ)
+          // แล้ว copyMessage ตัวจริง (รูป/ข้อความ) ตามไป — ผูก source ไว้ใน DB
+          const headRes = await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: CHAT1, text: header, parse_mode: 'HTML' })
+          });
+          const headJson = await headRes.json();
+          const headMsgId = headJson.ok ? headJson.result.message_id : null;
+
+          // copyMessage: ส่งสำเนารูป/ข้อความเดิมเข้า chat 1 (ไม่โชว์ว่า forwarded)
+          const copyRes = await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: CHAT1,
+              from_chat_id: msg.chat.id,
+              message_id: msg.message_id
+            })
+          });
+          const copyJson = await copyRes.json();
+          const copyMsgId = copyJson.ok ? copyJson.result.message_id : null;
+
+          // ผูกข้อมูลไว้ใน DB: เมื่อ reply ที่ header หรือ copy ใน chat1 → รู้ว่าต้องตอบกลับกลุ่มเบิกของ + ตัวไหน
+          if (db && (headMsgId || copyMsgId)) {
+            const recId = 'wd_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+            await db.from('delivery_views').upsert({
+              id: recId,
+              title: 'withdraw',
+              status_label: 'system',
+              data: {
+                type: 'withdraw_request',
+                srcChatId: String(msg.chat.id),       // กลุ่มเบิกของ
+                srcMessageId: msg.message_id,          // ข้อความ/รูปต้นฉบับในกลุ่มเบิกของ
+                chat1HeaderId: headMsgId,              // id หัวข้อใน chat1 (ให้ reply)
+                chat1CopyId: copyMsgId,                // id สำเนาใน chat1 (ให้ reply ได้เหมือนกัน)
+                sender,
+                createdAt: new Date().toISOString()
+              }
+            });
+          }
+        } catch (e) { /* เงียบ ไม่ตอบกลุ่มเบิกของ */ }
+      }
+      // บอทเงียบในกลุ่มเบิกของเสมอ — จบเลย ไม่ทำ logic อื่น
+      res.status(200).json({ ok: true }); return;
+    }
+
     // ── session "รับคืนหน้างาน": รับทั้งรูปและข้อความ สะสมใน delivery_views ──
     if (msg && db) {
       const rkChatId = msg.chat && msg.chat.id;
@@ -923,6 +998,12 @@ export default async function handler(req, res) {
       cmdText = cmdText.trim();
 
       var lc = cmdText.toLowerCase();
+
+      // ── /chatid → ตอบ Chat ID ของกลุ่มนี้ (ใช้ตอนตั้งค่า) ──
+      if (cmdText === '/chatid' || lc === '/chatid') {
+        await sendTelegramReply(chatId, '🆔 Chat ID ของกลุ่มนี้:\n' + chatId);
+        res.status(200).json({ ok: true }); return;
+      }
 
       // ── /รายงาน → ค้นใบส่งของ แล้วส่งรายงานเข้า LINE หรือ Telegram กลุ่ม 2 ──
       if (cmdText.startsWith('/รายงาน')) {
@@ -1605,6 +1686,53 @@ export default async function handler(req, res) {
         // ดึง keyword หมวดหมู่จากข้อความที่พิมพ์ต่อจาก @บอท เช่น "@บอท so" → catKeyword = "so"
         const botMentionText = msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         const catKeyword = botMentionText.toLowerCase();
+
+        // ── @บอท เรียบร้อย (reply ข้อความเบิกของใน chat 1) → ตอบกลับกลุ่มเบิกของ ──
+        if (/เรียบร้อย|เสร็จ|จัดเสร็จ|จัดให้แล้ว/.test(botMentionText)) {
+          if (db) {
+            try {
+              const replyId = replyMsg.message_id;
+              // หา record เบิกของ ที่ chat1HeaderId หรือ chat1CopyId ตรงกับข้อความที่ reply
+              const { data: rows } = await db.from('delivery_views')
+                .select('*').eq('title', 'withdraw').order('id', { ascending: false }).limit(50);
+              const rec = (rows || []).find(r => {
+                const d = r.data || {};
+                return d.chat1HeaderId === replyId || d.chat1CopyId === replyId;
+              });
+              if (rec) {
+                const d = rec.data;
+                const TG_TOK = process.env.TELEGRAM_BOT_TOKEN || '';
+                // ส่งสำเนาข้อความ/รูปเบิกของเดิม กลับเข้ากลุ่มเบิกของ + "เรียบร้อยครับ"
+                await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: d.srcChatId,
+                    from_chat_id: d.srcChatId,
+                    message_id: d.srcMessageId,
+                    reply_to_message_id: d.srcMessageId   // reply ที่ใบเบิกเดิม
+                  })
+                });
+                await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: d.srcChatId,
+                    text: '✅ เรียบร้อยครับ จัดของให้แล้ว',
+                    reply_to_message_id: d.srcMessageId
+                  })
+                });
+                // ตอบยืนยันใน chat 1
+                await sendTelegramReply(chatId, '✅ ส่งแจ้ง "เรียบร้อยครับ" กลับกลุ่มเบิกของแล้วครับ');
+                // ลบ record (ทำเสร็จแล้ว)
+                await db.from('delivery_views').delete().eq('id', rec.id);
+              } else {
+                await sendTelegramReply(chatId, '⚠️ ไม่พบใบเบิกที่ผูกกับข้อความนี้ครับ (อาจตอบไปแล้ว หรือ reply ผิดข้อความ)');
+              }
+            } catch (e) {
+              await sendTelegramReply(chatId, '⚠️ ตอบกลับกลุ่มเบิกของไม่สำเร็จ: ' + e.message);
+            }
+          }
+          res.status(200).json({ ok: true }); return;
+        }
 
         // ── ตรวจว่าเป็นการ "แก้วันที่" หรือไม่ ──
         var hasEditWord = botMentionText.indexOf('แก้')>=0 || botMentionText.indexOf('เปลี่ยน')>=0 || botMentionText.indexOf('เลื่อน')>=0;
