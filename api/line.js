@@ -1192,6 +1192,13 @@ export default async function handler(req, res) {
         const sortedM2 = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a,b) => b.index - a.index);
         for (const m of sortedM2) { cleanForCmd = cleanForCmd.slice(0, m.index) + cleanForCmd.slice(m.index + m.length); }
         cleanForCmd = cleanForCmd.replace(/\s+/g, ' ').trim();
+
+        // ── @บอท groupid → ตอบ Group ID กลับในกลุ่ม (ใช้ตอนตั้งค่า) ──
+        if (/^groupid$/i.test(cleanForCmd)) {
+          await pushLine(pushTarget, [{ type: 'text', text: '🆔 Group ID ของกลุ่มนี้:\n' + pushTarget }]);
+          continue;
+        }
+
         if (/^แก้ไฟล์$/i.test(cleanForCmd)) {
           if (!db) continue;
 
@@ -1360,6 +1367,25 @@ export default async function handler(req, res) {
         const combined = quotedText
           ? (quotedText + ' ' + typedClean).trim()
           : typedClean;
+
+        // ถ้า reply (มี quotedId) แต่ดึงข้อความงานเดิมไม่ได้ (ไม่อยู่ใน DB)
+        // → ตรวจว่าที่พิมพ์มามี "ตัวบ่งชี้งานจริง" ไหม (เลขเอกสาร/ชื่อโครงการ)
+        //   ถ้าไม่มี = ข้อมูลไม่พอ (เช่นพิมพ์แค่ "ไฟฟ้า พี่เอ็ม") → แจ้งเตือน ไม่สร้างงานมั่ว
+        if (quotedId && !quotedText) {
+          const body = typedClean.replace(/^\s*(ส่ง|รับ)\s*/i, '').trim();
+          // ตัวบ่งชี้งานจริง: มีเลขเอกสาร (so/po/pr+เลข), เลข 4+ หลัก, หรือคำโครงการ
+          const hasDocNum = /(so|po|pr)\s*\d{3,}/i.test(body) || /\d{4,}/.test(body);
+          const hasProjectWord = /(ทล\.|ทช\.|ทางหลวง|โครงการ|แขวง|หมายเลข)/.test(body);
+          if (!hasDocNum && !hasProjectWord) {
+            await pushLine(pushTarget, [{ type: 'text', text:
+              '⚠️ รับงานไม่สำเร็จครับ\n\n' +
+              'บอทดึงข้อความงานที่ reply ไม่ได้ (ข้อความเดิมอาจถูกส่งก่อนบอทเข้ากลุ่ม หรือเป็นข้อความที่บอทมองไม่เห็น)\n\n' +
+              '✅ วิธีแก้: ก๊อปปี้ข้อความงาน (ที่มีชื่อโครงการ/เลข SO) มาวางใหม่ในกลุ่มนี้ แล้ว reply ข้อความนั้น พิมพ์ @บอท รับ หรือ @บอท ส่ง อีกครั้งครับ'
+            }]);
+            continue;
+          }
+        }
+
         taskData = await parseTaskSmart(combined, db, typedClean);
       }
 
