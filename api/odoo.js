@@ -15,14 +15,17 @@ const ODOO_KEY  = process.env.ODOO_API_KEY  || '';
 let _uid = null; // cache uid ไว้ใช้ซ้ำใน request เดียว
 
 // ── รหัสสินค้าที่ไม่ต้องแจ้งเตือนใดๆ (ค่าบริการ ฯลฯ ไม่ใช่สต็อกจริง) ───────────
-// เพิ่มรหัสที่ต้องการข้ามได้ที่นี่ (เทียบแบบไม่สนตัวพิมพ์เล็ก-ใหญ่)
-const IGNORE_PRODUCT_CODES = [
-  '01SV-SVS-03-00-00-00-00-00-00',  // Service - ค่าบริการ
+// ค่าบริการทุกตัวขึ้นต้นด้วย 01SV- (Insurance/Plating/Service/Transport)
+// บางที่ Odoo แสดงเป็น [SV-xxx] → กรองทั้ง 2 รูปแบบ
+const IGNORE_PRODUCT_PATTERNS = [
+  /\b01SV-/i,                    // รหัสเต็ม เช่น [01SV-SVS-03-...] [01SV-PLT-04-...]
+  /\bSV-\d/i,                    // รหัสย่อ เช่น [SV-001] [SV-002]
+  /ค่าบริการ|ค่าขนส่ง|ค่าประกัน|ค่าบริการงานชุบ/,  // กันพลาดด้วยชื่อ
 ];
-// เช็คว่าชื่อสินค้า (ที่มักมีรูปแบบ "[รหัส] ชื่อ") มีรหัสที่ต้องข้ามไหม
+// เช็คว่าชื่อสินค้า (ที่มักมีรูปแบบ "[รหัส] ชื่อ") เป็นค่าบริการที่ต้องข้ามไหม
 function isIgnoredProduct(productName) {
-  const s = String(productName || '').toLowerCase();
-  return IGNORE_PRODUCT_CODES.some(code => s.includes(code.toLowerCase()));
+  const s = String(productName || '');
+  return IGNORE_PRODUCT_PATTERNS.some(re => re.test(s));
 }
 
 // ── แผนที่ตัวย่อบริษัท → company_id ──────────────────────────────────────────
