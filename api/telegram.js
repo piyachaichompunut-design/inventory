@@ -22,6 +22,11 @@ const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().to
 // ── ระบบเบิกของ: กลุ่มเบิกของ (แผนกอื่น) → แจ้งเข้า chat 1 ──────────────────────
 // บอทเงียบในกลุ่มนี้ ไม่ตอบใคร แค่ดึงข้อความ/รูปเบิกของส่งเข้า chat 1
 const WITHDRAW_GROUP_ID = process.env.WITHDRAW_GROUP_ID || '-1001698212414'; // กลุ่ม SET เบิกของ Store
+// Chat 4: กลุ่ม SET (สโตร์) — รับรูป/ไฟล์/ข้อความสินค้าเข้าคลัง → แจ้ง chat 1
+const STORE_GROUP_ID = process.env.STORE_GROUP_ID || '-1001817927448';
+// คำกรองข้อความสต็อก/คลัง (เอาเฉพาะที่เกี่ยวกับสินค้า)
+const STORE_MSG_KEYWORDS = /(ส่ง|รับ|สโตร์|คลัง|FG|รายการ|ใบรายการ|แจ้ง|นำส่ง|รับเข้า|ส่งเข้า|รับของ|ส่งของ|สินค้า|วัตถุดิบ|จำนวน|โครงการ|งาน|ทล\.|ทช\.)/i;
+const STORE_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗|--|---+)[\s\S]{0,15}$/i;
 // คำที่ถือว่าเป็น "ทักทาย/ตอบรับ" ล้วนๆ → ไม่ต้องส่งเข้า chat 1
 const WITHDRAW_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗)[\s\S]{0,15}$/i;
 const todayStr = () => new Date().toISOString().slice(0,10);
@@ -745,6 +750,56 @@ export default async function handler(req, res) {
         } catch (e) { /* เงียบ ไม่ตอบกลุ่มเบิกของ */ }
       }
       // บอทเงียบในกลุ่มเบิกของเสมอ — จบเลย ไม่ทำ logic อื่น
+      res.status(200).json({ ok: true }); return;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Chat 4: กลุ่ม SET (สโตร์) — รูป/PDF/ข้อความสินค้าเข้าคลัง → แจ้ง chat 1
+    //  บอทเงียบสนิท ไม่ตอบใคร ดึงเฉพาะที่เกี่ยวกับสินค้า/คลัง
+    // ════════════════════════════════════════════════════════════════════════
+    if (msg && String(msg.chat?.id) === String(STORE_GROUP_ID)) {
+      const TG_TOK = process.env.TELEGRAM_BOT_TOKEN || '';
+      const CHAT1  = process.env.TELEGRAM_CHAT_ID || '';
+      const sText  = (msg.text || msg.caption || '').trim();
+      const sHasPhoto = !!(msg.photo);
+      const sHasFile  = !!(msg.document);
+      const sHasText  = sText.length > 0;
+
+      // กรองทิ้ง: ข้อความทักทาย/ตอบรับล้วนๆ ที่ไม่เกี่ยวสินค้า
+      const isGreeting = sText && STORE_GREETING_ONLY.test(sText);
+      // เอาเฉพาะ: รูป / ไฟล์ / ข้อความที่เกี่ยวกับสินค้า/คลัง
+      const isStoreMsg = !isGreeting && (
+        sHasPhoto ||
+        sHasFile  ||
+        (sHasText && STORE_MSG_KEYWORDS.test(sText))
+      );
+
+      if (isStoreMsg && TG_TOK && CHAT1) {
+        try {
+          const sender = msg.from
+            ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim()
+            : '';
+          // ส่งหัวข้อแจ้งเตือนเข้า chat 1
+          await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: CHAT1,
+              text: '🏭 <b>แจ้งสินค้าส่งขึ้นคลัง</b>' + (sender ? '\n👤 จาก: ' + tgEsc(sender) : ''),
+              parse_mode: 'HTML'
+            })
+          });
+          // ส่งสำเนารูป/ไฟล์/ข้อความเดิมเข้า chat 1
+          await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: CHAT1,
+              from_chat_id: msg.chat.id,
+              message_id: msg.message_id
+            })
+          });
+        } catch (e) { /* เงียบ */ }
+      }
+      // บอทเงียบในกลุ่มสโตร์เสมอ — จบเลย
       res.status(200).json({ ok: true }); return;
     }
 
