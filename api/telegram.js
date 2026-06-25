@@ -24,8 +24,9 @@ const rid = () => 'T' + Date.now().toString(36).toUpperCase() + Math.random().to
 const WITHDRAW_GROUP_ID = process.env.WITHDRAW_GROUP_ID || '-1001698212414'; // กลุ่ม SET เบิกของ Store
 // Chat 4: กลุ่ม SET (สโตร์) — รับรูป/ไฟล์/ข้อความสินค้าเข้าคลัง → แจ้ง chat 1
 const STORE_GROUP_ID = process.env.STORE_GROUP_ID || '-1001817927448';
-// คำกรองข้อความสต็อก/คลัง (เอาเฉพาะที่เกี่ยวกับสินค้า)
-const STORE_MSG_KEYWORDS = /(ส่ง|รับ|สโตร์|คลัง|FG|รายการ|ใบรายการ|แจ้ง|นำส่ง|รับเข้า|ส่งเข้า|รับของ|ส่งของ|สินค้า|วัตถุดิบ|จำนวน|โครงการ|งาน|ทล\.|ทช\.)/i;
+// คำกรองข้อความสต็อก/คลัง — ใช้วลีเฉพาะ (กันข้อความทั่วไปหลุดมา)
+// เอาเฉพาะข้อความที่เกี่ยวกับ "นำส่งคลัง/ส่งขึ้นคลัง" หรือใบรายการ FG จริงๆ
+const STORE_MSG_KEYWORDS = /(นำส่ง.*คลัง|ส่ง.*ขึ้น.*คลัง|ส่งขึ้นคลัง|เข้าคลัง|เข้าสโตร์|ขึ้นสโตร์|แจ้งรายการนำส่ง|รายการนำส่ง|ใบรายการ|นำส่งแผนกคลัง|รับเข้าคลัง|FG\.|สถานะ\s*:|ในนาม\s*:)/i;
 const STORE_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗|--|---+)[\s\S]{0,15}$/i;
 // คำที่ถือว่าเป็น "ทักทาย/ตอบรับ" ล้วนๆ → ไม่ต้องส่งเข้า chat 1
 const WITHDRAW_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗)[\s\S]{0,15}$/i;
@@ -763,40 +764,68 @@ export default async function handler(req, res) {
       const sText  = (msg.text || msg.caption || '').trim();
       const sHasPhoto = !!(msg.photo);
       const sHasFile  = !!(msg.document);
-      const sHasText  = sText.length > 0;
+      const sHasMedia = sHasPhoto || sHasFile;
+      const sHasCaption = !!(msg.caption && msg.caption.trim());
+      const senderId = msg.from ? String(msg.from.id) : '';
+      const sender = msg.from
+        ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim()
+        : '';
 
-      // กรองทิ้ง: ข้อความทักทาย/ตอบรับล้วนๆ ที่ไม่เกี่ยวสินค้า
       const isGreeting = sText && STORE_GREETING_ONLY.test(sText);
-      // เอาเฉพาะ: รูป / ไฟล์ / ข้อความที่เกี่ยวกับสินค้า/คลัง
-      const isStoreMsg = !isGreeting && (
-        sHasPhoto ||
-        sHasFile  ||
-        (sHasText && STORE_MSG_KEYWORDS.test(sText))
-      );
+      const isStoreText = sText && !isGreeting && STORE_MSG_KEYWORDS.test(sText);
 
-      if (isStoreMsg && TG_TOK && CHAT1) {
+      // ส่งเข้า chat 1 (หัวข้อ + สำเนา)
+      const sendToChat1 = async (fromChatId, messageId, who) => {
+        await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: CHAT1,
+            text: '\u{1F3ED} <b>แจ้งสินค้าส่งขึ้นคลัง</b>' + (who ? '\n\u{1F464} จาก: ' + tgEsc(who) : ''),
+            parse_mode: 'HTML'
+          })
+        });
+        await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: CHAT1, from_chat_id: fromChatId, message_id: messageId })
+        });
+      };
+
+      if (TG_TOK && CHAT1) {
         try {
-          const sender = msg.from
-            ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim()
-            : '';
-          // ส่งหัวข้อแจ้งเตือนเข้า chat 1
-          await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: CHAT1,
-              text: '🏭 <b>แจ้งสินค้าส่งขึ้นคลัง</b>' + (sender ? '\n👤 จาก: ' + tgEsc(sender) : ''),
-              parse_mode: 'HTML'
-            })
-          });
-          // ส่งสำเนารูป/ไฟล์/ข้อความเดิมเข้า chat 1
-          await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: CHAT1,
-              from_chat_id: msg.chat.id,
-              message_id: msg.message_id
-            })
-          });
+          // กรณี 1: รูป/ไฟล์ + caption เกี่ยวคลัง → ส่งทันที
+          if (sHasMedia && sHasCaption && isStoreText) {
+            await sendToChat1(msg.chat.id, msg.message_id, sender);
+          }
+          // กรณี 2: รูป/ไฟล์ลอยๆ (ไม่มี caption) → เก็บรอข้อความคลังตามมา
+          else if (sHasMedia && !sHasCaption && db) {
+            const recId = 'st_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+            await db.from('delivery_views').upsert({
+              id: recId, title: 'store_pending', status_label: 'system',
+              data: { srcChatId: String(msg.chat.id), srcMessageId: msg.message_id,
+                      senderId, sender, createdAt: Date.now() }
+            });
+          }
+          // กรณี 3: ข้อความเกี่ยวคลัง → เช็ครูปค้างจากคนเดียวกัน
+          else if (isStoreText && db) {
+            const { data: rows } = await db.from('delivery_views')
+              .select('*').eq('title', 'store_pending').order('id', { ascending: false }).limit(30);
+            const now = Date.now();
+            const pending = (rows || []).find(r => {
+              const d = r.data || {};
+              return d.senderId === senderId && (now - (d.createdAt || 0)) < 5 * 60 * 1000;
+            });
+            if (pending) {
+              await sendToChat1(pending.data.srcChatId, pending.data.srcMessageId, sender);
+              await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: CHAT1, from_chat_id: msg.chat.id, message_id: msg.message_id })
+              });
+              await db.from('delivery_views').delete().eq('id', pending.id);
+            } else {
+              await sendToChat1(msg.chat.id, msg.message_id, sender);
+            }
+          }
+          // กรณีอื่น (รูปไม่มีข้อความคลัง, ข้อความทั่วไป) → ไม่ส่ง
         } catch (e) { /* เงียบ */ }
       }
       // บอทเงียบในกลุ่มสโตร์เสมอ — จบเลย
