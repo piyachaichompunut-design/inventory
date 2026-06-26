@@ -2333,12 +2333,21 @@ export async function odooDocDetail(model, id) {
     } catch(e) { comps = []; }
     doc = {
       name: 'MO ' + r.name, partner: prodName, partnerLabel: 'สินค้าที่ผลิต',
+      origin: r.origin || '',
       date: String(r.date_start || '').slice(0,10), total: 0,
       lines: [{ name: '🏭 ' + prodName + ' (ผลิต)', qty: r.product_qty || 0, uom: prodUom }].concat(
         comps.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : '', qty: l.product_uom_qty || l.quantity || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' }))
       )
     };
   } else { return null; }
+  // ── ดึง Source/origin แบบปลอดภัย (po/so/mo มี field นี้, บาง model อาจไม่มี → ข้าม) ──
+  // mrp ตั้งค่า doc.origin ไว้แล้ว จึงข้ามการ fetch ซ้ำ
+  if (doc.origin === undefined) {
+    try {
+      const oRows = await searchRead(model, [['id', '=', id]], ['origin'], 1);
+      if (oRows && oRows[0] && oRows[0].origin) doc.origin = oRows[0].origin;
+    } catch (e) { /* model นี้ไม่มี field origin → ข้าม */ }
+  }
   try {
     const atts = await searchRead('ir.attachment',
       ['&','&',['res_model','=',model],['res_id','=',id],['mimetype','ilike','image']], ['id','name'], 50);
