@@ -1178,10 +1178,18 @@ export default async function handler(req, res) {
         var repDocType = 'picking';
 
         // ── ตรวจ prefix mo → ค้น Manufacturing Order ──
-        var moMatch = repKw.match(/^mo\s+(.+)/i) || (repKw.match(/^SET\/MO\//i) ? [null, repKw] : null);
-        if (!moMatch && /^mo\d/i.test(repKw)) moMatch = [null, repKw]; // mo00002, mo/00002
-        if (moMatch) {
-          var moKw = (moMatch[1] || repKw).trim();
+        var repKwTrim = repKw.trim();
+        var isMoCmd = /^mo(\s|\/|\d|$)/i.test(repKwTrim) || /^set\/mo\//i.test(repKwTrim);
+        if (isMoCmd) {
+          // ดึง keyword: "set/mo/xxx" เก็บทั้งก้อน, อย่างอื่นตัด prefix "mo" + ตัวคั่นนำหน้าออก
+          var moKw = /^set\/mo\//i.test(repKwTrim) ? repKwTrim : repKwTrim.replace(/^mo[\s\/]*/i, '').trim();
+          if (!moKw) {
+            await sendTelegramReply(chatId,
+              'พิมพ์เลข MO หรือชื่อสินค้าต่อท้ายครับ เช่น:\n' +
+              '/รายงาน mo SET/MO/00002\n' +
+              '/รายงาน mo เสาไฟกิ่ง');
+            res.status(200).json({ ok: true }); return;
+          }
           try {
             const { odooMO } = await import('./odoo.js');
             const { keyword: moKwClean, company: moCo } = parseCompany(moKw);
@@ -1191,21 +1199,30 @@ export default async function handler(req, res) {
               await sendTelegramReply(chatId, '🔍 ไม่พบ MO "' + moKwClean + '" ครับ\n\nลองพิมพ์เลข MO เช่น:\n/รายงาน mo SET/MO/00002\n/รายงาน mo เสาไฟกิ่ง');
               res.status(200).json({ ok: true }); return;
             }
-            // แสดงผลสูงสุด 10 รายการ
-            const lines = mos.slice(0, 10).map((m, i) => {
-              const stateIcon = m.state === 'done' ? '✅' : m.state === 'cancel' ? '❌' : m.state === 'progress' ? '⚙️' : '📋';
-              return (i+1) + '. ' + stateIcon + ' <b>' + m.name + '</b>\n' +
-                '   📦 ' + m.product + '\n' +
-                '   🔢 จำนวน: ' + m.qty + ' ' + m.uom + '\n' +
-                (m.origin ? '   📄 อ้างอิง: ' + m.origin + '\n' : '') +
-                '   📅 ' + (m.dateStart || '-') + (m.dateEnd ? ' → ' + m.dateEnd : '') + '\n' +
-                '   สถานะ: ' + m.stateLabel;
-            }).join('\n\n');
+            if (mos.length > 1) {
+              // เจอหลายใบ → ให้ระบุเลข MO ให้ชัด (กันแนบรูปผิดใบ)
+              const list = mos.slice(0, 10).map(function(m, i){
+                const icon = m.state === 'done' ? '✅' : m.state === 'cancel' ? '❌' : m.state === 'progress' ? '⚙️' : '📋';
+                return (i+1) + '. ' + icon + ' ' + m.name + ' — ' + m.product + ' (' + m.stateLabel + ')';
+              }).join('\n');
+              await sendTelegramReply(chatId,
+                '🏭 เจอ MO ' + mos.length + ' ใบ' + (mos.length > 10 ? ' (แสดง 10 แรก)' : '') + '\nกรุณาระบุเลข MO ให้ชัดเพื่อแนบรูปครับ:\n\n' + list +
+                '\n\nเช่น: /รายงาน mo ' + mos[0].name);
+              res.status(200).json({ ok: true }); return;
+            }
+            // เจอใบเดียว → เปิด session รอรูป (เหมือน po/so/pr)
+            const mo = mos[0];
+            if (db) {
+              await db.from('tg_report_session').upsert({
+                chat_id: String(chatId),
+                doc_type: 'mo', doc_id: mo.id, doc_name: mo.name, doc_model: 'mrp.production',
+                uploaded: 0, options: repTarget, updated_at: new Date().toISOString()
+              }, { onConflict: 'chat_id' });
+            }
             await sendTelegramReply(chatId,
-              '🏭 <b>Manufacturing Orders — "' + moKwClean + '"</b>\n' +
-              'พบ ' + mos.length + ' รายการ' + (mos.length > 10 ? ' (แสดง 10 แรก)' : '') + '\n\n' +
-              lines, 'HTML'
-            );
+              '✅ พบ MO แล้วครับ!\n🏭 ' + mo.name + '\n📦 ' + mo.product +
+              '\n🔢 จำนวน: ' + mo.qty + ' ' + mo.uom + '\nสถานะ: ' + mo.stateLabel +
+              '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ');
           } catch(e) {
             await sendTelegramReply(chatId, '⚠️⚠️⚠️ ค้น MO ไม่สำเร็จ: ' + e.message);
           }
@@ -1589,14 +1606,9 @@ export default async function handler(req, res) {
                 await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่ดึงรายงานไม่สำเร็จ (ไม่พบใบส่งของ)');
               }
             } else {
-              // po/so/pr → ดึงเอกสารใหม่ แล้วส่งรายงานเอกสาร
-              const dt = sess.doc_type;
-              const doc = await odooFindDoc(dt, sess.doc_name, null, null);
-              if (doc) {
-                await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
-              } else {
-                await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่ดึงรายงานไม่สำเร็จ (ไม่พบเอกสาร)');
-              }
+              // po/so/pr/mo → ใช้ model+id ที่เก็บไว้ใน session ตรงๆ (ไม่ต้องค้นซ้ำ)
+              const doc = { model: sess.doc_model, id: sess.doc_id, name: sess.doc_name };
+              await sendReportDoc(chatId, doc, repTarget, LINE_GROUPS);
             }
           } catch(e) {
             await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่สร้างรายงานไม่สำเร็จ: ' + e.message);
