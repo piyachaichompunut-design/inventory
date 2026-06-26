@@ -493,29 +493,27 @@ async function parseTaskSmart(text, dbClient, typedText) {
     .replace(/\s+/g, ' ').trim();
 
   const typedWords = typedClean.split(/\s+/).filter(Boolean);
+  // หาหมวดแบบไม่สนตัวพิมพ์เล็ก/ใหญ่ (so / SO / So ให้ตรงกันหมด)
+  const findCat = (word) => {
+    const lw = String(word || '').toLowerCase();
+    if (!lw) return null;
+    if (CAT_ALIAS[lw]) return CAT_ALIAS[lw];                     // ลองตัวย่อก่อน (เทียบแบบ lowercase)
+    const matched = catList.find(c => {                          // แล้วเทียบกับชื่อเต็มใน DB แบบไม่สน case
+      const lc = String(c || '').toLowerCase();
+      return lc === lw || lc.includes(lw) || lw.includes(lc);
+    });
+    return matched || null;
+  };
   if (typedWords.length >= 2) {
     // 2 คำขึ้นไป: คำแรก=ตัวย่อหมวด, ที่เหลือ=ชื่อ
-    const catWord = typedWords[0];
-    const fullCat = CAT_ALIAS[catWord];                          // ลองตัวย่อก่อน
-    if (fullCat) {
-      categories = fullCat;
-    } else {
-      // ไม่ตรงตัวย่อ → ลองเทียบกับชื่อเต็มใน DB
-      const matched = catList.find(c => c === catWord || c.includes(catWord) || catWord.includes(c));
-      categories = matched || catWord;
-    }
+    const cat = findCat(typedWords[0]);
+    categories = cat || typedWords[0];                           // หาไม่เจอ → เก็บคำที่พิมพ์ไว้เป็นหมวด (พฤติกรรมเดิม)
     salesName = typedWords.slice(1).join(' ');
   } else if (typedWords.length === 1) {
-    // คำเดียว: ลองตัวย่อก่อน ถ้าตรง = หมวด, ไม่ตรง = ชื่อคน
-    const w = typedWords[0];
-    const fullCat = CAT_ALIAS[w];
-    if (fullCat) {
-      categories = fullCat;
-    } else {
-      const matched = catList.find(c => c === w || c.includes(w) || w.includes(c));
-      if (matched) categories = matched;
-      else salesName = w;
-    }
+    // คำเดียว: ถ้าตรงหมวด = หมวด, ไม่ตรง = ชื่อคน
+    const cat = findCat(typedWords[0]);
+    if (cat) categories = cat;
+    else salesName = typedWords[0];
   }
 
   // ชื่องาน = ข้อความงานต้นฉบับเท่านั้น (ตัดส่วนที่พิมพ์ตอน reply ออก)
