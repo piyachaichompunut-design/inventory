@@ -1147,7 +1147,9 @@ export default async function handler(req, res) {
             'พิมพ์ชื่องาน/เลขเอกสารต่อท้ายครับ เช่น:\n' +
             '/รายงาน กท.1002 12/6\n' +
             '/รายงาน po2606025 เทส\n' +
-            '/รายงาน so2606011 เทเลแกรม\n\n' +
+            '/รายงาน so2606011 เทเลแกรม\n' +
+            '/รายงาน mo SET/MO/00002\n' +
+            '/รายงาน mo เสาไฟกิ่ง\n\n' +
             '➡️ บอทจะให้ส่งรูป แล้วพิมพ์ /จบรายงาน\n' +
             '   (อัปรูปเข้า Odoo + แสดงรายงานในครั้งเดียว)\n' +
             'ปลายทาง: ไลน์ / เทส / เทเลแกรม (ไม่ใส่ = แสดงในกลุ่มนี้)'
@@ -1174,6 +1176,41 @@ export default async function handler(req, res) {
         // ไม่ตัด prefix so/po/pr ออก — เก็บเลขเต็มไว้ค้นทั้งเลขใบส่ง + origin (SO/PO)
         // เช่น "so2605047" หรือ "2605047" หรือ "02070" (เลขใบส่งจริง) ค้นเจอหมด
         var repDocType = 'picking';
+
+        // ── ตรวจ prefix mo → ค้น Manufacturing Order ──
+        var moMatch = repKw.match(/^mo\s+(.+)/i) || (repKw.match(/^SET\/MO\//i) ? [null, repKw] : null);
+        if (!moMatch && /^mo\d/i.test(repKw)) moMatch = [null, repKw]; // mo00002, mo/00002
+        if (moMatch) {
+          var moKw = (moMatch[1] || repKw).trim();
+          try {
+            const { odooMO } = await import('./odoo.js');
+            const { keyword: moKwClean, company: moCo } = parseCompany(moKw);
+            await sendTelegramReply(chatId, '🔍 กำลังค้น MO ใน Odoo...');
+            const mos = await odooMO(moKwClean, moCo.id);
+            if (!mos || !mos.length) {
+              await sendTelegramReply(chatId, '🔍 ไม่พบ MO "' + moKwClean + '" ครับ\n\nลองพิมพ์เลข MO เช่น:\n/รายงาน mo SET/MO/00002\n/รายงาน mo เสาไฟกิ่ง');
+              res.status(200).json({ ok: true }); return;
+            }
+            // แสดงผลสูงสุด 10 รายการ
+            const lines = mos.slice(0, 10).map((m, i) => {
+              const stateIcon = m.state === 'done' ? '✅' : m.state === 'cancel' ? '❌' : m.state === 'progress' ? '⚙️' : '📋';
+              return (i+1) + '. ' + stateIcon + ' <b>' + m.name + '</b>\n' +
+                '   📦 ' + m.product + '\n' +
+                '   🔢 จำนวน: ' + m.qty + ' ' + m.uom + '\n' +
+                (m.origin ? '   📄 อ้างอิง: ' + m.origin + '\n' : '') +
+                '   📅 ' + (m.dateStart || '-') + (m.dateEnd ? ' → ' + m.dateEnd : '') + '\n' +
+                '   สถานะ: ' + m.stateLabel;
+            }).join('\n\n');
+            await sendTelegramReply(chatId,
+              '🏭 <b>Manufacturing Orders — "' + moKwClean + '"</b>\n' +
+              'พบ ' + mos.length + ' รายการ' + (mos.length > 10 ? ' (แสดง 10 แรก)' : '') + '\n\n' +
+              lines, 'HTML'
+            );
+          } catch(e) {
+            await sendTelegramReply(chatId, '⚠️⚠️⚠️ ค้น MO ไม่สำเร็จ: ' + e.message);
+          }
+          res.status(200).json({ ok: true }); return;
+        }
 
         await sendTelegramReply(chatId, '🔍 กำลังค้นหาใน Odoo...');
 
@@ -1806,11 +1843,7 @@ export default async function handler(req, res) {
         ? new RegExp('@' + BOT_USERNAME + '\\b', 'i').test(msgText)
         : (msg.entities || msg.caption_entities || []).some(e => e.type === 'mention');
 
-      // คำสั่ง "+N" = แนบไฟล์เข้างานล่าสุด — ต้องแยกออกจาก block สร้างงานด้านล่าง
-      // ไม่งั้น "+1" จะถูกเข้าใจผิดว่าเป็นการสร้างงานใหม่ แล้วตัวจัดการแนบไฟล์ (ด้านล่าง) จะไม่มีวันถูกเรียก
-      const _plusCmd = /^\+\d+$/.test(msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim());
-
-      if (mentioned && msg.reply_to_message && !_plusCmd) {
+      if (mentioned && msg.reply_to_message) {
         const replyMsg = msg.reply_to_message;
         // ดึงข้อความจาก reply (รองรับทั้ง text และ caption ของรูป/ไฟล์)
         const originalText = replyMsg.text || replyMsg.caption || '';
@@ -1924,8 +1957,8 @@ export default async function handler(req, res) {
         return;
       }
 
-      // ── +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด (ไม่ต้องแท็กบอท เหมือนไลน์) ──
-      if (_plusCmd && msg.reply_to_message) {
+      // ── @บอท +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด ──────────────
+      if (mentioned && msg.reply_to_message) {
         const msgText2 = msg.text || msg.caption || '';
         const botMentionText2 = msgText2.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         if (/^\+\d+$/.test(botMentionText2)) {
