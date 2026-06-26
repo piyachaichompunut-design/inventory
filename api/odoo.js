@@ -2320,6 +2320,24 @@ export async function odooDocDetail(model, id) {
     doc = { name: 'PR ' + r.name, partner: Array.isArray(r.requested_by) ? r.requested_by[1] : '', partnerLabel: 'ผู้ขอ',
       date: String(r.date_start || '').slice(0,10), total: 0,
       lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_qty || 0, uom: Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : '' })) };
+  } else if (model === 'mrp.production') {
+    const rows = await searchRead('mrp.production', [['id','=',id]], ['name','product_id','product_qty','product_uom_id','date_start','origin','state'], 1);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const prodName = Array.isArray(r.product_id) ? r.product_id[1] : '';
+    const prodUom = Array.isArray(r.product_uom_id) ? r.product_uom_id[1] : '';
+    // ดึงวัตถุดิบ (components) ของ MO — กันชื่อ field เปลี่ยนตามเวอร์ชันด้วย try/catch
+    let comps = [];
+    try {
+      comps = await searchRead('stock.move', [['raw_material_production_id','=',id]], ['product_id','product_uom_qty','quantity','product_uom'], 50);
+    } catch(e) { comps = []; }
+    doc = {
+      name: 'MO ' + r.name, partner: prodName, partnerLabel: 'สินค้าที่ผลิต',
+      date: String(r.date_start || '').slice(0,10), total: 0,
+      lines: [{ name: '🏭 ' + prodName + ' (ผลิต)', qty: r.product_qty || 0, uom: prodUom }].concat(
+        comps.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : '', qty: l.product_uom_qty || l.quantity || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' }))
+      )
+    };
   } else { return null; }
   try {
     const atts = await searchRead('ir.attachment',
