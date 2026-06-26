@@ -2653,3 +2653,55 @@ export async function odooReceiveDeliveryStatus(origin) {
 
   return { type: null, found: false };
 }
+
+// ── ค้น Manufacturing Order (MO) จาก mrp.production ─────────────────────────
+// keyword: เลข MO (SET/MO/00002), ชื่อสินค้า, หรือ origin (SO/PO ต้นทาง)
+export async function odooMO(keyword, companyId) {
+  const kw = String(keyword || '').trim();
+  if (!kw) return [];
+  const domain = withCompany(
+    ['|', '|', '|',
+      ['name', 'ilike', kw],
+      ['product_id.name', 'ilike', kw],
+      ['product_id.default_code', 'ilike', kw],
+      ['origin', 'ilike', kw]
+    ], companyId
+  );
+  const fields = ['name', 'product_id', 'product_qty', 'product_uom_id', 'state', 'date_start', 'date_finished', 'origin', 'company_id'];
+  let rows = [];
+  try { rows = await searchRead('mrp.production', domain, fields, 20); } catch (e) {
+    // fallback ค้นแค่ name กับ origin (กันกรณี relational field พัง)
+    try {
+      rows = await searchRead('mrp.production',
+        withCompany(['|', ['name', 'ilike', kw], ['origin', 'ilike', kw]], companyId),
+        fields, 20);
+    } catch (e2) {}
+  }
+  if (!rows.length) return [];
+
+  // เรียง: ตรงสุดมาก่อน (name match), ล่าสุดมาก่อน
+  const kwL = kw.toLowerCase();
+  rows.sort((a, b) => {
+    const aName = String(a.name || '').toLowerCase();
+    const bName = String(b.name || '').toLowerCase();
+    const aEx = aName === kwL || aName.includes(kwL) ? 1 : 0;
+    const bEx = bName === kwL || bName.includes(kwL) ? 1 : 0;
+    if (aEx !== bEx) return bEx - aEx;
+    return (b.id || 0) - (a.id || 0);
+  });
+
+  const stateMap = { draft: 'แบบร่าง', confirmed: 'ยืนยันแล้ว', progress: 'กำลังผลิต', to_close: 'รอปิด', done: 'Done ✅', cancel: 'ยกเลิก ❌' };
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name || '',
+    product: Array.isArray(r.product_id) ? r.product_id[1] : (r.product_id || ''),
+    qty: r.product_qty || 0,
+    uom: Array.isArray(r.product_uom_id) ? r.product_uom_id[1] : (r.product_uom_id || ''),
+    state: r.state || '',
+    stateLabel: stateMap[r.state] || r.state || '-',
+    dateStart: r.date_start ? String(r.date_start).slice(0, 10) : '',
+    dateEnd: r.date_finished ? String(r.date_finished).slice(0, 10) : '',
+    origin: r.origin || '',
+    company: Array.isArray(r.company_id) ? r.company_id[1] : (r.company_id || '')
+  }));
+}
