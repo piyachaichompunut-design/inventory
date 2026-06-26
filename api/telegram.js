@@ -1806,7 +1806,11 @@ export default async function handler(req, res) {
         ? new RegExp('@' + BOT_USERNAME + '\\b', 'i').test(msgText)
         : (msg.entities || msg.caption_entities || []).some(e => e.type === 'mention');
 
-      if (mentioned && msg.reply_to_message) {
+      // คำสั่ง "+N" = แนบไฟล์เข้างานล่าสุด — ต้องแยกออกจาก block สร้างงานด้านล่าง
+      // ไม่งั้น "+1" จะถูกเข้าใจผิดว่าเป็นการสร้างงานใหม่ แล้วตัวจัดการแนบไฟล์ (ด้านล่าง) จะไม่มีวันถูกเรียก
+      const _plusCmd = /^\+\d+$/.test(msgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim());
+
+      if (mentioned && msg.reply_to_message && !_plusCmd) {
         const replyMsg = msg.reply_to_message;
         // ดึงข้อความจาก reply (รองรับทั้ง text และ caption ของรูป/ไฟล์)
         const originalText = replyMsg.text || replyMsg.caption || '';
@@ -1920,8 +1924,8 @@ export default async function handler(req, res) {
         return;
       }
 
-      // ── @บอท +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด ──────────────
-      if (mentioned && msg.reply_to_message) {
+      // ── +1/+2/... + reply รูป/ไฟล์ → แนบเข้างานล่าสุด (ไม่ต้องแท็กบอท เหมือนไลน์) ──
+      if (_plusCmd && msg.reply_to_message) {
         const msgText2 = msg.text || msg.caption || '';
         const botMentionText2 = msgText2.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
         if (/^\+\d+$/.test(botMentionText2)) {
