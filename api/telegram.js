@@ -793,38 +793,79 @@ export default async function handler(req, res) {
       };
 
       if (TG_TOK && CHAT1) {
+        const mgid = msg.media_group_id ? String(msg.media_group_id) : '';
+        // ส่งสำเนา 1 รูป/ไฟล์ เข้า chat 1 (ไม่มีหัวข้อ)
+        const copyOne = (fromChatId, messageId) => fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: CHAT1, from_chat_id: fromChatId, message_id: messageId })
+        });
         try {
-          // กรณี 1: รูป/ไฟล์ + caption เกี่ยวคลัง → ส่งทันที
-          if (sHasMedia && sHasCaption && isStoreText) {
-            await sendToChat1(msg.chat.id, msg.message_id, sender);
-          }
-          // กรณี 2: รูป/ไฟล์ลอยๆ (ไม่มี caption) → เก็บรอข้อความคลังตามมา
-          else if (sHasMedia && !sHasCaption && db) {
-            const recId = 'st_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
-            await db.from('delivery_views').upsert({
-              id: recId, title: 'store_pending', status_label: 'system',
-              data: { srcChatId: String(msg.chat.id), srcMessageId: msg.message_id,
-                      senderId, sender, createdAt: Date.now() }
-            });
-          }
-          // กรณี 3: ข้อความเกี่ยวคลัง → เช็ครูปค้างจากคนเดียวกัน
-          else if (isStoreText && db) {
-            const { data: rows } = await db.from('delivery_views')
-              .select('*').eq('title', 'store_pending').order('id', { ascending: false }).limit(30);
-            const now = Date.now();
-            const pending = (rows || []).find(r => {
-              const d = r.data || {};
-              return d.senderId === senderId && (now - (d.createdAt || 0)) < 5 * 60 * 1000;
-            });
-            if (pending) {
-              await sendToChat1(pending.data.srcChatId, pending.data.srcMessageId, sender);
-              await fetch(`https://api.telegram.org/bot${TG_TOK}/copyMessage`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: CHAT1, from_chat_id: msg.chat.id, message_id: msg.message_id })
-              });
-              await db.from('delivery_views').delete().eq('id', pending.id);
-            } else {
+          // ════ อัลบั้ม: หลายรูปส่งพร้อมกัน (แชร์ media_group_id) — ส่งให้ครบทุกรูป ════
+          if (mgid && sHasMedia && db) {
+            const albActiveId = 'alba_' + mgid;
+            if (sHasCaption && isStoreText) {
+              // รูปหัวอัลบั้ม (มี caption เกี่ยวคลัง) → ส่งหัวข้อ + รูปนี้ แล้วทำเครื่องหมายว่าอัลบั้มนี้ "ส่งแล้ว"
               await sendToChat1(msg.chat.id, msg.message_id, sender);
+              await db.from('delivery_views').upsert({
+                id: albActiveId, title: 'store_album_active', status_label: 'system',
+                data: { mgid, sender, createdAt: Date.now() }
+              });
+              // ส่งรูปพี่น้องในอัลบั้มเดียวกันที่มาถึงก่อนหน้า (ค้างรออยู่) ให้ครบ
+              const { data: pend } = await db.from('delivery_views')
+                .select('*').eq('title', 'store_album_pending').order('id', { ascending: true }).limit(30);
+              for (const r of (pend || [])) {
+                if ((r.data || {}).mgid === mgid) {
+                  await copyOne(r.data.srcChatId, r.data.srcMessageId);
+                  await db.from('delivery_views').delete().eq('id', r.id);
+                }
+              }
+            } else if (!sHasCaption) {
+              // รูปในอัลบั้มที่ไม่มี caption → ถ้าอัลบั้มถูกส่งแล้วก็ส่งตามทันที, ถ้ายังไม่ส่ง เก็บรอหัวอัลบั้ม
+              let active = null;
+              try { const { data } = await db.from('delivery_views').select('id').eq('id', albActiveId).maybeSingle(); active = data; } catch (e) {}
+              if (active) {
+                await copyOne(msg.chat.id, msg.message_id);
+              } else {
+                const recId = 'stalb_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+                await db.from('delivery_views').upsert({
+                  id: recId, title: 'store_album_pending', status_label: 'system',
+                  data: { mgid, srcChatId: String(msg.chat.id), srcMessageId: msg.message_id, senderId, sender, createdAt: Date.now() }
+                });
+              }
+            }
+            // (อัลบั้มที่ caption ไม่ใช่ข้อความคลัง → ไม่ส่ง)
+          }
+          // ════ ข้อความเดี่ยว (ไม่ใช่อัลบั้ม) — ตรรกะเดิม ════
+          else {
+            // กรณี 1: รูป/ไฟล์ + caption เกี่ยวคลัง → ส่งทันที
+            if (sHasMedia && sHasCaption && isStoreText) {
+              await sendToChat1(msg.chat.id, msg.message_id, sender);
+            }
+            // กรณี 2: รูป/ไฟล์ลอยๆ (ไม่มี caption) → เก็บรอข้อความคลังตามมา
+            else if (sHasMedia && !sHasCaption && db) {
+              const recId = 'st_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
+              await db.from('delivery_views').upsert({
+                id: recId, title: 'store_pending', status_label: 'system',
+                data: { srcChatId: String(msg.chat.id), srcMessageId: msg.message_id,
+                        senderId, sender, createdAt: Date.now() }
+              });
+            }
+            // กรณี 3: ข้อความเกี่ยวคลัง → เช็ครูปค้างจากคนเดียวกัน
+            else if (isStoreText && db) {
+              const { data: rows } = await db.from('delivery_views')
+                .select('*').eq('title', 'store_pending').order('id', { ascending: false }).limit(30);
+              const now = Date.now();
+              const pending = (rows || []).find(r => {
+                const d = r.data || {};
+                return d.senderId === senderId && (now - (d.createdAt || 0)) < 5 * 60 * 1000;
+              });
+              if (pending) {
+                await sendToChat1(pending.data.srcChatId, pending.data.srcMessageId, sender);
+                await copyOne(msg.chat.id, msg.message_id);
+                await db.from('delivery_views').delete().eq('id', pending.id);
+              } else {
+                await sendToChat1(msg.chat.id, msg.message_id, sender);
+              }
             }
           }
           // กรณีอื่น (รูปไม่มีข้อความคลัง, ข้อความทั่วไป) → ไม่ส่ง
