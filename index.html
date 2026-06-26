@@ -2665,6 +2665,7 @@ function appLogout(){
     </div>
     <div class="wn-actions">
       <button class="wn-btn wn-btn-sec" onclick="loadWireNotes()">🔄 โหลดใหม่</button>
+      <button class="wn-btn wn-btn-sec" onclick="wnPrint()">🖨️ พิมพ์ / PDF</button>
       <button class="wn-btn wn-btn-pri-a" onclick="wnSaveAll('อาคเนย์')" id="wn-save-a">💾 บันทึก อาคเนย์</button>
       <button class="wn-btn wn-btn-pri-m" onclick="wnSaveAll('เมิร์ค')" id="wn-save-m">💾 บันทึก เมิร์ค</button>
     </div>
@@ -8437,6 +8438,82 @@ function wnRenderStats(co, rows){
     typeKeys.slice(0,4).map(function(t){
       return '<div class="wn-stat"><div class="wn-stat-n">'+types[t]+'</div><div class="wn-stat-l">'+esc(t)+'</div></div>';
     }).join('');
+}
+
+function wnPrint(){
+  function colHtml(co, rows, accent){
+    var stats={};
+    rows.forEach(function(r){ var t=((r.type||'').trim())||'อื่นๆ'; stats[t]=(stats[t]||0)+1; });
+    var chips='<span class="wp-chip wp-chip-total">รวม '+rows.length+'</span>'+
+      Object.keys(stats).map(function(t){ return '<span class="wp-chip">'+esc(t)+' '+stats[t]+'</span>'; }).join('');
+    var body = rows.length ? rows.map(function(r){
+      return '<tr>'+
+        '<td class="wp-c-type">'+esc(r.type||'')+'</td>'+
+        '<td class="wp-c-size">'+esc(r.size||'')+'</td>'+
+        '<td class="wp-c-brand">'+esc(r.brand||'')+'</td>'+
+        '<td class="wp-c-len">'+esc(r.length||'')+'</td>'+
+        '<td class="wp-c-note">'+esc(r.note||'')+'</td>'+
+      '</tr>';
+    }).join('') : '<tr><td colspan="5" class="wp-empty">— ไม่มีรายการ —</td></tr>';
+    return '<div class="wp-col wp-'+accent+'">'+
+      '<div class="wp-co-hdr">🏢 '+esc(co)+'</div>'+
+      '<div class="wp-chips">'+chips+'</div>'+
+      '<table class="wp-tbl"><thead><tr>'+
+        '<th class="wp-c-type">ประเภท</th><th class="wp-c-size">ขนาด</th><th class="wp-c-brand">ยี่ห้อ</th><th class="wp-c-len">ความยาว</th><th class="wp-c-note">หมายเหตุ</th>'+
+      '</tr></thead><tbody>'+body+'</tbody></table>'+
+    '</div>';
+  }
+
+  var rowsA=(wnData.aknee||[]), rowsM=(wnData.mark||[]);
+  var dateStr=new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'});
+
+  var css=''+
+    '@page{size:A4 landscape;margin:6mm}'+
+    '*{margin:0;padding:0;box-sizing:border-box;font-family:Sarabun,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    'html,body{width:100%;height:100%}'+
+    '#sheet{width:285mm;height:198mm;overflow:hidden}'+
+    '#inner{transform-origin:top left;width:285mm}'+
+    '.wp-head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:5px solid #1a1d29;padding-bottom:8px;margin-bottom:14px}'+
+    '.wp-head h1{font-size:46px;font-weight:800;color:#1a1d29}'+
+    '.wp-date{font-size:24px;font-weight:700;color:#555}'+
+    '.wp-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}'+
+    '.wp-col{border:3px solid #1d4ed8;border-radius:10px;overflow:hidden}'+
+    '.wp-m{border-color:#0a7d4d}'+
+    '.wp-co-hdr{font-size:32px;font-weight:800;color:#fff;background:#1d4ed8;padding:8px 16px}'+
+    '.wp-m .wp-co-hdr{background:#0a7d4d}'+
+    '.wp-chips{display:flex;flex-wrap:wrap;gap:8px;padding:10px 14px;background:#f3f4f6}'+
+    '.wp-chip{font-size:21px;font-weight:700;background:#fff;border:2px solid #cbd5e1;border-radius:8px;padding:2px 13px;color:#1a1d29}'+
+    '.wp-chip-total{background:#1a1d29;color:#fff;border-color:#1a1d29}'+
+    '.wp-tbl{width:100%;border-collapse:collapse}'+
+    '.wp-tbl th{font-size:23px;font-weight:800;background:#e5e7eb;color:#1a1d29;padding:9px 12px;text-align:left;border-bottom:3px solid #1a1d29}'+
+    '.wp-tbl td{font-size:28px;font-weight:700;padding:8px 12px;border-bottom:1.5px solid #d1d5db;color:#111;line-height:1.25}'+
+    '.wp-tbl td.wp-c-type{color:#1d4ed8;font-weight:800}'+
+    '.wp-m .wp-tbl td.wp-c-type{color:#0a7d4d}'+
+    '.wp-tbl th.wp-c-len,.wp-tbl td.wp-c-len{text-align:right}'+
+    '.wp-tbl td.wp-c-note{font-weight:500;color:#555;font-size:22px}'+
+    '.wp-empty{text-align:center;font-style:italic;color:#999;padding:26px;font-size:24px;font-weight:500}';
+
+  var html='<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8"><title>Note สายไฟ</title>'+
+    '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'+
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@500;700;800&display=swap" rel="stylesheet">'+
+    '<style>'+css+'</style></head><body>'+
+    '<div id="sheet"><div id="inner">'+
+      '<div class="wp-head"><h1>📝 Note สายไฟ</h1><div class="wp-date">พิมพ์เมื่อ '+esc(dateStr)+'</div></div>'+
+      '<div class="wp-grid">'+colHtml('อาคเนย์',rowsA,'a')+colHtml('เมิร์ค',rowsM,'m')+'</div>'+
+    '</div></div>'+
+    '<scr'+'ipt>'+
+      'function fit(){var sheet=document.getElementById("sheet"),inner=document.getElementById("inner");'+
+      'inner.style.transform="none";'+
+      'var s=Math.min(sheet.clientWidth/inner.scrollWidth, sheet.clientHeight/inner.scrollHeight);'+
+      'if(s>1)s=1;inner.style.transform="scale("+s+")";}'+
+      'function go(){fit();setTimeout(function(){window.focus();window.print();},250);}'+
+      'if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){setTimeout(go,200);});}'+
+      'else{window.onload=function(){setTimeout(go,500);};}'+
+    '</scr'+'ipt></body></html>';
+
+  var w=window.open('','_blank');
+  if(!w){ alert('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ครับ กรุณาอนุญาต popup ของเว็บนี้ แล้วลองใหม่'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 function wnSet(co, idx, field, val){
