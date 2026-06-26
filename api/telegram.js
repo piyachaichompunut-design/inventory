@@ -609,6 +609,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     const picksData = [{
       name: d.name,
       origin: '',
+      source: d.origin || '',
       partner: d.partner || '',
       date: d.date || '',
       statusText: '',
@@ -637,6 +638,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
+      (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
       (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
