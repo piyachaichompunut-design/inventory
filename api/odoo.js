@@ -2297,13 +2297,39 @@ export async function odooElectricalStock(companyId) {
 export async function odooDocDetail(model, id) {
   let doc = {};
   if (model === 'purchase.order') {
-    const rows = await searchRead('purchase.order', [['id','=',id]], ['name','partner_id','date_order','amount_total'], 1);
+    const rows = await searchRead('purchase.order', [['id','=',id]],
+      ['name','partner_id','date_order','amount_total','notes'], 1);
     if (!rows.length) return null;
     const r = rows[0];
-    const lines = await searchRead('purchase.order.line', [['order_id','=',id]], ['product_id','name','product_qty','product_uom'], 50);
-    doc = { name: 'PO ' + r.name, partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
+    // ดึงยอดสั่ง + รับแล้ว ต่อ line เพื่อคำนวณค้างรับ
+    const lines = await searchRead('purchase.order.line', [['order_id','=',id]],
+      ['product_id','name','product_qty','qty_received','product_uom'], 50);
+    // แปลง notes HTML → plain text
+    const rawNote = (r.notes && typeof r.notes === 'string') ? r.notes : '';
+    const noteClean = rawNote.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ').trim();
+    // สรุปยอดค้างรับรวม
+    let totalOrdered = 0, totalReceived = 0;
+    const linesMapped = lines.map(l => {
+      const ordered  = l.product_qty  || 0;
+      const received = l.qty_received || 0;
+      const remain   = Math.max(0, ordered - received);
+      totalOrdered  += ordered;
+      totalReceived += received;
+      return {
+        name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
+        qty: ordered, received, remain,
+        uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+      };
+    });
+    const totalRemain = Math.max(0, totalOrdered - totalReceived);
+    doc = {
+      name: 'PO ' + r.name,
+      partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
       date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
-      lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
+      poNote: noteClean,
+      totalOrdered, totalReceived, totalRemain,
+      lines: linesMapped
+    };
   } else if (model === 'sale.order') {
     const rows = await searchRead('sale.order', [['id','=',id]], ['name','partner_id','date_order','amount_total'], 1);
     if (!rows.length) return null;
