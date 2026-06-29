@@ -597,7 +597,12 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
 
     let lineItems = lines.map((l, i) => {
       const pname = (l.name || '').replace(/-{2,}/g, ' ').trim();
-      return (i+1) + '. ' + pname.slice(0, 50) + ' — ' + (l.qty || 0) + ' ' + (l.uom || '');
+      let s = (i+1) + '. ' + pname.slice(0, 50) + ' — ' + (l.qty || 0) + ' ' + (l.uom || '');
+      // แสดงยอดค้างรับถ้ามี (PO)
+      if (l.received !== undefined && l.remain > 0) {
+        s += ' (รับแล้ว ' + l.received + ' ค้าง ' + l.remain + ')';
+      }
+      return s;
     }).join('\n');
     if (totalLines > 5) lineItems += '\n... และอีก ' + (totalLines-5) + ' รายการ';
 
@@ -612,9 +617,13 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       source: d.origin || '',
       partner: d.partner || '',
       date: d.date || '',
-      statusText: '',
-      statusColor: 'green',
-      lines: (d.lines || []).map(l => ({ name: l.name, qty: l.qty, uom: l.uom })),
+      statusText: d.totalRemain > 0 ? '⚠️ ค้างรับ ' + d.totalRemain : (d.totalOrdered !== undefined ? '✅ รับครบ' : ''),
+      statusColor: d.totalRemain > 0 ? 'red' : 'green',
+      note: d.poNote || '',
+      lines: (d.lines || []).map(l => ({
+        name: l.name, qty: l.qty, uom: l.uom,
+        received: l.received, remain: l.remain
+      })),
       images: images
     }];
     const viewId = 'D' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,4).toUpperCase();
@@ -641,6 +650,13 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
       (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
+      // ── ยอดรับ PO ──
+      (d.totalOrdered !== undefined
+        ? '📥 รับแล้ว: ' + d.totalReceived + ' / ' + d.totalOrdered +
+          (d.totalRemain > 0 ? '  ⚠️ ค้างรับอีก ' + d.totalRemain + ' ' : '  ✅ รับครบแล้ว') + '\n'
+        : '') +
+      // ── หมายเหตุ PO ──
+      (d.poNote ? '📝 หมายเหตุ: ' + d.poNote.slice(0, 200) + (d.poNote.length > 200 ? '...' : '') + '\n' : '') +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
       lineItems + '\n' +
@@ -1219,6 +1235,10 @@ export default async function handler(req, res) {
         // ไม่ตัด prefix so/po/pr ออก — เก็บเลขเต็มไว้ค้นทั้งเลขใบส่ง + origin (SO/PO)
         // เช่น "so2605047" หรือ "2605047" หรือ "02070" (เลขใบส่งจริง) ค้นเจอหมด
         var repDocType = 'picking';
+
+        // ── ตรวจ prefix pr/so/po → route ไป odooFindDoc แทน picking ──
+        var _docPfx = repKw.match(/^(pr|so|po)\s*0*(\d+)/i);
+        if (_docPfx) repDocType = _docPfx[1].toLowerCase();
 
         // ── ตรวจ prefix mo → ค้น Manufacturing Order ──
         var repKwTrim = repKw.trim();
