@@ -99,6 +99,8 @@
     font-size:14px; font-weight:700; color:var(--ink);
     white-space:nowrap; text-align:right; align-self:center;
   }
+  .item .prem{font-size:12px; color:var(--red); grid-column:1/-1; font-weight:600; margin-top:-2px;}
+  .item .prem.ok{color:var(--green);}
   /* footer */
   .foot{
     padding:20px 32px; text-align:center; color:var(--ink-soft);
@@ -233,10 +235,15 @@ function render(d){
       const code = m ? m[1] : '';
       const name = (m ? full.slice(m[0].length) : full).replace(/-{2,}/g,' ').trim();
       const qty = (l.qty||0)+' '+(l.uom||'');
+      // ยอดค้างรับ (PO)
+      const remainTag = (l.remain > 0)
+        ? '<div class="prem">⚠️ ค้างรับ '+esc(l.remain)+' '+esc(l.uom||'')+'</div>'
+        : (l.received !== undefined ? '<div class="prem ok">✅ รับครบ</div>' : '');
       return '<div class="item">'+
         (code?'<div class="pcode">'+esc(code)+'</div>':'')+
         '<div class="pname">'+esc(name)+'</div>'+
         '<div class="pqty">'+esc(qty)+'</div>'+
+        remainTag+
       '</div>';
     }).join('');
 
@@ -251,6 +258,7 @@ function render(d){
         (p.source?'<div class="meta-row"><span class="k">อ้างอิง</span><span class="v">'+esc(p.source)+'</span></div>':'')+
         (p.partner?'<div class="meta-row"><span class="k">ปลายทาง</span><span class="v">'+esc(p.partner)+'</span></div>':'')+
         (p.date?'<div class="meta-row"><span class="k">วันที่</span><span class="v">'+esc(p.date)+'</span></div>':'')+
+        (p.note?'<div class="meta-row"><span class="k">หมายเหตุ</span><span class="v" style="color:var(--red)">'+esc(p.note)+'</span></div>':'')+
       '</div>'+
       (lines?'<div class="items"><div class="items-h">รายการสินค้า</div>'+lines+'</div>':'')+
       gallery(p.images)+
