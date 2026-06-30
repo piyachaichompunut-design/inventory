@@ -637,10 +637,15 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
     // เช็คสถานะรับ/ส่ง จากชื่อเอกสาร (PO/SO) — กันคีย์จำนวนผิด
+    // สำคัญ: ต้องตัดคำนำหน้า "PO "/"SO " ออกก่อนส่งเข้า odooReceiveDeliveryStatus
+    // เพราะฟังก์ชันนั้น split ด้วยช่องว่าง — ถ้าส่ง "PO 2605018" ทั้งก้อน จะถูกแยกเป็น
+    // ["PO","2605018"] แล้วเอา token "PO" ไปค้นก่อน อาจไปเจอ PO ใบอื่นที่ชื่อดันมี "PO"
+    // ปนอยู่บางส่วน (ilike) ทำให้รายงานสถานะของ "คนละใบ" กับที่กำลังรายงานอยู่จริง
     let statusBlock = '';
     try {
       const { odooReceiveDeliveryStatus } = await import('./odoo.js');
-      const st = await odooReceiveDeliveryStatus(d.name || '');
+      const bareDocName = String(d.name || '').replace(/^(PO|SO|MO)\s+/i, '').trim();
+      const st = await odooReceiveDeliveryStatus(bareDocName);
       statusBlock = buildReceiveStatusBlock(st);
     } catch (e) { /* ข้าม */ }
 
