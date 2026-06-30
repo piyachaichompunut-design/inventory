@@ -658,51 +658,44 @@ export async function odooDeliveryMulti(keyword, numbers, companyId) {
   const nums = (numbers || []).map(n => String(parseInt(n, 10))).filter(n => n && n !== 'NaN');
   if (!nums.length) return [];
 
-  // เงื่อนไข "ลงท้ายด้วยเลขนี้" — ใช้ ilike กับ "%/เลข" (Odoo ilike รองรับ % เป็น wildcard)
-  const endsWithCond = nums.map(n => ['name', 'ilike', '%/' + n]);
-  let endsDomain;
-  if (endsWithCond.length === 1) { endsDomain = endsWithCond[0]; }
-  else {
-    endsDomain = [];
-    for (let i = 0; i < endsWithCond.length - 1; i++) endsDomain.push('|');
-    endsDomain.push(...endsWithCond);
-  }
+  // เงื่อนไข "ลงท้ายด้วยเลขนี้" (flat list ของ tuples ตาม Odoo Polish notation)
+  // เช่น 3 เลข → ['|','|',['name','ilike','%/20'],['name','ilike','%/23'],['name','ilike','%/25']]
+  const endsDomain = [];
+  for (let i = 0; i < nums.length - 1; i++) endsDomain.push('|');
+  nums.forEach(n => endsDomain.push(['name', 'ilike', '%/' + n]));
 
-  // รวมกับเงื่อนไข keyword (ชื่อ/ปลายทาง ต้องตรงคำค้นด้วย ไม่ใช่แค่เลขท้ายลอยๆ)
-  const kwConds = [];
+  // เงื่อนไข keyword (ต้องตรงคำค้นด้วย ไม่ใช่แค่เลขท้ายลอยๆ) — ก็ต้อง flat เช่นกัน
+  const kwDomain = [];
   for (const w of words) {
-    kwConds.push(['|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]]);
+    kwDomain.push('|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]);
   }
-  let domain = ['&', endsDomain];
-  if (kwConds.length) {
-    if (kwConds.length === 1) domain.push(kwConds[0]);
-    else {
-      let kwDomain = [];
-      for (let i = 0; i < kwConds.length - 1; i++) kwDomain.push('&');
-      kwConds.forEach(c => kwDomain.push(c));
-      domain.push(...kwDomain);
-    }
-  } else {
-    domain = endsDomain;
-  }
-  domain = withCompany(Array.isArray(domain) && domain[0] === '&' && domain.length === 2 ? [domain[1]] : domain, companyId);
+  // รวม endsDomain กับ kwDomain (ทุกคำ) ด้วย '&' แบบ flat ทั้งหมด
+  // จำนวนเงื่อนไขทั้งหมด = 1 (ends) + words.length (kw groups) → ต้องใส่ '&' (count-1) ตัว
+  const totalGroups = 1 + words.length;
+  let domain = [];
+  for (let i = 0; i < totalGroups - 1; i++) domain.push('&');
+  domain.push(...endsDomain, ...kwDomain);
+  domain = withCompany(domain, companyId);
 
   const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
   let pickings = [];
   try {
-    pickings = await searchRead('stock.picking', domain, fields, nums.length + 5);
+    pickings = await searchRead('stock.picking', domain, fields, nums.length + 10);
   } catch (e) {
-    // fallback: ถ้า group_id.name พัง ลองตัดออก
+    // fallback: ถ้า group_id.name พัง ลองตัดออก (เหลือแค่ name/origin)
     try {
-      const safeKwConds = words.map(w => ['|', ['name', 'ilike', w], ['origin', 'ilike', w]]);
-      let safeDomain = ['&', endsDomain];
-      if (safeKwConds.length === 1) safeDomain.push(safeKwConds[0]);
-      else if (safeKwConds.length > 1) {
-        let kd = []; for (let i=0;i<safeKwConds.length-1;i++) kd.push('&');
-        safeKwConds.forEach(c=>kd.push(c)); safeDomain.push(...kd);
-      } else { safeDomain = endsDomain; }
-      pickings = await searchRead('stock.picking', withCompany(safeDomain, companyId), fields, nums.length + 5);
-    } catch (e2) { return []; }
+      const safeKwDomain = [];
+      for (const w of words) safeKwDomain.push('|', ['name', 'ilike', w], ['origin', 'ilike', w]);
+      let safeDomain = [];
+      for (let i = 0; i < totalGroups - 1; i++) safeDomain.push('&');
+      safeDomain.push(...endsDomain, ...safeKwDomain);
+      pickings = await searchRead('stock.picking', withCompany(safeDomain, companyId), fields, nums.length + 10);
+    } catch (e2) {
+      // สุดท้าย: ค้นแค่เลขท้ายอย่างเดียว ไม่กรอง keyword เลย (ปลอดภัยสุด กันพังเพราะ field ผิด)
+      try {
+        pickings = await searchRead('stock.picking', withCompany(endsDomain, companyId), fields, nums.length + 10);
+      } catch (e3) { return []; }
+    }
   }
 
   for (const p of pickings) {
