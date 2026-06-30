@@ -648,9 +648,76 @@ export async function odooDelivery(keyword, companyId) {
   return pickings;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  ฟังก์ชันเพิ่มเติม (gR watch, electrical, guardrail, picking, compare, PDF)
-// ════════════════════════════════════════════════════════════════════════════
+// ── ค้นใบส่งของหลายใบพร้อมกัน ระบุเลขท้ายชัดเจน (เช่น keyword="พิษณุโลก", numbers=["20","23","25"]) ──
+// ต่างจาก odooDelivery ตรงที่ใส่เงื่อนไข "name ลงท้ายด้วยเลขนี้" เข้าไปใน domain ตั้งแต่ต้น
+// แก้ปัญหา: ถ้า keyword กว้าง (เช่นแค่ชื่อจังหวัด) มีใบตรงเป็นร้อย limit 40 ของการค้นกว้าง
+// อาจตัดใบที่ต้องการทิ้งไปก่อนถึงตา — ฟังก์ชันนี้กรองที่ database query เลย ไม่พึ่ง limit แบบนั้น
+export async function odooDeliveryMulti(keyword, numbers, companyId) {
+  const words = smartWords(keyword);
+  const nums = (numbers || []).map(n => String(parseInt(n, 10))).filter(n => n && n !== 'NaN');
+  if (!nums.length) return [];
+
+  // เงื่อนไข "ลงท้ายด้วยเลขนี้" — ใช้ ilike กับ "%/เลข" (Odoo ilike รองรับ % เป็น wildcard)
+  const endsWithCond = nums.map(n => ['name', 'ilike', '%/' + n]);
+  let endsDomain;
+  if (endsWithCond.length === 1) { endsDomain = endsWithCond[0]; }
+  else {
+    endsDomain = [];
+    for (let i = 0; i < endsWithCond.length - 1; i++) endsDomain.push('|');
+    endsDomain.push(...endsWithCond);
+  }
+
+  // รวมกับเงื่อนไข keyword (ชื่อ/ปลายทาง ต้องตรงคำค้นด้วย ไม่ใช่แค่เลขท้ายลอยๆ)
+  const kwConds = [];
+  for (const w of words) {
+    kwConds.push(['|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]]);
+  }
+  let domain = ['&', endsDomain];
+  if (kwConds.length) {
+    if (kwConds.length === 1) domain.push(kwConds[0]);
+    else {
+      let kwDomain = [];
+      for (let i = 0; i < kwConds.length - 1; i++) kwDomain.push('&');
+      kwConds.forEach(c => kwDomain.push(c));
+      domain.push(...kwDomain);
+    }
+  } else {
+    domain = endsDomain;
+  }
+  domain = withCompany(Array.isArray(domain) && domain[0] === '&' && domain.length === 2 ? [domain[1]] : domain, companyId);
+
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
+  let pickings = [];
+  try {
+    pickings = await searchRead('stock.picking', domain, fields, nums.length + 5);
+  } catch (e) {
+    // fallback: ถ้า group_id.name พัง ลองตัดออก
+    try {
+      const safeKwConds = words.map(w => ['|', ['name', 'ilike', w], ['origin', 'ilike', w]]);
+      let safeDomain = ['&', endsDomain];
+      if (safeKwConds.length === 1) safeDomain.push(safeKwConds[0]);
+      else if (safeKwConds.length > 1) {
+        let kd = []; for (let i=0;i<safeKwConds.length-1;i++) kd.push('&');
+        safeKwConds.forEach(c=>kd.push(c)); safeDomain.push(...kd);
+      } else { safeDomain = endsDomain; }
+      pickings = await searchRead('stock.picking', withCompany(safeDomain, companyId), fields, nums.length + 5);
+    } catch (e2) { return []; }
+  }
+
+  for (const p of pickings) {
+    try {
+      p.lines = await searchRead('stock.move', [['picking_id', '=', p.id]],
+        ['product_id', 'product_uom_qty', 'quantity', 'product_uom'], 50);
+    } catch (e) { p.lines = []; }
+    try {
+      const atts = await searchRead('ir.attachment',
+        ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
+        ['id', 'name', 'mimetype'], 50);
+      p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
+    } catch (e) { p.images = []; }
+  }
+  return pickings;
+}
 
 // ── helper: เรียงผลลัพธ์ให้ตัวที่ตรงเป๊ะขึ้นก่อน ──────────────────────────────
 function sortExactFirst(rows, keyword) {
