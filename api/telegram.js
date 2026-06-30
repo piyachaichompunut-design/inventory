@@ -636,18 +636,38 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     });
     const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
-    // เช็คสถานะรับ/ส่ง จากชื่อเอกสาร (PO/SO) — กันคีย์จำนวนผิด
-    // สำคัญ: ต้องตัดคำนำหน้า "PO "/"SO " ออกก่อนส่งเข้า odooReceiveDeliveryStatus
-    // เพราะฟังก์ชันนั้น split ด้วยช่องว่าง — ถ้าส่ง "PO 2605018" ทั้งก้อน จะถูกแยกเป็น
-    // ["PO","2605018"] แล้วเอา token "PO" ไปค้นก่อน อาจไปเจอ PO ใบอื่นที่ชื่อดันมี "PO"
-    // ปนอยู่บางส่วน (ilike) ทำให้รายงานสถานะของ "คนละใบ" กับที่กำลังรายงานอยู่จริง
+    // เช็คสถานะรับ/ส่ง — กันคีย์จำนวนผิด
+    // สำหรับ PO ที่มี totalOrdered/totalRemain คำนวณไว้แล้ว (มาจาก purchase.order.line
+    // ของ PO นี้โดยตรง) ให้ใช้ค่านี้ตัดสิน "ครบ/ไม่ครบ" เลย ไม่ต้องเรียก
+    // odooReceiveDeliveryStatus ซ้ำอีกรอบ — กันปัญหาไปจับคู่ PO ใบอื่นผิดโดยเด็ดขาด
+    // เพราะตัวเลขนี้มาจากแหล่งเดียวกับที่แสดงด้านบนเป๊ะๆ ไม่มีทางขัดแย้งกันได้อีก
     let statusBlock = '';
-    try {
-      const { odooReceiveDeliveryStatus } = await import('./odoo.js');
-      const bareDocName = String(d.name || '').replace(/^(PO|SO|MO)\s+/i, '').trim();
-      const st = await odooReceiveDeliveryStatus(bareDocName);
-      statusBlock = buildReceiveStatusBlock(st);
-    } catch (e) { /* ข้าม */ }
+    if (d.totalOrdered !== undefined) {
+      const isPO = true;
+      if (d.totalRemain <= 0.0001) {
+        statusBlock = '\n✅ <b>รับครบ PO (' + d.name.replace(/^PO\s+/i,'') + ')</b> — ครบทุกรายการแล้ว\n';
+      } else {
+        statusBlock = '\n🔴🔴 <b>⚠️ รับสินค้าไม่ครบ!</b> 🔴🔴\n' +
+          '<b>📌 PO ' + d.name.replace(/^PO\s+/i,'') + ' ยังค้างรับอีก ' + d.totalRemain + ' หน่วย</b>\n';
+        const rl = (d.lines || []).filter(l => l.remain > 0.0001).slice(0, 5);
+        if (rl.length) {
+          statusBlock += '<b>รายการที่ค้างรับ:</b>\n';
+          for (const l of rl) {
+            const pname = String(l.name || '').replace(/-{2,}/g,' ').trim().slice(0, 55);
+            statusBlock += '  🔻 ' + pname + '\n' +
+              '       สั่ง ' + l.qty + ' • รับแล้ว ' + l.received + ' • <b>ค้าง ' + l.remain + '</b> ' + (l.uom||'') + '\n';
+          }
+        }
+      }
+    } else {
+      // ไม่ใช่ PO (เช่น SO/MO) → ใช้วิธีเดิม (ค้นจาก origin)
+      try {
+        const { odooReceiveDeliveryStatus } = await import('./odoo.js');
+        const bareDocName = String(d.name || '').replace(/^(PO|SO|MO)\s+/i, '').trim();
+        const st = await odooReceiveDeliveryStatus(bareDocName);
+        statusBlock = buildReceiveStatusBlock(st);
+      } catch (e) { /* ข้าม */ }
+    }
 
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
@@ -655,11 +675,6 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
       (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
-      // ── ยอดรับ PO ──
-      (d.totalOrdered !== undefined
-        ? '📥 รับแล้ว: ' + d.totalReceived + ' / ' + d.totalOrdered +
-          (d.totalRemain > 0 ? '  ⚠️ ค้างรับอีก ' + d.totalRemain + ' ' : '  ✅ รับครบแล้ว') + '\n'
-        : '') +
       // ── หมายเหตุ PO ──
       (d.poNote ? '📝 หมายเหตุ: ' + d.poNote.slice(0, 200) + (d.poNote.length > 200 ? '...' : '') + '\n' : '') +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
