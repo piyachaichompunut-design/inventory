@@ -1475,7 +1475,8 @@ export default async function handler(req, res) {
             }
             await sendTelegramReply(chatId,
               '🔍 พบ ' + repPicks.length + ' ใบ กรุณาเลือก:\n' + opts +
-              '\n\n📌 ตอบเลขที่ต้องการครับ (เลือกได้ใบเดียว) เช่น <b>1</b>'
+              '\n\n📌 ตอบเลขที่ต้องการครับ เลือกได้หลายใบ เช่น <b>1</b> หรือ <b>1 3 5</b>\n' +
+              '(รูปจะลงที่ใบแรกที่เลือก รายการสินค้าจากทุกใบจะรวมในรายงานเดียวกัน)'
             );
             res.status(200).json({ ok: true }); return;
           }
@@ -1971,22 +1972,30 @@ export default async function handler(req, res) {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
         };
-        // เลือกใบเดียว (flow ใหม่ต้องผูกรูปกับใบเดียว)
+        // เลือกได้หลายใบ — ใบแรกที่เลือก (ตามลำดับเลขที่พิมพ์) รับรูป ที่เหลือรวมรายการอย่างเดียว
         const validNums = [...new Set(pickedNums)].filter(n => n >= 1 && n <= picks.length);
         if (!validNums.length) {
-          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ');
+          await sendTelegramReply(chatId, '⚠️ กรุณาตอบเลข 1-' + picks.length + ' ครับ (เลือกหลายใบได้ เช่น 1 3 5)');
         } else {
-          const onePick = picks[validNums[0] - 1];
+          const chosenPicks = validNums.map(n => picks[n - 1]);
+          const onePick = chosenPicks[0];
+          const extraPicks = chosenPicks.slice(1);
           await db.from('tg_report_select').delete().eq('chat_id', String(chatId));
           // เปิด session รอรูป (เก็บ target ไว้ใช้ตอน /จบรายงาน)
           await db.from('tg_report_session').upsert({
             chat_id: String(chatId),
             doc_type: 'picking', doc_id: onePick.id, doc_name: onePick.name, doc_model: 'stock.picking',
-            uploaded: 0, options: selSess2.target || '__self__', updated_at: new Date().toISOString()
+            uploaded: 0, options: selSess2.target || '__self__',
+            extra_ids: extraPicks.map(p => p.id),
+            extra_names: extraPicks.map(p => p.name),
+            updated_at: new Date().toISOString()
           }, { onConflict: 'chat_id' });
+          const chosenList = chosenPicks.map((p,i) => (i+1) + '. ' + p.name).join('\n');
           await sendTelegramReply(chatId,
-            '✅ เลือกใบส่งของแล้วครับ!\n📋 ' + onePick.name +
-            '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รับภายใน 10 นาที)\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
+            '✅ เลือก ' + chosenPicks.length + ' ใบแล้วครับ!\n' + chosenList +
+            '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รูปจะลงที่ใบแรก: ' + onePick.name + ')\n' +
+            (extraPicks.length ? 'รายการสินค้าจากทุกใบจะแสดงในรายงานเดียวกัน\n' : '') +
+            'พิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
           );
         }
         res.status(200).json({ ok: true }); return;
