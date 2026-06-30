@@ -2322,20 +2322,25 @@ export async function odooDocDetail(model, id) {
     // แปลง notes HTML → plain text
     const rawNote = (r.notes && typeof r.notes === 'string') ? r.notes : '';
     const noteClean = rawNote.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ').trim();
-    // สรุปยอดค้างรับรวม
+    // สรุปยอดค้างรับรวม — กรองสินค้าที่ตั้งใจไม่นับ (ค่าบริการ ฯลฯ) ออกก่อน
+    // ให้สูตรเดียวกับ odooReceiveDeliveryStatus เป๊ะๆ กันตัวเลขขัดกัน (เคยมีบั๊ก: บอก
+    // "ค้าง 9" แต่สถานะข้างบนบอก "รับครบ" เพราะคนละสูตรกัน — ตอนนี้ใช้สูตรเดียวกันแล้ว)
     let totalOrdered = 0, totalReceived = 0;
-    const linesMapped = lines.map(l => {
+    const linesMapped = [];
+    for (const l of lines) {
+      const prodName = Array.isArray(l.product_id) ? l.product_id[1] : (l.name || '');
+      if (isIgnoredProduct(prodName)) continue;  // ข้ามค่าบริการเหมือน odooReceiveDeliveryStatus
       const ordered  = l.product_qty  || 0;
       const received = l.qty_received || 0;
+      if (ordered <= 0) continue;
       const remain   = Math.max(0, ordered - received);
       totalOrdered  += ordered;
       totalReceived += received;
-      return {
-        name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''),
-        qty: ordered, received, remain,
+      linesMapped.push({
+        name: prodName, qty: ordered, received, remain,
         uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
-      };
-    });
+      });
+    }
     const totalRemain = Math.max(0, totalOrdered - totalReceived);
     doc = {
       name: 'PO ' + r.name,
