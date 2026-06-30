@@ -1405,17 +1405,13 @@ export default async function handler(req, res) {
             }
           }
 
-          let repPicks = repDate
-            ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
-            : allPicks;
-
-          // ── โหมดหลายใบ: กรองเอาเฉพาะใบที่ลงท้ายด้วยเลขที่ระบุ (เช่น .../20, .../23, .../25) ──
+          // ── โหมดหลายใบ: ค้นตรงๆ ด้วย odooDeliveryMulti (ระบุเลขท้ายใน domain เลย) ──
+          // ไม่ใช้ allPicks/repPicks ที่ติด limit การค้นกว้าง (40 ใบ) ซึ่งถ้า keyword กว้าง
+          // (เช่นแค่ชื่อจังหวัด) อาจมีใบตรงเป็นร้อย ใบที่ต้องการอาจหลุด limit ไปก่อนถึงตา
           if (repMultiNums && repMultiNums.length) {
-            const wanted = new Set(repMultiNums.map(n => String(parseInt(n, 10))));
-            const matchedPicks = repPicks.filter(p => {
-              const m = String(p.name || '').match(/\/(\d+)\s*$/);
-              return m && wanted.has(String(parseInt(m[1], 10)));
-            });
+            const { odooDeliveryMulti } = await import('./odoo.js');
+            const matchedPicks = await odooDeliveryMulti(dkw, repMultiNums, dCo.id) ||
+                                  await odooDeliveryMulti(dkw, repMultiNums, null);
             if (!matchedPicks.length) {
               await sendTelegramReply(chatId,
                 '🔍 ไม่พบใบที่ลงท้าย /' + repMultiNums.join(', /') + ' จาก "' + repKw + '" ครับ\n' +
@@ -1454,6 +1450,10 @@ export default async function handler(req, res) {
             );
             res.status(200).json({ ok: true }); return;
           }
+
+          let repPicks = repDate
+            ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
+            : allPicks;
 
           if (!repPicks.length) {
             const errHint = (allPicks && allPicks._error) ? ('\n\n⚠️ Odoo error: ' + allPicks._error) : '';
