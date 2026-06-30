@@ -436,32 +436,47 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
 export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const words = smartWords(keyword);
+  // ถอด prefix po/so/pr ออก เผื่อ Odoo เก็บชื่อเอกสารเป็นเลขล้วน (เช่น "2606066" ไม่มี "PO" นำหน้า)
+  const bareKw = String(keyword || '').replace(/^(po|so|pr)\s*0*/i, '').trim();
+  const tryKeywords = bareKw && bareKw !== keyword ? [keyword, bareKw] : [keyword];
 
   if (docType === 'po') {
-    const rows = await safeSearchRead('purchase.order',
-      withCompany(['|', ['name', 'ilike', keyword], ['partner_ref', 'ilike', keyword]], companyId),
-      ['id', 'name', 'partner_id'], 5);
-    if (!rows.length) return null;
-    const best = sortExactFirst(rows, keyword)[0];
-    return { id: best.id, name: best.name, model: 'purchase.order' };
+    for (const kw of tryKeywords) {
+      const rows = await safeSearchRead('purchase.order',
+        withCompany(['|', ['name', 'ilike', kw], ['partner_ref', 'ilike', kw]], companyId),
+        ['id', 'name', 'partner_id'], 5);
+      if (rows.length) {
+        const best = sortExactFirst(rows, kw)[0];
+        return { id: best.id, name: best.name, model: 'purchase.order' };
+      }
+    }
+    return null;
   }
 
   if (docType === 'so') {
-    const rows = await safeSearchRead('sale.order',
-      withCompany(['|', ['name', 'ilike', keyword], ['client_order_ref', 'ilike', keyword]], companyId),
-      ['id', 'name', 'partner_id'], 5);
-    if (!rows.length) return null;
-    const best = sortExactFirst(rows, keyword)[0];
-    return { id: best.id, name: best.name, model: 'sale.order' };
+    for (const kw of tryKeywords) {
+      const rows = await safeSearchRead('sale.order',
+        withCompany(['|', ['name', 'ilike', kw], ['client_order_ref', 'ilike', kw]], companyId),
+        ['id', 'name', 'partner_id'], 5);
+      if (rows.length) {
+        const best = sortExactFirst(rows, kw)[0];
+        return { id: best.id, name: best.name, model: 'sale.order' };
+      }
+    }
+    return null;
   }
 
   if (docType === 'pr') {
-    const rows = await safeSearchRead('purchase.request',
-      withCompany([['name', 'ilike', keyword]], companyId),
-      ['id', 'name'], 5);
-    if (!rows.length) return null;
-    const best = sortExactFirst(rows, keyword)[0];
-    return { id: best.id, name: best.name, model: 'purchase.request' };
+    for (const kw of tryKeywords) {
+      const rows = await safeSearchRead('purchase.request',
+        withCompany([['name', 'ilike', kw]], companyId),
+        ['id', 'name'], 5);
+      if (rows.length) {
+        const best = sortExactFirst(rows, kw)[0];
+        return { id: best.id, name: best.name, model: 'purchase.request' };
+      }
+    }
+    return null;
   }
 
   // picking — ค้นแบบ odooDelivery + กรองวันที่
@@ -837,7 +852,7 @@ export const GUARDRAIL_PRODUCTS = [
   { code: '15FG-FG2-05-01-00-00-00-00-00', label: 'แผ่นเสริมกำลังการ์ดเรล', group: 'plate' },
   { code: '15FG-FG2-06-02-01-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 3.2mm', group: 'plate' },
   { code: '15FG-FG2-06-02-02-00-00-00-00', label: 'แผ่นโค้งการ์ดเรล หนา 2.5mm', group: 'plate' },
-  { code: '07RP-055-04-01-01-00-00-00-00', label: 'แผ่นปลายการ์ดเรล  กว้าง370mm ยาว700mm หนา3.2mm', group: 'plate' },
+  { code: '07RP-055-04-01-01-00-00-00-00', label: 'แผ่นปลายการ์ดเรล ติดสะพาน กว้าง370mm ยาว700mm หนา3.2mm', group: 'plate' },
   { code: '15FG-FG2-06-01-06-00-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2600mm เจาะ4รู (ทล.)', group: 'post' },
   { code: '15FG-FG2-06-01-07-01-00-00-00', label: 'เสาการ์ดเรล 101.6mm หนา4.0mm ยาว2m เจาะ1รู (กทม.)', group: 'post' },
   { code: '15FG-FG2-07-01-01-00-00-00-00', label: 'เสาองศาการ์ดเรล 60° ยาว2000mm', group: 'post' },
@@ -2712,13 +2727,23 @@ export async function odooReceiveDeliveryStatus(origin) {
 export async function odooMO(keyword, companyId) {
   const kw = String(keyword || '').trim();
   if (!kw) return [];
+  // เพิ่มคำค้นแบบเลขล้วน (เผื่อพิมพ์ "244" แต่เลขจริงเก็บเป็น "00244")
+  const numMatch = kw.match(/(\d+)$/);
+  const altKw = (numMatch && numMatch[1] !== kw) ? numMatch[1].padStart(5, '0') : null;
   const domain = withCompany(
-    ['|', '|', '|',
-      ['name', 'ilike', kw],
-      ['product_id.name', 'ilike', kw],
-      ['product_id.default_code', 'ilike', kw],
-      ['origin', 'ilike', kw]
-    ], companyId
+    altKw
+    ? ['|', '|', '|', '|',
+        ['name', 'ilike', kw], ['name', 'ilike', altKw],
+        ['product_id.name', 'ilike', kw],
+        ['product_id.default_code', 'ilike', kw],
+        ['origin', 'ilike', kw]
+      ]
+    : ['|', '|', '|',
+        ['name', 'ilike', kw],
+        ['product_id.name', 'ilike', kw],
+        ['product_id.default_code', 'ilike', kw],
+        ['origin', 'ilike', kw]
+      ], companyId
   );
   const fields = ['name', 'product_id', 'product_qty', 'product_uom_id', 'state', 'date_start', 'date_finished', 'origin', 'company_id'];
   let rows = [];
