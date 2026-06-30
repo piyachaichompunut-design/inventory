@@ -2646,7 +2646,9 @@ export async function odooReceiveDeliveryStatus(origin) {
   if (!raw) return { type: null, found: false };
 
   // origin อาจมีหลายเลข (เช่น "P2606044, P2606050") → แยกเอาเลขแรกที่เจอ
-  const tokens = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  // ข้าม token ที่ไม่มีตัวเลขเลย (เช่น "PO", "SO", "MO" ที่หลุดมาจาก caller ที่ลืมตัด
+  // คำนำหน้าออก) — ป้องกัน ilike จับ PO/SO ใบอื่นที่ชื่อดันมีคำเหล่านี้ปนอยู่แบบผิดใบ
+  const tokens = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean).filter(t => /\d/.test(t));
 
   // ลองหา PO ก่อน (รับเข้า)
   for (const tok of tokens) {
