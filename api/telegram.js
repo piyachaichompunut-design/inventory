@@ -1251,13 +1251,28 @@ export default async function handler(req, res) {
           repTarget = '__self__'; // ไม่ระบุปลายทาง → ส่งกลับกลุ่มที่พิมพ์คำสั่ง
         }
 
+        // ── ตรวจหลายเลขใบท้ายคำสั่ง เช่น "สาย12.../20/23/25" หรือ "สาย12... 20 23 25" ──
+        // รองรับ 2 รูปแบบ: คั่นด้วย "/" ติดกัน หรือคั่นด้วยช่องว่าง — เก็บ keyword ส่วนชื่อ
+        // ไว้ค้นแยกจากเลขใบ แล้วกรองเอาเฉพาะใบที่ลงท้ายด้วยเลขที่ระบุ
+        var repMultiNums = null;
+        var _mSlash = repKw.match(/^(.+?)\/(\d+(?:\/\d+){1,9})\s*$/); // ".../20/23/25"
+        var _mSpace = repKw.match(/^(.+?)\s+(\d+(?:\s+\d+){1,9})\s*$/); // "... 20 23 25"
+        if (_mSlash) {
+          repMultiNums = _mSlash[2].split('/').map(s => s.trim()).filter(Boolean);
+          repKw = _mSlash[1].trim();
+        } else if (_mSpace) {
+          // กันชนกับวันที่ (เช่น "12/6") — ต้องเป็นเลข ≥2 ตัว คั่นด้วยช่องว่างล้วน ไม่ใช่ / หรือ -
+          repMultiNums = _mSpace[2].split(/\s+/).map(s => s.trim()).filter(Boolean);
+          repKw = _mSpace[1].trim();
+        }
+
         // /รายงาน เน้นค้น "ใบส่งของ" เป็นหลักเสมอ (ผู้ใช้ลงรูปใบส่งของ)
         // ไม่ตัด prefix so/po/pr ออก — เก็บเลขเต็มไว้ค้นทั้งเลขใบส่ง + origin (SO/PO)
         // เช่น "so2605047" หรือ "2605047" หรือ "02070" (เลขใบส่งจริง) ค้นเจอหมด
         var repDocType = 'picking';
 
-        // ── ตรวจ prefix pr/so/po → route ไป odooFindDoc แทน picking ──
-        var _docPfx = repKw.match(/^(pr|so|po)\s*0*(\d+)/i);
+        // ── ตรวจ prefix pr/so/po → route ไป odooFindDoc แทน picking (ข้ามถ้าเป็น multi-number) ──
+        var _docPfx = repMultiNums ? null : repKw.match(/^(pr|so|po)\s*0*(\d+)/i);
         if (_docPfx) repDocType = _docPfx[1].toLowerCase();
 
         // ── ตรวจ prefix mo → ค้น Manufacturing Order ──
@@ -1393,6 +1408,52 @@ export default async function handler(req, res) {
           let repPicks = repDate
             ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
             : allPicks;
+
+          // ── โหมดหลายใบ: กรองเอาเฉพาะใบที่ลงท้ายด้วยเลขที่ระบุ (เช่น .../20, .../23, .../25) ──
+          if (repMultiNums && repMultiNums.length) {
+            const wanted = new Set(repMultiNums.map(n => String(parseInt(n, 10))));
+            const matchedPicks = repPicks.filter(p => {
+              const m = String(p.name || '').match(/\/(\d+)\s*$/);
+              return m && wanted.has(String(parseInt(m[1], 10)));
+            });
+            if (!matchedPicks.length) {
+              await sendTelegramReply(chatId,
+                '🔍 ไม่พบใบที่ลงท้าย /' + repMultiNums.join(', /') + ' จาก "' + repKw + '" ครับ\n' +
+                'ลองเช็คเลขใบอีกครั้ง หรือพิมพ์ /รายงาน ' + repKw + ' เฉยๆ เพื่อดูรายการทั้งหมด'
+              );
+              res.status(200).json({ ok: true }); return;
+            }
+            // เรียงตามลำดับเลขที่ผู้ใช้พิมพ์ (ไม่ใช่ลำดับที่ค้นเจอ)
+            matchedPicks.sort((a, b) => {
+              const na = parseInt((String(a.name||'').match(/\/(\d+)\s*$/)||[])[1] || 0, 10);
+              const nb = parseInt((String(b.name||'').match(/\/(\d+)\s*$/)||[])[1] || 0, 10);
+              return repMultiNums.indexOf(String(na)) - repMultiNums.indexOf(String(nb));
+            });
+            const missing = repMultiNums.filter(n => {
+              const nn = String(parseInt(n, 10));
+              return !matchedPicks.some(p => String(parseInt((String(p.name||'').match(/\/(\d+)\s*$/)||[])[1]||-1,10)) === nn);
+            });
+            const primary = matchedPicks[0];
+            const extras = matchedPicks.slice(1);
+            if (db) {
+              await db.from('tg_report_session').upsert({
+                chat_id: String(chatId),
+                doc_type: 'picking', doc_id: primary.id, doc_name: primary.name, doc_model: 'stock.picking',
+                uploaded: 0, options: repTarget,
+                extra_ids: extras.map(p => p.id),       // เก็บไว้เผื่อใช้ตรวจสอบ/แสดงผล
+                extra_names: extras.map(p => p.name),   // ใช้ค้นหาตอน /จบรายงาน (แม่นยำกว่า id)
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'chat_id' });
+            }
+            const listTxt = matchedPicks.map((p,i) => (i+1) + '. ' + p.name).join('\n');
+            await sendTelegramReply(chatId,
+              '✅ พบ ' + matchedPicks.length + ' ใบครับ!\n' + listTxt +
+              (missing.length ? '\n⚠️ ไม่พบเลข /' + missing.join(', /') : '') +
+              '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รูปจะลงที่ใบแรก: ' + primary.name + ')\n' +
+              'รายการสินค้าจากทุกใบจะแสดงในรายงานเดียวกัน\nพิมพ์ /จบรายงาน เมื่อส่งรูปครบ'
+            );
+            res.status(200).json({ ok: true }); return;
+          }
 
           if (!repPicks.length) {
             const errHint = (allPicks && allPicks._error) ? ('\n\n⚠️ Odoo error: ' + allPicks._error) : '';
@@ -1679,7 +1740,27 @@ export default async function handler(req, res) {
 
           try {
             const { odooFindDoc, odooDelivery } = await import('./odoo.js');
-            if (sess.doc_model === 'stock.picking') {
+            if (sess.doc_model === 'stock.picking' && sess.extra_names && sess.extra_names.length) {
+              // ── โหมดหลายใบ: รวมรายการจากทุกใบ (รูปอยู่ที่ใบแรกเท่านั้น) ──
+              const picks = await odooDelivery(sess.doc_name, null);
+              const primary = (picks || []).find(p => Number(p.id) === Number(sess.doc_id)) || (picks && picks[0]);
+              const extraPicks = [];
+              for (const exName of sess.extra_names) {
+                try {
+                  const found = (picks || []).find(p => p.name === exName);
+                  if (found) { extraPicks.push(found); continue; }
+                  // ชื่อนี้ไม่อยู่ใน batch เดิม (คนละ keyword ที่ค้นได้) → ค้นแยกด้วยชื่อใบตรงๆ
+                  const exPicks = await odooDelivery(exName, null);
+                  const exMatch = (exPicks || []).find(p => p.name === exName) || (exPicks && exPicks[0]);
+                  if (exMatch) extraPicks.push(exMatch);
+                } catch (e) { /* ใบนี้ดึงไม่ได้ ข้าม ไม่ทำให้รายงานทั้งหมดพัง */ }
+              }
+              if (primary) {
+                await sendReportMulti(chatId, [primary, ...extraPicks], repTarget, LINE_GROUPS);
+              } else {
+                await sendTelegramReply(chatId, '⚠️ อัปรูปเรียบร้อย แต่ดึงรายงานไม่สำเร็จ (ไม่พบใบส่งของหลัก)');
+              }
+            } else if (sess.doc_model === 'stock.picking') {
               // ดึง picking ล่าสุด (พร้อมรูปที่เพิ่งอัป) ตามชื่อ แล้วส่งรายงาน
               const picks = await odooDelivery(sess.doc_name, null);
               const matched = (picks || []).find(p => Number(p.id) === Number(sess.doc_id)) || (picks && picks[0]);
