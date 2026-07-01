@@ -212,6 +212,21 @@ export default async function handler(req, res) {
       const { moves, error } = await odooRecentStockMoves(sinceTest, WATCH_COMPANY_IDS);
       if (error) { res.status(200).json({ ok: false, test: true, error }); return; }
 
+      // ── debug=1: แสดง raw move ทุกตัวพร้อม direction/usage จริงๆ ──
+      if (qTest === '1' && req.query?.debug === '1' || (req.url || '').includes('debug=1')) {
+        let dbgMsg = '🔍 <b>Debug: raw moves (' + (moves||[]).length + ' ตัว)</b>\n';
+        for (const m of (moves || []).slice(0, 15)) {
+          dbgMsg += '\n▶ ' + (m.ref || 'no-ref') + '\n';
+          dbgMsg += '  direction: <b>' + (m.direction || 'null') + '</b>\n';
+          dbgMsg += '  src: ' + m.srcUsage + ' | dest: ' + m.destUsage + '\n';
+          dbgMsg += '  by: ' + (m.write_login || m.write_user || '?') + '\n';
+          dbgMsg += '  product: ' + (m.product || '').slice(0, 40) + '\n';
+          dbgMsg += '  scrapped: ' + m.scrapped;
+        }
+        await notifyTelegram(dbgMsg, true);
+        res.status(200).json({ ok: true, test: true, debug: true, rawMoves: (moves||[]).length }); return;
+      }
+
       const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
       // จัดกลุ่ม
       const grps = {};
