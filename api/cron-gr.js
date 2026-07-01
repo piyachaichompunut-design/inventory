@@ -214,17 +214,26 @@ export default async function handler(req, res) {
 
       // ── debug=1: แสดง raw move ทุกตัวพร้อม direction/usage จริงๆ ──
       if (qTest === '1' && req.query?.debug === '1' || (req.url || '').includes('debug=1')) {
-        let dbgMsg = '🔍 <b>Debug: raw moves (' + (moves||[]).length + ' ตัว)</b>\n';
-        for (const m of (moves || []).slice(0, 15)) {
-          dbgMsg += '\n▶ ' + (m.ref || 'no-ref') + '\n';
-          dbgMsg += '  direction: <b>' + (m.direction || 'null') + '</b>\n';
-          dbgMsg += '  src: ' + m.srcUsage + ' | dest: ' + m.destUsage + '\n';
-          dbgMsg += '  by: ' + (m.write_login || m.write_user || '?') + '\n';
-          dbgMsg += '  product: ' + (m.product || '').slice(0, 40) + '\n';
-          dbgMsg += '  scrapped: ' + m.scrapped;
-        }
-        await notifyTelegram(dbgMsg, true);
-        res.status(200).json({ ok: true, test: true, debug: true, rawMoves: (moves||[]).length }); return;
+        const debugMoves = (moves || []).slice(0, 30).map(m => ({
+          ref: m.ref,
+          direction: m.direction,
+          srcUsage: m.srcUsage,
+          destUsage: m.destUsage,
+          by: m.write_login || m.write_user,
+          product: (m.product || '').slice(0, 60),
+          scrapped: m.scrapped,
+          date: m.date
+        }));
+        const store1Count = (moves||[]).filter(m => (m.write_login||'').toLowerCase() === STORE1_LOGIN).length;
+        const nullDirCount = (moves||[]).filter(m => !m.direction).length;
+        res.status(200).json({
+          ok: true, test: true, debug: true,
+          rawMoves: (moves||[]).length,
+          store1: store1Count,
+          nullDirection: nullDirCount,
+          other: (moves||[]).length - store1Count - nullDirCount,
+          moves: debugMoves
+        }); return;
       }
 
       const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
