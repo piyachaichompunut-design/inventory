@@ -86,9 +86,10 @@ async function odooAuth() {
 }
 
 // ── search_read แบบทั่วไป ────────────────────────────────────────────────────
-async function searchRead(model, domain, fields, limit = 20, context = null) {
+async function searchRead(model, domain, fields, limit = 20, context = null, order = null) {
   const uid = await odooAuth();
   const kwargs = { fields, limit };
+  if (order) kwargs.order = order;
   if (context) kwargs.context = context;
   return await jsonRpc('object', 'execute_kw', [
     ODOO_DB, uid, ODOO_KEY,
@@ -2479,7 +2480,9 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     'location_id', 'location_dest_id', 'write_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
   let rows = [];
   try {
-    rows = await searchRead('stock.move', domain, fields, 60);
+    // เรียงใหม่สุดก่อน (date desc) + limit สูง — กันรายการล่าสุด (เช่น ปรับยอด/ตัดออก)
+    // โดนตัดทิ้งเมื่อมี move เยอะในช่วงที่ query (โดยเฉพาะตอน cron ดีเลย์นานๆ)
+    rows = await searchRead('stock.move', domain, fields, 300, null, 'date desc, id desc');
   } catch (e) {
     return { error: e.message, moves: [] };
   }
