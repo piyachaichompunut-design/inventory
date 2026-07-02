@@ -41,6 +41,9 @@ const COMPANY_ALIAS = {
 };
 const DEFAULT_COMPANY = { id: 1, name: 'อาคเนย์' };
 
+// login ของ Store1 — ใช้เช็คว่าใบรับสินค้าถูก validate โดย store1 ไหม (ใส่ลายเซ็นให้)
+const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').toLowerCase();
+
 // แยกตัวย่อบริษัทออกจากคำค้น เช่น "ภูเก็ต 4+570 md" → { keyword:'ภูเก็ต 4+570', company:{id:2} }
 export function parseCompany(text) {
   const parts = String(text).trim().split(/\s+/);
@@ -648,6 +651,78 @@ export async function odooDelivery(keyword, companyId) {
     } catch (e) { p.images = []; }
   }
   return pickings;
+}
+
+// ── ดึงข้อมูล "ใบรับสินค้า" 1 ใบ ตามเลขที่ (เช่น SET/IN/05983) สำหรับออกเอกสาร ──
+//   คืน: ผู้จำหน่าย, ที่อยู่, วันที่รับจริง (date_done), คน validate, รายการสินค้า
+//   validatedByStore1 = true ถ้า write_uid (คนแก้ล่าสุด/กด Done) คือ store1
+export async function odooReceiptNote(docName) {
+  const key = String(docName || '').trim();
+  if (!key) return { error: 'ไม่ได้ระบุเลขที่เอกสาร' };
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'write_uid', 'company_id'];
+  let rows = [];
+  try {
+    rows = await searchRead('stock.picking', [['name', '=', key]], fields, 1);
+    if (!rows.length) rows = await searchRead('stock.picking', [['name', 'ilike', key]], fields, 1);
+  } catch (e) { return { error: e.message }; }
+  if (!rows.length) return { error: 'ไม่พบเอกสาร "' + key + '" ใน Odoo' };
+  const p = rows[0];
+
+  // รายการสินค้า
+  let moveLines = [];
+  try {
+    moveLines = await searchRead('stock.move', [['picking_id', '=', p.id]],
+      ['product_id', 'product_uom_qty', 'quantity', 'product_uom'], 100);
+  } catch (e) { moveLines = []; }
+
+  // login ของคน validate (write_uid)
+  let validatorLogin = '', validatorName = '';
+  const wuid = Array.isArray(p.write_uid) ? p.write_uid[0] : null;
+  if (Array.isArray(p.write_uid)) validatorName = p.write_uid[1] || '';
+  if (wuid) {
+    try {
+      const us = await searchRead('res.users', [['id', '=', wuid]], ['login'], 1);
+      if (us.length) validatorLogin = String(us[0].login || '').toLowerCase();
+    } catch (e) {}
+  }
+
+  // ที่อยู่ผู้จำหน่าย
+  let address = '';
+  const pid = Array.isArray(p.partner_id) ? p.partner_id[0] : null;
+  if (pid) {
+    try {
+      const pr = await searchRead('res.partner', [['id', '=', pid]], ['contact_address', 'street', 'city'], 1);
+      if (pr.length) {
+        address = String(pr[0].contact_address || '').replace(/\s*\n+\s*/g, ' ').trim()
+                  || [pr[0].street, pr[0].city].filter(Boolean).join(' ');
+      }
+    } catch (e) {}
+  }
+
+  const lines = (moveLines || []).map(l => {
+    const full = Array.isArray(l.product_id) ? l.product_id[1] : '';
+    const m = full.match(/^\[([^\]]+)\]\s*(.*)$/);
+    return {
+      code: m ? m[1] : '',
+      name: m ? m[2] : full,
+      qty: l.quantity || l.product_uom_qty || 0,
+      uom: Array.isArray(l.product_uom) ? l.product_uom[1] : ''
+    };
+  }).filter(l => l.code || l.name);
+
+  return {
+    companyId: Array.isArray(p.company_id) ? p.company_id[0] : 1,
+    docNo: p.name || '',
+    ref: p.origin || '',
+    supplier: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
+    address,
+    date: String(p.date_done || p.scheduled_date || '').slice(0, 10), // วันที่รับจริง
+    state: p.state || '',
+    validator: validatorLogin,
+    validatorName,
+    validatedByStore1: validatorLogin === STORE1_LOGIN,
+    lines
+  };
 }
 
 // ── ค้นใบส่งของหลายใบพร้อมกัน ระบุเลขท้ายชัดเจน (เช่น keyword="พิษณุโลก", numbers=["20","23","25"]) ──
@@ -2741,7 +2816,17 @@ export async function odooReceiveDeliveryStatus(origin) {
   // origin อาจมีหลายเลข (เช่น "P2606044, P2606050") → แยกเอาเลขแรกที่เจอ
   // ข้าม token ที่ไม่มีตัวเลขเลย (เช่น "PO", "SO", "MO" ที่หลุดมาจาก caller ที่ลืมตัด
   // คำนำหน้าออก) — ป้องกัน ilike จับ PO/SO ใบอื่นที่ชื่อดันมีคำเหล่านี้ปนอยู่แบบผิดใบ
-  const tokens = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean).filter(t => /\d/.test(t));
+  const rawTokens = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const tokens = [];
+  for (const t of rawTokens) {
+    if (/\d/.test(t) && !tokens.includes(t)) tokens.push(t);
+    // เลข PO/SO มักอยู่ส่วนหน้าก่อน "/" เช่น "2605018/0454030" → PO คือ "2605018"
+    // เพิ่มส่วนหน้าเป็นตัวเลือกค้นเพิ่ม (ลองของเต็มก่อน แล้วค่อย fallback เป็นเลขหน้า)
+    if (t.includes('/')) {
+      const head = t.split('/')[0].trim();
+      if (head && /\d/.test(head) && !tokens.includes(head)) tokens.push(head);
+    }
+  }
 
   // ลองหา PO ก่อน (รับเข้า)
   for (const tok of tokens) {
