@@ -8,9 +8,9 @@ function getDb() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-// ลบ log ข้อความไลน์ที่เก่ากว่า 7 วัน
+// ลบ log ข้อความไลน์ที่เก่ากว่า 30 วัน (เก็บนานขึ้นเพื่อให้ reply งานเก่าได้)
 async function cleanupLineMessages(db) {
-  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { error } = await db.from('line_messages').delete().lt('created_at', cutoff);
   return error ? { error: error.message } : { ok: true };
 }
