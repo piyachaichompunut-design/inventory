@@ -643,20 +643,46 @@ function verifySignature(body, signature) {
   return hash === signature;
 }
 
+// ปิด body parser ของ Vercel เพื่ออ่าน raw body เอง — จำเป็นสำหรับตรวจ LINE signature
+// (LINE เซ็นจาก raw body ต้นฉบับ ถ้าเอา object มา JSON.stringify ใหม่ byte จะไม่ตรง
+//  โดยเฉพาะอีโมจิ/อักขระนอก BMP ที่ LINE ส่งมาแบบ escape → HMAC ไม่ตรง → 401 → ข้อความหาย)
+export const config = { api: { bodyParser: false } };
+
+// อ่าน raw body จาก stream (คืนสตริง UTF-8 ตรงตามที่ LINE ส่งมาเป๊ะ)
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(200).json({ ok: true }); return; }
 
   try {
-    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-    const sig = req.headers['x-line-signature'] || '';
+    // อ่าน raw body ตรงจาก stream ก่อน (byte ตรงกับที่ LINE เซ็น)
+    let rawBody = '';
+    try { rawBody = await readRawBody(req); } catch (e) { rawBody = ''; }
+    // fallback: เผื่อ platform parse body ไปแล้ว (stream ว่าง) — ยอมกลับไปใช้แบบเดิม
+    if (!rawBody && req.body != null) {
+      rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    }
 
+    const sig = req.headers['x-line-signature'] || '';
     if (!verifySignature(rawBody, sig)) {
       res.status(401).json({ ok: false, error: 'Invalid signature' });
       return;
     }
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    let body;
+    try {
+      body = rawBody ? JSON.parse(rawBody) : (typeof req.body === 'object' && req.body ? req.body : {});
+    } catch (e) {
+      res.status(200).json({ ok: true }); // body พังก็ตอบ 200 กัน LINE retry รัว
+      return;
+    }
     const events = body.events || [];
 
     for (const event of events) {
