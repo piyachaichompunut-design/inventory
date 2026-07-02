@@ -346,14 +346,19 @@ function buildReceiveStatusBlock(status) {
   const verb = isPO ? 'รับ' : 'ส่ง';        // PO=รับเข้า, SO=ส่งออก
   const docLabel = isPO ? 'PO' : 'SO';
 
+  // วัตถุประสงค์/หมายเหตุ ที่เขียนไว้ท้าย PO/SO (แสดงทั้งกรณีครบ/ไม่ครบ)
+  const noteLine = status.note
+    ? '\n🎯 <b>วัตถุประสงค์:</b> ' + tgEsc(String(status.note)) + '\n'
+    : '';
+
   if (status.complete) {
     // ครบ → เขียวสบายใจ
-    return '\n✅ <b>' + verb + 'ครบ ' + docLabel +
+    return noteLine + '\n✅ <b>' + verb + 'ครบ ' + docLabel +
            (status.docName ? ' (' + status.docName + ')' : '') + '</b> — ครบทุกรายการแล้ว\n';
   }
 
   // ไม่ครบ → แดงแจ้งเตือนชัดๆ
-  let block = '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
+  let block = noteLine + '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
   block += '<b>📌 ' + docLabel + (status.docName ? ' ' + status.docName : '') +
            ' ยังค้าง' + verb + 'อีก ' + fmtQty(status.totalRemain) + ' หน่วย</b>\n';
   const rl = status.remainLines || [];
