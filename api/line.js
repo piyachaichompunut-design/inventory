@@ -38,6 +38,27 @@ async function pushLine(to, messages) {
   });
 }
 
+// ── เก็บข้อความลง line_messages แบบเชื่อถือได้ ────────────────────────────────
+// สำคัญ: supabase upsert ไม่ throw เวลา DB error — error อยู่ใน .error
+// โค้ดเดิมไม่เช็ค .error + ห่อด้วย catch เปล่า → เขียนพลาดชั่วคราวแล้วข้อความหายถาวร
+// ทำให้ reply ย้อนหลังไปหาข้อความนั้นไม่เจอ (found=NO) → รับงานไม่สำเร็จ
+// ที่นี่: เช็ค .error + retry สั้นๆ กัน blip ชั่วคราว + log ไว้ debug
+async function saveLineMessage(row) {
+  if (!db || !row || !row.message_id) return false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { error } = await db.from('line_messages')
+        .upsert(row, { onConflict: 'message_id' });
+      if (!error) return true;
+      console.error('[line_messages] save failed (try ' + attempt + '/3): ' + error.message + ' | id=' + row.message_id);
+    } catch (e) {
+      console.error('[line_messages] save threw (try ' + attempt + '/3): ' + e.message + ' | id=' + row.message_id);
+    }
+    if (attempt < 3) await new Promise(r => setTimeout(r, 150 * attempt));
+  }
+  return false;
+}
+
 // ── เทียบเอกสาร SO/PO/PR กับใบส่งของที่เลือกแล้ว → บันทึก delivery_views + ส่งลิงก์ ──
 async function sendDeliveryCompare(pushTarget, refOther, picking, cmp) {
   try {
@@ -641,6 +662,10 @@ export default async function handler(req, res) {
     for (const event of events) {
       if (event.type !== 'message') continue;
 
+      // แยก try/catch ต่อ event — ถ้า event หนึ่งพัง จะไม่ทำให้ event ที่เหลือใน
+      // batch เดียวกัน (รวมถึงการเก็บข้อความลง DB) หลุดไปด้วย
+      try {
+
       const msgType = event.message?.type || '';
       const replyToken = event.replyToken;
       const senderName = event.source?.userId || '';
@@ -651,18 +676,14 @@ export default async function handler(req, res) {
 
       // ══ กรณีไฟล์/รูป → เก็บ messageId + เช็ค session นำเข้าใบส่งของ ══
       if (msgType === 'image' || msgType === 'file') {
-        if (db) {
-          try {
-            await db.from('line_messages').upsert({
-              message_id: event.message.id,
-              group_id: pushTarget,
-              user_id: senderName,
-              text: null,
-              msg_type: msgType,
-              file_name: event.message?.fileName || null
-            }, { onConflict: 'message_id' });
-          } catch (e) {}
-        }
+        await saveLineMessage({
+          message_id: event.message.id,
+          group_id: pushTarget,
+          user_id: senderName,
+          text: null,
+          msg_type: msgType,
+          file_name: event.message?.fileName || null
+        });
 
         // ── เช็ค session นำเข้าใบส่งของ (รับ Excel) ──────────────────────────
         const fname = event.message?.fileName || '';
@@ -774,14 +795,12 @@ export default async function handler(req, res) {
       // ── เก็บทุกข้อความ (text) ลง DB เพื่อให้ reply ย้อนหลังได้ (เก็บ 7 วัน) ──
       const msgId = event.message?.id || '';
       if (db && msgId) {
-        try {
-          await db.from('line_messages').upsert({
-            message_id: msgId,
-            group_id: pushTarget,
-            user_id: senderName,
-            text: text
-          }, { onConflict: 'message_id' });
-        } catch (e) {}
+        await saveLineMessage({
+          message_id: msgId,
+          group_id: pushTarget,
+          user_id: senderName,
+          text: text
+        });
       }
 
       // ── ถ้าเป็นการ reply ข้อความเก่า → ดึงข้อความต้นฉบับจาก DB ──────────────
@@ -1450,6 +1469,11 @@ export default async function handler(req, res) {
             );
           } catch (e) {}
         }
+        continue;
+      }
+
+      } catch (evErr) {
+        console.error('[line] event processing error: ' + evErr.message + ' | msgId=' + (event.message?.id || '-'));
         continue;
       }
     }
