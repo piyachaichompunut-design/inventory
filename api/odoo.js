@@ -2469,9 +2469,12 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
   // ใช้ OR ระหว่าง write_date กับ date (effective date / date_done) เพราะ
   // picking ที่ backdate จะมี write_date เป็นวันเก่า แต่ date จะเป็นเวลา Done จริง
   // ทำให้ไม่ตกหล่นเมื่อกรองด้วย write_date > lastCheck เพียงอย่างเดียว
+  // domain ต้องเป็น Polish notation แบบ "แบน" — ห้ามครอบ ['|', ...] เป็นวงเล็บซ้อน
+  // ไม่งั้น Odoo อ่าน '|' เป็นชื่อฟิลด์ → error "Invalid field stock.move.|"
+  // '&' ( state=done , '|' ( write_date>since , date>since ) )
   let domain = ['&',
     ['state', '=', 'done'],
-    ['|', ['write_date', '>', sinceIso], ['date', '>', sinceIso]]
+    '|', ['write_date', '>', sinceIso], ['date', '>', sinceIso]
   ];
   if (Array.isArray(companyIds) && companyIds.length) {
     domain = ['&', ['company_id', 'in', companyIds], ...domain];
