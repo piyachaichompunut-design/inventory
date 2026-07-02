@@ -231,7 +231,8 @@ export default async function handler(req, res) {
           direction: m.direction,
           srcUsage: m.srcUsage,
           destUsage: m.destUsage,
-          by: m.write_login || m.write_user,
+          by: m.write_login || m.write_user,          // คนแก้ล่าสุด (write_uid)
+          createdBy: m.create_login || m.create_user,  // คนสร้าง move (create_uid)
           product: (m.product || '').slice(0, 60),
           scrapped: m.scrapped,
           date: m.date
