@@ -3,7 +3,7 @@
 // - @botname → ถาม Groq AI + ค้นเว็บด้วย Tavily ถ้าจำเป็น
 // - กลุ่มใหม่: Reply ข้อความ แล้ว @บอท → บันทึกงานอัตโนมัติ
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat, sendDeliveryPDF } from './rpc.js';
-import { odooFindDoc, odooUploadAttachment, odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById } from './odoo.js';
+import { odooFindDoc, odooUploadAttachment, odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooReceiptNote } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
 
 const GROQ_KEY     = process.env.GROQ_API_KEY || '';
@@ -1455,6 +1455,14 @@ export default async function handler(req, res) {
             ? allPicks.filter(p => String(p.scheduled_date || '').slice(0,10) === repDate)
             : allPicks;
 
+          // เรียงใหม่→เก่า (ใบล่าสุดขึ้นก่อน) — ใช้วันที่รับ/กำหนด ถ้าไม่มีใช้เลข id
+          repPicks = [...repPicks].sort((a, b) => {
+            const da = String(a.date_done || a.scheduled_date || '');
+            const db2 = String(b.date_done || b.scheduled_date || '');
+            if (da !== db2) return da < db2 ? 1 : -1;   // วันที่มากกว่า (ใหม่กว่า) ขึ้นก่อน
+            return (b.id || 0) - (a.id || 0);            // วันเท่ากัน → id มากกว่าขึ้นก่อน
+          });
+
           if (!repPicks.length) {
             const errHint = (allPicks && allPicks._error) ? ('\n\n⚠️ Odoo error: ' + allPicks._error) : '';
             await sendTelegramReply(chatId, '🔍 ไม่พบใบส่งของ "' + repKw + '"' + (repDate ? ' วันที่ ' + repDm[1] : '') + ' ครับ\n\n💡 ลองค้นด้วย: เลขใบส่งของ, เลข SO (เช่น SO2605047), หรือชื่อโครงการ/ลูกค้า' + errHint);
@@ -1785,6 +1793,45 @@ export default async function handler(req, res) {
       }
 
       // ── /รับคืนหน้างาน [ชื่องาน] → เปิด session รอรูป+ข้อความ ────────────────
+      // ── /ใบรับ [เลขที่] → ออกใบรับสินค้า (PDF) พร้อมลายเซ็น store1 + วันที่รับจริง ──
+      if (cmdText.startsWith('/ใบรับ') || lc.startsWith('/receive')) {
+        const docNo = cmdText.replace(/^\/ใบรับ/, '').replace(/^\/receive/i, '').trim();
+        if (!docNo) {
+          await sendTelegramReply(chatId, 'พิมพ์เลขที่ใบรับด้วยครับ เช่น /ใบรับ SET/IN/05983');
+          res.status(200).json({ ok: true }); return;
+        }
+        if (!odooConfigured()) { await sendTelegramReply(chatId, '⚠️ ยังไม่ได้ตั้งค่า Odoo ครับ'); res.status(200).json({ ok: true }); return; }
+        if (!db) { await sendTelegramReply(chatId, '⚠️ ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ'); res.status(200).json({ ok: true }); return; }
+        try {
+          const rc = await odooReceiptNote(docNo);
+          if (rc.error) { await sendTelegramReply(chatId, '🔍 ' + rc.error); res.status(200).json({ ok: true }); return; }
+          const viewId = 'RN' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2, 4).toUpperCase();
+          const { error: vErr } = await db.from('delivery_views').insert({
+            id: viewId,
+            title: 'ใบรับสินค้า — ' + rc.docNo,
+            status_label: (rc.validatedByStore1 ? 'store1' : (rc.validator || '')),
+            data: { companyId: rc.companyId, notes: [ {
+              supplier: rc.supplier, address: rc.address, date: rc.date,
+              docNo: rc.docNo, ref: rc.ref, validatedByStore1: rc.validatedByStore1, lines: rc.lines
+            } ] }
+          });
+          if (vErr) { await sendTelegramReply(chatId, '⚠️ สร้างเอกสารไม่สำเร็จ: ' + vErr.message); res.status(200).json({ ok: true }); return; }
+          const webLink = 'https://inventory-rho-hazel.vercel.app/receive-note.html?id=' + viewId;
+          const dDisp = rc.date ? rc.date.split('-').reverse().join('/') : '-';
+          await sendTelegramReply(chatId,
+            '📄 <b>ใบรับสินค้า ' + rc.docNo + '</b>\n' +
+            'ผู้จำหน่าย: ' + (rc.supplier || '-') + '\n' +
+            'วันที่รับจริง: ' + dDisp + '\n' +
+            'รายการ: ' + rc.lines.length + ' รายการ\n' +
+            (rc.validatedByStore1 ? '✍️ มีลายเซ็น (store1 validate)\n' : '📝 ไม่มีลายเซ็น (ไม่ใช่ store1 validate)\n') +
+            '\n📎 เปิด/พิมพ์ PDF:\n' + webLink
+          );
+        } catch (e) {
+          await sendTelegramReply(chatId, '⚠️ ออกใบรับไม่สำเร็จ: ' + e.message);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+
       if (cmdText.startsWith('/รับคืนหน้างาน') || lc.startsWith('/returnsite')) {
         const jobName = cmdText.replace(/^\/รับคืนหน้างาน/, '').replace(/^\/returnsite/i, '').trim();
         if (!jobName) {
