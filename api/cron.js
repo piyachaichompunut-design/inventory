@@ -82,7 +82,7 @@ export default async function handler(req, res) {
     // results.due = await checkDueTasks();
 
     if (db) {
-      // ลบ log ข้อความไลน์เก่ากว่า 7 วัน
+      // ลบ log ข้อความไลน์เก่ากว่า 30 วัน
       try { results.cleanupLine = await cleanupLineMessages(db); } catch (e) { results.cleanupLine = { error: e.message }; }
 
       // ลบไฟล์แนบงานเก่ากว่า 90 วัน (ประหยัด Storage)
