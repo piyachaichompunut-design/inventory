@@ -2465,8 +2465,12 @@ export async function odooDocDetail(model, id) {
 
 // ── ดึง stock.move ที่เพิ่งทำเสร็จ (done) หลัง sinceIso — ทุกการเคลื่อนไหวสต็อก ──
 export async function odooRecentStockMoves(sinceIso, companyIds) {
-  let domain = ['&', '&',
-    ['state', '=', 'done'], ['write_date', '>', sinceIso], ['date', '!=', false]
+  // ใช้ OR ระหว่าง write_date กับ date (effective date / date_done) เพราะ
+  // picking ที่ backdate จะมี write_date เป็นวันเก่า แต่ date จะเป็นเวลา Done จริง
+  // ทำให้ไม่ตกหล่นเมื่อกรองด้วย write_date > lastCheck เพียงอย่างเดียว
+  let domain = ['&',
+    ['state', '=', 'done'],
+    ['|', ['write_date', '>', sinceIso], ['date', '>', sinceIso]]
   ];
   if (Array.isArray(companyIds) && companyIds.length) {
     domain = ['&', ['company_id', 'in', companyIds], ...domain];
@@ -2543,11 +2547,25 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     const destId = Array.isArray(r.location_dest_id) ? r.location_dest_id[0] : null;
     const srcUsage = locUsage[srcId] || '';
     const destUsage = locUsage[destId] || '';
-    let direction = null;
-    if (destUsage === 'internal' && srcUsage !== 'internal') direction = 'in';
-    else if (srcUsage === 'internal' && destUsage !== 'internal') direction = 'out';
-    if (!direction) continue;
-    // ข้ามสินค้าที่ไม่ต้องแจ้งเตือน (ค่าบริการ ฯลฯ)
+
+    // คำนวณ direction ให้ครอบคลุมทุกกรณี — ไม่ข้ามเลยแม้แต่ internal→internal
+    // เพราะเจ้าของต้องการทราบทุกการเคลื่อนไหวที่ไม่ใช่ Store1 ทำ
+    let direction;
+    if (r.scrapped) {
+      direction = 'scrap';                                          // scrap ออก
+    } else if (destUsage === 'internal' && srcUsage !== 'internal') {
+      direction = 'in';                                             // รับเข้าคลัง
+    } else if (srcUsage === 'internal' && destUsage !== 'internal') {
+      direction = 'out';                                            // ตัดออก/ส่งลูกค้า
+    } else if (srcUsage === 'internal' && destUsage === 'internal') {
+      direction = 'transfer';                                       // โอนระหว่างคลัง / ปรับยอด
+    } else if (srcUsage === 'inventory' || destUsage === 'inventory') {
+      direction = destUsage === 'inventory' ? 'adjust_out' : 'adjust_in'; // ปรับยอด inventory
+    } else {
+      direction = 'other';                                          // อื่นๆ (เช่น supplier→customer)
+    }
+
+    // ข้ามสินค้าที่ไม่ต้องแจ้งเตือน (ค่าบริการ 11RS ฯลฯ)
     const prodName = Array.isArray(r.product_id) ? r.product_id[1] : '';
     if (isIgnoredProduct(prodName)) continue;
     const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
