@@ -73,11 +73,13 @@ export default async function handler(req, res) {
     const db = getDb();
     const results = {};
 
+    // ── ปิดการแจ้งสรุปงานเข้ากลุ่มทุกเช้า (ตามที่ผู้ใช้ขอ) ──────────────────
+    //   ต้องการเปิดกลับ: ลบคอมเมนต์ 2 บรรทัดล่างนี้
     // ทุกวัน — งานรับ/ส่งประจำวันพร้อมรายละเอียดครบ
-    results.morning = await dailyReceiveSend();
+    // results.morning = await dailyReceiveSend();
 
     // ทุกวัน — งานครบกำหนด/เลยกำหนด
-    results.due = await checkDueTasks();
+    // results.due = await checkDueTasks();
 
     if (db) {
       // ลบ log ข้อความไลน์เก่ากว่า 7 วัน
