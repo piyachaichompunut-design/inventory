@@ -14,11 +14,12 @@ const STATE_ID = '__gr_watch_state__';
 // login ของ Store1 (คนทำปกติ ไม่ต้องแจ้ง)
 const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').toLowerCase();
 
-// "คนทำจริง" ของ move — ใช้ create_uid (คนสร้าง) เป็นหลัก เพราะ write_uid (คนแก้ล่าสุด)
-// ถูก process ของ store1 เขียนทับทีหลัง ทำให้ทุก move กลายเป็น store1 (กรองผิด)
-// fallback → write_login เผื่อ create ว่าง
-const doerLogin = (m) => ((m && (m.create_login || m.write_login)) || '').toLowerCase();
-const doerName  = (m) => (m && (m.create_user || m.create_login || m.write_user || m.write_login)) || 'ไม่ทราบ';
+// "คนทำจริง" ของ move = คนกด Done / validate การเคลื่อนไหว = write_uid
+//   (create_uid คือคนสร้างเอกสาร/PO ไว้ก่อน ไม่ใช่คนทำสต็อกจริง — เช่น Panida สร้าง PO
+//    แต่ Store1 เป็นคนรับของ → ต้องดูที่ write_uid = Store1)
+//   fallback → create_login เผื่อ write ว่าง
+const doerLogin = (m) => ((m && (m.write_login || m.create_login)) || '').toLowerCase();
+const doerName  = (m) => (m && (m.write_user || m.write_login || m.create_user || m.create_login)) || 'ไม่ทราบ';
 // บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) — ตั้ง GR_COMPANY_IDS ทับได้ เช่น "1,2,4"
 const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2')
   .split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
@@ -288,7 +289,7 @@ export default async function handler(req, res) {
         if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
         if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
         msg += '👤 คนทำ: ' + doerName(g);
-        if (g.create_login || g.write_login) msg += ' (' + (g.create_login || g.write_login) + ')';
+        if (g.write_login || g.create_login) msg += ' (' + (g.write_login || g.create_login) + ')';
         msg += '\n';
         msg += await buildLinesBlock(db, g);
         // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คครบไหม กันคีย์จำนวนผิด
@@ -366,7 +367,7 @@ export default async function handler(req, res) {
     const { moves, error } = await odooRecentStockMoves(lastCheck, WATCH_COMPANY_IDS);
     if (error) { res.status(200).json({ ok: false, error }); return; }
 
-    // กรอง: คนทำ != Store1 (ใช้ create_uid ผ่าน doerLogin — write_uid ถูก store1 เขียนทับ)
+    // กรอง: คนทำ (write_uid = คนกด Done) != Store1
     const otherMoves = (moves || []).filter(m => doerLogin(m) !== STORE1_LOGIN);
 
     // จัดกลุ่มตามเอกสาร (reference) — 1 ใบมีหลาย move ให้รวมเป็นแจ้งครั้งเดียว
@@ -393,7 +394,7 @@ export default async function handler(req, res) {
       if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
       if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
       msg += '👤 คนทำ: ' + doerName(g);
-      if (g.create_login || g.write_login) msg += ' (' + (g.create_login || g.write_login) + ')';
+      if (g.write_login || g.create_login) msg += ' (' + (g.write_login || g.create_login) + ')';
       msg += '\n';
 
       // รายการสินค้า (สูงสุด 8 บรรทัด)
