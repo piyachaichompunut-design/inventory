@@ -58,8 +58,12 @@ async function buildMoveListView(db, g) {
       origin: g.origin || '',
       partner: g.partner || '',
       date: g.date ? (() => { const d = new Date(g.date.replace(' ', 'T') + 'Z'); return new Date(d.getTime() + 7*60*60*1000).toISOString().slice(0,10); })() : '',
-      statusText: g.direction === 'in' ? 'รับเข้า' : 'ตัดออก',
-      statusColor: g.direction === 'in' ? 'green' : 'red',
+      statusText: m.direction === 'in' || m.direction === 'adjust_in' ? 'รับเข้า' :
+                  m.direction === 'out' || m.direction === 'adjust_out' ? 'ตัดออก' :
+                  m.direction === 'transfer' ? 'โอนย้าย' :
+                  m.direction === 'scrap' ? 'Scrap' : 'เคลื่อนไหว',
+      statusColor: m.direction === 'in' || m.direction === 'adjust_in' ? 'green' :
+                   m.direction === 'transfer' ? 'gray' : 'red',
       lines
     }];
     const { error } = await db.from('delivery_views').insert({
@@ -143,17 +147,25 @@ function buildReceiveStatusBlockGr(status) {
 }
 
 function moveTypeLabel(m) {
-  if (m.scrapped) return '🗑️ ตัดของเสีย (Scrap)';
+  if (m.scrapped || m.direction === 'scrap') return '🗑️ ตัดของเสีย (Scrap)';
   if (m.direction === 'in') {
     if (m.srcUsage === 'supplier') return '📥 รับเข้าจากผู้ขาย (Receipt)';
     if (m.srcUsage === 'inventory') return '➕ ปรับสต็อกเพิ่ม (Adjustment)';
     if (m.srcUsage === 'production') return '🏭 รับเข้าจากการผลิต';
     return '📥 รับเข้า (สต็อกเพิ่ม)';
-  } else {
+  } else if (m.direction === 'out') {
     if (m.destUsage === 'customer') return '📤 ส่งออกให้ลูกค้า (Delivery)';
     if (m.destUsage === 'inventory') return '➖ ปรับสต็อกลด (Adjustment)';
     if (m.destUsage === 'production') return '🏭 เบิกไปผลิต';
     return '📤 ตัดออก (สต็อกลด)';
+  } else if (m.direction === 'transfer') {
+    return '🔄 โอนย้ายระหว่างคลัง (Transfer)';
+  } else if (m.direction === 'adjust_in') {
+    return '➕ ปรับสต็อกเพิ่ม (Adjustment)';
+  } else if (m.direction === 'adjust_out') {
+    return '➖ ปรับสต็อกลด (Adjustment)';
+  } else {
+    return '📦 เคลื่อนไหวสต็อก (' + (m.srcUsage || '?') + '→' + (m.destUsage || '?') + ')';
   }
 }
 
