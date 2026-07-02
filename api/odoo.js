@@ -2480,7 +2480,7 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     domain = ['&', ['company_id', 'in', companyIds], ...domain];
   }
   const fields = ['id', 'reference', 'origin', 'partner_id', 'product_id', 'product_uom_qty', 'product_uom',
-    'location_id', 'location_dest_id', 'write_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
+    'location_id', 'location_dest_id', 'write_uid', 'create_uid', 'company_id', 'picking_id', 'date', 'scrapped'];
   let rows = [];
   try {
     // เรียงใหม่สุดก่อน (date desc) + limit สูง — กันรายการล่าสุด (เช่น ปรับยอด/ตัดออก)
@@ -2504,7 +2504,10 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     } catch (e) { /* ใช้ usage ว่าง */ }
   }
 
-  const uidSet = [...new Set(rows.map(r => Array.isArray(r.write_uid) ? r.write_uid[0] : null).filter(Boolean))];
+  const uidSet = [...new Set(rows.flatMap(r => [
+    Array.isArray(r.write_uid)  ? r.write_uid[0]  : null,
+    Array.isArray(r.create_uid) ? r.create_uid[0] : null
+  ]).filter(Boolean))];
   const userMap = {};
   if (uidSet.length) {
     try {
@@ -2577,6 +2580,10 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
     const wuid = Array.isArray(r.write_uid) ? r.write_uid[0] : null;
     const wname = Array.isArray(r.write_uid) ? r.write_uid[1] : '';
     const u = wuid && userMap[wuid] ? userMap[wuid] : {};
+    // create_uid = คนสร้าง move (ค่านี้ไม่ถูก process อื่นเขียนทับเหมือน write_uid)
+    const cuid = Array.isArray(r.create_uid) ? r.create_uid[0] : null;
+    const cname = Array.isArray(r.create_uid) ? r.create_uid[1] : '';
+    const cu = cuid && userMap[cuid] ? userMap[cuid] : {};
     const pkId = Array.isArray(r.picking_id) ? r.picking_id[0] : null;
     const pkOrigin = pkId ? pickOrigin[pkId] : '';
     const partnerName =
@@ -2591,6 +2598,7 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
       qty: r.product_uom_qty || 0,
       uom: Array.isArray(r.product_uom) ? r.product_uom[1] : '',
       write_user: u.name || wname || '', write_login: u.login || '',
+      create_user: cu.name || cname || '', create_login: cu.login || '',
       company: Array.isArray(r.company_id) ? r.company_id[1] : '',
       direction, srcUsage, destUsage,
       picking: Array.isArray(r.picking_id) ? r.picking_id[1] : '',
