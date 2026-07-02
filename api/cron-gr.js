@@ -65,12 +65,12 @@ async function buildMoveListView(db, g) {
       origin: g.origin || '',
       partner: g.partner || '',
       date: g.date ? (() => { const d = new Date(g.date.replace(' ', 'T') + 'Z'); return new Date(d.getTime() + 7*60*60*1000).toISOString().slice(0,10); })() : '',
-      statusText: m.direction === 'in' || m.direction === 'adjust_in' ? 'รับเข้า' :
-                  m.direction === 'out' || m.direction === 'adjust_out' ? 'ตัดออก' :
-                  m.direction === 'transfer' ? 'โอนย้าย' :
-                  m.direction === 'scrap' ? 'Scrap' : 'เคลื่อนไหว',
-      statusColor: m.direction === 'in' || m.direction === 'adjust_in' ? 'green' :
-                   m.direction === 'transfer' ? 'gray' : 'red',
+      statusText: g.direction === 'in' || g.direction === 'adjust_in' ? 'รับเข้า' :
+                  g.direction === 'out' || g.direction === 'adjust_out' ? 'ตัดออก' :
+                  g.direction === 'transfer' ? 'โอนย้าย' :
+                  g.direction === 'scrap' ? 'Scrap' : 'เคลื่อนไหว',
+      statusColor: g.direction === 'in' || g.direction === 'adjust_in' ? 'green' :
+                   g.direction === 'transfer' ? 'gray' : 'red',
       lines
     }];
     const { error } = await db.from('delivery_views').insert({
