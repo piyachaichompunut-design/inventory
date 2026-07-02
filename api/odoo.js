@@ -2833,9 +2833,11 @@ export async function odooReceiveDeliveryStatus(origin) {
     try {
       const pos = await searchRead('purchase.order',
         ['|', ['name', '=', tok], ['name', 'ilike', tok]],
-        ['id', 'name', 'order_line'], 3);
+        ['id', 'name', 'order_line', 'notes'], 3);
       if (pos.length) {
         const po = pos[0];
+        const poNote = String(po.notes && typeof po.notes === 'string' ? po.notes : '')
+          .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
         const lines = await searchRead('purchase.order.line',
           [['order_id', '=', po.id]],
           ['product_id', 'product_qty', 'qty_received', 'product_uom'], 200);
@@ -2860,7 +2862,8 @@ export async function odooReceiveDeliveryStatus(origin) {
           type: 'po', found: true, docName: po.name,
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
-          remainLines: detail.filter(d => d.remain > 0.0001)
+          remainLines: detail.filter(d => d.remain > 0.0001),
+          note: poNote
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
@@ -2871,9 +2874,11 @@ export async function odooReceiveDeliveryStatus(origin) {
     try {
       const sos = await searchRead('sale.order',
         ['|', ['name', '=', tok], ['name', 'ilike', tok]],
-        ['id', 'name', 'order_line'], 3);
+        ['id', 'name', 'order_line', 'note'], 3);
       if (sos.length) {
         const so = sos[0];
+        const soNote = String(so.note && typeof so.note === 'string' ? so.note : '')
+          .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
         const lines = await searchRead('sale.order.line',
           [['order_id', '=', so.id]],
           ['product_id', 'product_uom_qty', 'qty_delivered', 'product_uom'], 200);
@@ -2898,7 +2903,8 @@ export async function odooReceiveDeliveryStatus(origin) {
           type: 'so', found: true, docName: so.name,
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
-          remainLines: detail.filter(d => d.remain > 0.0001)
+          remainLines: detail.filter(d => d.remain > 0.0001),
+          note: soNote
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
