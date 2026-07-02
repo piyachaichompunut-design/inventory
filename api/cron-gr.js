@@ -13,6 +13,12 @@ import { createClient } from '@supabase/supabase-js';
 const STATE_ID = '__gr_watch_state__';
 // login ของ Store1 (คนทำปกติ ไม่ต้องแจ้ง)
 const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').toLowerCase();
+
+// "คนทำจริง" ของ move — ใช้ create_uid (คนสร้าง) เป็นหลัก เพราะ write_uid (คนแก้ล่าสุด)
+// ถูก process ของ store1 เขียนทับทีหลัง ทำให้ทุก move กลายเป็น store1 (กรองผิด)
+// fallback → write_login เผื่อ create ว่าง
+const doerLogin = (m) => ((m && (m.create_login || m.write_login)) || '').toLowerCase();
+const doerName  = (m) => (m && (m.create_user || m.create_login || m.write_user || m.write_login)) || 'ไม่ทราบ';
 // บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) — ตั้ง GR_COMPANY_IDS ทับได้ เช่น "1,2,4"
 const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2')
   .split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
@@ -69,7 +75,7 @@ async function buildMoveListView(db, g) {
     const { error } = await db.from('delivery_views').insert({
       id: viewId,
       title: 'รายการสต็อก — ' + (g.ref || ''),
-      status_label: (g.write_user || '') + (g.company ? ' • ' + g.company : ''),
+      status_label: doerName(g) + (g.company ? ' • ' + g.company : ''),
       data: { summary: { total: 1 }, picks }
     });
     if (error) return '';
@@ -237,7 +243,7 @@ export default async function handler(req, res) {
           scrapped: m.scrapped,
           date: m.date
         }));
-        const store1Count = (moves||[]).filter(m => (m.write_login||'').toLowerCase() === STORE1_LOGIN).length;
+        const store1Count = (moves||[]).filter(m => doerLogin(m) === STORE1_LOGIN).length;
         const nullDirCount = (moves||[]).filter(m => !m.direction).length;
         res.status(200).json({
           ok: true, test: true, debug: true,
@@ -249,7 +255,7 @@ export default async function handler(req, res) {
         }); return;
       }
 
-      const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
+      const otherMoves = (moves || []).filter(m => doerLogin(m) !== STORE1_LOGIN);
       // จัดกลุ่ม
       const grps = {};
       for (const m of otherMoves) {
@@ -261,7 +267,7 @@ export default async function handler(req, res) {
       const keys = Object.keys(grps);
       // ส่งหัวข้อทดสอบ + ผลรวม เข้า chat 1
       // นับว่ามี move ของ Store1 กี่ตัว (เพื่อ debug ว่า query เจอของแต่กรองออกหมดไหม)
-      const store1Moves = (moves || []).filter(m => (m.write_login || '').toLowerCase() === STORE1_LOGIN);
+      const store1Moves = (moves || []).filter(m => doerLogin(m) === STORE1_LOGIN);
       let head = '🧪 <b>ทดสอบระบบแจ้งเตือนสต็อก</b>\n';
       head += 'มองย้อนหลัง ' + mins + ' นาที\n';
       head += 'พบ move ทั้งหมด: ' + (moves || []).length + '\n';
@@ -281,8 +287,8 @@ export default async function handler(req, res) {
         if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
         if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
         if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
-        msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
-        if (g.write_login) msg += ' (' + g.write_login + ')';
+        msg += '👤 คนทำ: ' + doerName(g);
+        if (g.create_login || g.write_login) msg += ' (' + (g.create_login || g.write_login) + ')';
         msg += '\n';
         msg += await buildLinesBlock(db, g);
         // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คครบไหม กันคีย์จำนวนผิด
@@ -360,8 +366,8 @@ export default async function handler(req, res) {
     const { moves, error } = await odooRecentStockMoves(lastCheck, WATCH_COMPANY_IDS);
     if (error) { res.status(200).json({ ok: false, error }); return; }
 
-    // กรอง: คนทำ != Store1
-    const otherMoves = (moves || []).filter(m => (m.write_login || '').toLowerCase() !== STORE1_LOGIN);
+    // กรอง: คนทำ != Store1 (ใช้ create_uid ผ่าน doerLogin — write_uid ถูก store1 เขียนทับ)
+    const otherMoves = (moves || []).filter(m => doerLogin(m) !== STORE1_LOGIN);
 
     // จัดกลุ่มตามเอกสาร (reference) — 1 ใบมีหลาย move ให้รวมเป็นแจ้งครั้งเดียว
     const groups = {};
@@ -386,8 +392,8 @@ export default async function handler(req, res) {
       if (g.partner) msg += '🏢 คู่ค้า: ' + g.partner + '\n';
       if (g.note) msg += '📝 หมายเหตุ: ' + g.note.slice(0, 200) + '\n';
       if (g.company) msg += '🏭 บริษัท: ' + g.company + '\n';
-      msg += '👤 คนทำ: ' + (g.write_user || g.write_login || 'ไม่ทราบ');
-      if (g.write_login) msg += ' (' + g.write_login + ')';
+      msg += '👤 คนทำ: ' + doerName(g);
+      if (g.create_login || g.write_login) msg += ' (' + (g.create_login || g.write_login) + ')';
       msg += '\n';
 
       // รายการสินค้า (สูงสุด 8 บรรทัด)
