@@ -2835,9 +2835,10 @@ export async function odooReceiveDeliveryStatus(origin) {
     try {
       const pos = await searchRead('purchase.order',
         ['|', ['name', '=', tok], ['name', 'ilike', tok]],
-        ['id', 'name', 'order_line', 'notes'], 3);
+        ['id', 'name', 'order_line', 'notes', 'partner_id'], 3);
       if (pos.length) {
         const po = pos[0];
+        const vendor = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
         const poNote = String(po.notes && typeof po.notes === 'string' ? po.notes : '')
           .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
         const lines = await searchRead('purchase.order.line',
@@ -2884,7 +2885,7 @@ export async function odooReceiveDeliveryStatus(origin) {
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
           remainLines: detail.filter(d => d.remain > 0.0001),
-          note: poNote, prName, prBy
+          note: poNote, prName, prBy, vendor
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
@@ -2895,9 +2896,10 @@ export async function odooReceiveDeliveryStatus(origin) {
     try {
       const sos = await searchRead('sale.order',
         ['|', ['name', '=', tok], ['name', 'ilike', tok]],
-        ['id', 'name', 'order_line', 'note'], 3);
+        ['id', 'name', 'order_line', 'note', 'partner_id'], 3);
       if (sos.length) {
         const so = sos[0];
+        const vendor = Array.isArray(so.partner_id) ? so.partner_id[1] : '';  // SO = ลูกค้า
         const soNote = String(so.note && typeof so.note === 'string' ? so.note : '')
           .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
         const lines = await searchRead('sale.order.line',
@@ -2925,7 +2927,7 @@ export async function odooReceiveDeliveryStatus(origin) {
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
           remainLines: detail.filter(d => d.remain > 0.0001),
-          note: soNote
+          note: soNote, vendor
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
