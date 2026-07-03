@@ -33,9 +33,12 @@ function getDb() {
 async function notifyTelegram(text, onlyChat1) {
   const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
   // ปกติส่งทั้ง 2 กลุ่ม | onlyChat1=true → ส่งเฉพาะ chat 1 (โหมดทดสอบ)
+  // แจ้งสต็อกไป "กลุ่มใหม่" (TELEGRAM_CHAT_ID_3) แทน chat 1 + ยังส่ง chat 2 เหมือนเดิม
+  // ถ้ายังไม่ตั้ง TELEGRAM_CHAT_ID_3 จะ fallback ไป chat 1 (พฤติกรรมเดิม)
+  const primaryChat = process.env.TELEGRAM_CHAT_ID_3 || process.env.TELEGRAM_CHAT_ID || '';
   const chatIds = (onlyChat1
-    ? [process.env.TELEGRAM_CHAT_ID || '']
-    : [process.env.TELEGRAM_CHAT_ID || '', process.env.TELEGRAM_CHAT_ID_2 || '']
+    ? [primaryChat]
+    : [primaryChat, process.env.TELEGRAM_CHAT_ID_2 || '']
   ).filter(Boolean);
   if (!TG_TOKEN || !chatIds.length) return;
   for (const chatId of chatIds) {
