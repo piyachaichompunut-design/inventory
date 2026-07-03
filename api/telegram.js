@@ -446,16 +446,18 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     const webLink = 'https://inventory-rho-hazel.vercel.app/delivery.html?id=' + viewId;
 
     // เช็คสถานะรับ/ส่ง จาก origin (กันคีย์จำนวนผิด)
-    let statusBlock = '';
+    let statusBlock = '', stVendor = '', stIsPO = true;
     try {
       const { odooReceiveDeliveryStatus } = await import('./odoo.js');
       const st = await odooReceiveDeliveryStatus(origin);
       statusBlock = buildReceiveStatusBlock(st);
+      if (st) { stVendor = st.vendor || ''; stIsPO = st.type !== 'so'; }
     } catch (e) { /* เช็คไม่ได้ ข้าม */ }
 
     const msg =
       '📊 รายงาน: ' + name + '\n' +
       (origin ? '📋 โครงการ: ' + origin + '\n' : '') +
+      (stVendor ? '🏢 <b>' + (stIsPO ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + tgEsc(stVendor) + '</b>\n' : '') +
       '📅 วันที่: ' + date + '\n' +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
@@ -566,6 +568,9 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       '📷 รูปงานรวม: ' + totalImages + ' รูป\n\n' +
       picksData.map(p =>
         '📋 ' + p.name + ' — ' + (p.statusText) + '\n' +
+        (p.recvStatus && p.recvStatus.vendor
+          ? '   🏢 <b>' + (p.recvStatus.type !== 'so' ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + tgEsc(p.recvStatus.vendor) + '</b>\n'
+          : '') +
         '   ' + p.lines.length + ' รายการสินค้า' +
         buildReceiveStatusBlock(p.recvStatus)
       ).join('\n') + '\n\n' +
