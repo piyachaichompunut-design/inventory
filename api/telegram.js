@@ -351,14 +351,22 @@ function buildReceiveStatusBlock(status) {
     ? '\n🎯 <b>วัตถุประสงค์:</b> ' + tgEsc(String(status.note)) + '\n'
     : '';
 
+  // เลขที่ PR + ผู้ขอ PR (ให้รู้ว่า PO นี้อ้างอิงจาก PR ไหน ใครขอ)
+  const prLine = (status.prName || status.prBy)
+    ? '\n📄 <b>PR:</b> ' + tgEsc(status.prName || '-') +
+      (status.prBy ? '  •  👤 <b>ผู้ขอ:</b> ' + tgEsc(status.prBy) : '') + '\n'
+    : '';
+
+  const headLines = noteLine + prLine;
+
   if (status.complete) {
     // ครบ → เขียวสบายใจ
-    return noteLine + '\n✅ <b>' + verb + 'ครบ ' + docLabel +
+    return headLines + '\n✅ <b>' + verb + 'ครบ ' + docLabel +
            (status.docName ? ' (' + status.docName + ')' : '') + '</b> — ครบทุกรายการแล้ว\n';
   }
 
   // ไม่ครบ → แดงแจ้งเตือนชัดๆ
-  let block = noteLine + '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
+  let block = headLines + '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
   block += '<b>📌 ' + docLabel + (status.docName ? ' ' + status.docName : '') +
            ' ยังค้าง' + verb + 'อีก ' + fmtQty(status.totalRemain) + ' หน่วย</b>\n';
   const rl = status.remainLines || [];
