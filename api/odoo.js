@@ -2719,17 +2719,15 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
     names.forEach(n => allPoNames.add(n));
   }
 
-  const poByName = {};
+  // key = "companyId|poName" — กันเลข PO ซ้ำข้ามบริษัท (แต่ละบริษัทมี running number ของตัวเอง)
+  //   บิลจะจับคู่เฉพาะ PO บริษัทเดียวกันเท่านั้น (ไม่งั้นจับผิดใบ แจ้งมั่ว)
+  const poByKey = {};
   if (allPoNames.size) {
     try {
       const pos = await searchRead('purchase.order',
-        [['name', 'in', [...allPoNames]]], ['id', 'name', 'order_line'], 100);
+        [['name', 'in', [...allPoNames]]], ['id', 'name', 'order_line', 'company_id'], 200);
       const allLineIds = [];
-      const poLineIds = {};
-      for (const po of pos) {
-        poLineIds[po.name] = po.order_line || [];
-        (po.order_line || []).forEach(id => allLineIds.push(id));
-      }
+      for (const po of pos) (po.order_line || []).forEach(id => allLineIds.push(id));
       let lineMap = {};
       if (allLineIds.length) {
         const lines = await searchRead('purchase.order.line',
@@ -2740,7 +2738,7 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
       for (const po of pos) {
         let ordered = 0, received = 0;
         const missingLines = [];
-        for (const lid of (poLineIds[po.name] || [])) {
+        for (const lid of (po.order_line || [])) {
           const l = lineMap[lid];
           if (l) {
             const prodName = Array.isArray(l.product_id) ? l.product_id[1] : '';
@@ -2757,7 +2755,8 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
             }
           }
         }
-        poByName[po.name] = { ordered, received, missingLines };
+        const poCoId = Array.isArray(po.company_id) ? po.company_id[0] : (po.company_id || 0);
+        poByKey[poCoId + '|' + po.name] = { ordered, received, missingLines };
       }
     } catch (e) { /* ดึงไม่ได้ ปล่อยว่าง */ }
   }
@@ -2772,13 +2771,16 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
   const result = [];
   for (const b of bills) {
     const names = billPoNames[b.id] || [];
+    const billCoId = Array.isArray(b.company_id) ? b.company_id[0] : (b.company_id || 0);
     let ordered = 0, received = 0, foundPo = false;
     let missingLines = [];
     for (const n of names) {
-      if (poByName[n]) {
-        ordered += poByName[n].ordered;
-        received += poByName[n].received;
-        if (Array.isArray(poByName[n].missingLines)) missingLines = missingLines.concat(poByName[n].missingLines);
+      // จับเฉพาะ PO ที่บริษัทตรงกับบิล (กันเลข PO ซ้ำข้ามบริษัท)
+      const rec = poByKey[billCoId + '|' + n];
+      if (rec) {
+        ordered += rec.ordered;
+        received += rec.received;
+        if (Array.isArray(rec.missingLines)) missingLines = missingLines.concat(rec.missingLines);
         foundPo = true;
       }
     }
