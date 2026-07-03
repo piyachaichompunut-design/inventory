@@ -90,28 +90,30 @@ const tgDate = (v) => {
 // ── Telegram แจ้งเตือน ───────────────────────────────────────────────────────
 // ตั้งค่าใน Environment Variables: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 const TG_TOKEN  = process.env.TELEGRAM_BOT_TOKEN || '';
-const TG_CHAT   = process.env.TELEGRAM_CHAT_ID || '';    // กลุ่มหลัก
-const TG_CHAT2  = process.env.TELEGRAM_CHAT_ID_2 || '';  // กลุ่มใหม่ (สำหรับ reply บันทึกงาน)
+const TG_CHAT   = process.env.TELEGRAM_CHAT_ID || '';    // กลุ่มหลัก (chat 1) — เบิกของ/เข้าคลัง/KPI
+const TG_CHAT2  = process.env.TELEGRAM_CHAT_ID_2 || '';  // กลุ่ม 2 (สำหรับ reply บันทึกงาน/รายงาน)
+const TG_CHAT3  = process.env.TELEGRAM_CHAT_ID_3 || '';  // กลุ่มใหม่ — งานใหม่/แก้ไข/แจ้งสต็อก
 
-async function notifyTelegram(text) {
-  // ถ้ายังไม่ตั้งค่า → ข้ามเงียบๆ ไม่ให้กระทบการทำงานหลัก
-  if (!TG_TOKEN || !TG_CHAT) return;
+// ส่งข้อความไป chat_id ที่ระบุ (helper กลาง)
+async function sendTG(chatId, text) {
+  if (!TG_TOKEN || !chatId) return;
   try {
     await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TG_CHAT,
-        text,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true })
     });
   } catch (e) {
     // ส่งไม่สำเร็จก็ไม่ทำให้ระบบหลักพัง
     console.error('Telegram notify failed:', e.message);
   }
 }
+
+// แจ้งเข้ากลุ่มหลัก chat 1 (KPI ฯลฯ)
+async function notifyTelegram(text) { await sendTG(TG_CHAT, text); }
+
+// แจ้งเข้ากลุ่มใหม่ (งานใหม่/แก้ไข/ลบงาน) — ถ้ายังไม่ตั้ง TELEGRAM_CHAT_ID_3 จะ fallback ไป chat 1
+async function notifyNewGroup(text) { await sendTG(TG_CHAT3 || TG_CHAT, text); }
 // escape อักขระพิเศษของ HTML กันข้อความเพี้ยน
 function tgEsc(s) {
   return String(s == null ? '' : s)
@@ -207,7 +209,7 @@ async function addTask(td) {
       else if (fname) newMsg += '📎 ' + fname + '\n';
     });
   } catch (e) {}
-  await notifyTelegram(newMsg);
+  await notifyNewGroup(newMsg);
   return { success: true, id };
 }
 
@@ -235,7 +237,7 @@ async function notifyNewTask(taskId) {
       else if (fname) newMsg += '📎 ' + fname + '\n';
     });
   } catch (e) {}
-  await notifyTelegram(newMsg);
+  await notifyNewGroup(newMsg);
   return { success: true };
 }
 
@@ -293,7 +295,7 @@ async function updateTask(td) {
         else if (fname) doneMsg += '📎 ' + fname + '\n';
       });
     } catch (e) {}
-    await notifyTelegram(doneMsg);
+    await notifyNewGroup(doneMsg);
   }
   return { success: true };
 }
@@ -2574,6 +2576,7 @@ export function isAllowedChat(chatId) {
   const id = String(chatId);
   if (id === String(TG_CHAT)) return true;
   if (TG_CHAT2 && id === String(TG_CHAT2)) return true;
+  if (TG_CHAT3 && id === String(TG_CHAT3)) return true;  // กลุ่มใหม่ ใช้คำสั่งได้ด้วย
   return false;
 }
 
@@ -2582,19 +2585,14 @@ export function getChatType(chatId) {
   const id = String(chatId);
   if (id === String(TG_CHAT)) return 'main';
   if (TG_CHAT2 && id === String(TG_CHAT2)) return 'sub';
+  if (TG_CHAT3 && id === String(TG_CHAT3)) return 'new';
   return null;
 }
 
-// ส่งข้อความไปกลุ่มหลัก (ใช้แจ้งเตือนเมื่อมีงานใหม่จากกลุ่มย่อย)
+// ส่งข้อความไปกลุ่มที่รับ "งานใหม่จากไลน์/แก้ไขวัน" — ตอนนี้ = กลุ่มใหม่
+// (ถ้ายังไม่ตั้ง TELEGRAM_CHAT_ID_3 จะ fallback ไป chat 1 เหมือนเดิม)
 export async function notifyMainChat(text) {
-  if (!TG_TOKEN || !TG_CHAT) return;
-  try {
-    await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendMessage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TG_CHAT, text, parse_mode: 'HTML', disable_web_page_preview: true })
-    });
-  } catch(e) { console.error('notify main failed:', e.message); }
+  await sendTG(TG_CHAT3 || TG_CHAT, text);
 }
 
 export default async function handler(req, res) {
