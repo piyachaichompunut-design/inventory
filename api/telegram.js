@@ -347,14 +347,15 @@ function buildReceiveStatusBlock(status) {
   const docLabel = isPO ? 'PO' : 'SO';
 
   // วัตถุประสงค์/หมายเหตุ ที่เขียนไว้ท้าย PO/SO (แสดงทั้งกรณีครบ/ไม่ครบ)
+  // ทำทั้งบรรทัดเป็นตัวหนา (Telegram) — LINE จะถูกตัด <b> ออกเป็นข้อความธรรมดา
   const noteLine = status.note
-    ? '\n🎯 <b>วัตถุประสงค์:</b> ' + tgEsc(String(status.note)) + '\n'
+    ? '\n🎯 <b>วัตถุประสงค์: ' + tgEsc(String(status.note)) + '</b>\n'
     : '';
 
-  // เลขที่ PR + ผู้ขอ PR (ให้รู้ว่า PO นี้อ้างอิงจาก PR ไหน ใครขอ)
+  // เลขที่ PR + ผู้ขอ PR (ให้รู้ว่า PO นี้อ้างอิงจาก PR ไหน ใครขอ) — ตัวหนาทั้งบรรทัด
   const prLine = (status.prName || status.prBy)
-    ? '\n📄 <b>PR:</b> ' + tgEsc(status.prName || '-') +
-      (status.prBy ? '  •  👤 <b>ผู้ขอ:</b> ' + tgEsc(status.prBy) : '') + '\n'
+    ? '\n📄 <b>PR: ' + tgEsc(status.prName || '-') +
+      (status.prBy ? '  •  👤 ผู้ขอ: ' + tgEsc(status.prBy) : '') + '</b>\n'
     : '';
 
   const headLines = noteLine + prLine;
