@@ -1210,9 +1210,13 @@ export default async function handler(req, res) {
       }
     }
 
+    // ── chat 1 (กลุ่มหลัก): ปิดคำสั่ง/ฟีเจอร์ทั้งหมด ────────────────────────────
+    //   เหลือไว้แค่ reply "เรียบร้อย" (จัดการไปข้างบนแล้ว) — คำสั่งอื่นๆ ให้ไปใช้กลุ่มใหม่
+    if (getChatType(chatId) === 'main') { res.status(200).json({ ok: true }); return; }
+
     const text     = msg.text;
     const trimmed  = text.trim();
-    const chatType = getChatType(chatId); // 'main' | 'sub' | null
+    const chatType = getChatType(chatId); // 'main' | 'sub' | 'new' | null
 
     // ── เส้นทางที่ 1: คำสั่ง / (ใช้ได้ทุกกลุ่ม) ─────────────────────────────
     if (trimmed.startsWith('/')) {
