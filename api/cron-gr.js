@@ -20,8 +20,9 @@ const STORE1_LOGIN = (process.env.GR_STORE1_LOGIN || 'store.set9595@gmail.com').
 //   fallback → create_login เผื่อ write ว่าง
 const doerLogin = (m) => ((m && (m.write_login || m.create_login)) || '').toLowerCase();
 const doerName  = (m) => (m && (m.write_user || m.write_login || m.create_user || m.create_login)) || 'ไม่ทราบ';
-// บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) — ตั้ง GR_COMPANY_IDS ทับได้ เช่น "1,2,4"
-const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2')
+// บริษัทที่เฝ้าดู: อาคเนย์ (1) + เมิร์ค (2) + ซิลิกัล (4) + ศรีอาคเนย์ (5)
+// ตั้ง GR_COMPANY_IDS ทับได้ — ถ้าตั้ง env ไว้เดิมเป็น "1,2" ให้แก้เป็น "1,2,4,5" หรือลบทิ้ง
+const WATCH_COMPANY_IDS = (process.env.GR_COMPANY_IDS || '1,2,4,5')
   .split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 
 function getDb() {
