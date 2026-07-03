@@ -2858,12 +2858,31 @@ export async function odooReceiveDeliveryStatus(origin) {
             if (remain > 0.0001) totalRemain += remain;
           }
         }
+        // ── ดึง PR ที่ผูกกับ PO นี้ (เลขที่ PR + ผู้ขอ) — OCA purchase_request ──
+        //   PO.order_line ↔ purchase.request.line.purchase_lines → request_id
+        //   กันพังด้วย try/catch: ถ้า Odoo ไม่มีโมดูลนี้ ก็แค่ไม่แสดง (ไม่ error)
+        let prName = '', prBy = '';
+        try {
+          const poLineIds = po.order_line || [];
+          if (poLineIds.length) {
+            const prLines = await searchRead('purchase.request.line',
+              [['purchase_lines', 'in', poLineIds]], ['request_id'], 100);
+            const reqIds = [...new Set(prLines.map(l => Array.isArray(l.request_id) ? l.request_id[0] : null).filter(Boolean))];
+            if (reqIds.length) {
+              const reqs = await searchRead('purchase.request',
+                [['id', 'in', reqIds]], ['name', 'requested_by'], 20);
+              prName = [...new Set(reqs.map(r => r.name).filter(Boolean))].join(', ');
+              prBy = [...new Set(reqs.map(r => Array.isArray(r.requested_by) ? r.requested_by[1] : '').filter(Boolean))].join(', ');
+            }
+          }
+        } catch (e) { /* ไม่มีโมดูล PR หรือ field ต่าง → ข้าม */ }
+
         return {
           type: 'po', found: true, docName: po.name,
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
           remainLines: detail.filter(d => d.remain > 0.0001),
-          note: poNote
+          note: poNote, prName, prBy
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
