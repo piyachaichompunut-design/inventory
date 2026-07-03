@@ -1149,6 +1149,16 @@ export default async function handler(req, res) {
 
     const chatId   = msg.chat && msg.chat.id;
 
+    // /chatid หรือ /id → ตอบเลข chat id ของกลุ่มนี้ (ใช้ได้ทุกกลุ่ม แม้ยังไม่อยู่ allowlist)
+    //   ใช้ตอนตั้งค่ากลุ่มใหม่: พิมพ์ /chatid ในกลุ่ม → เอาเลขที่ได้ไปใส่ TELEGRAM_CHAT_ID_3
+    {
+      const _cmd = String(msg.text || '').trim().toLowerCase();
+      if (_cmd === '/chatid' || _cmd === '/id') {
+        await sendTelegramReply(chatId, '🆔 Chat ID ของกลุ่มนี้:\n<code>' + chatId + '</code>');
+        res.status(200).json({ ok: true }); return;
+      }
+    }
+
     if (!isAllowedChat(chatId)) { res.status(200).json({ ok: true }); return; }
 
     // ── @บอท เรียบร้อย (reply ใบเบิกใน chat 1/chat 2) → ตอบกลับกลุ่มเบิกของ ──
