@@ -596,7 +596,7 @@ export async function odooDelivery(keyword, companyId) {
     return withCompany(domain, companyId);
   };
 
-  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id', 'company_id'];
   let pickings = [];
   let lastErr = null;
   // 1) ค้นแบบเต็ม (มี relational partner_id.name + group_id.name)
@@ -753,7 +753,7 @@ export async function odooDeliveryMulti(keyword, numbers, companyId) {
   domain.push(...endsDomain, ...kwDomain);
   domain = withCompany(domain, companyId);
 
-  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id'];
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id', 'company_id'];
   let pickings = [];
   try {
     pickings = await searchRead('stock.picking', domain, fields, nums.length + 10);
@@ -2479,11 +2479,18 @@ export async function odooDocDetail(model, id) {
       });
     }
     const totalRemain = Math.max(0, totalOrdered - totalReceived);
+    // ชื่องาน = group_id ของ picking ที่ผูกกับ PO นี้ (ผ่าน purchase_id — แม่นตาม PO id)
+    let jobName = '';
+    try {
+      const picks = await searchRead('stock.picking', [['purchase_id', '=', id]], ['group_id'], 5);
+      const g = (picks || []).find(pk => Array.isArray(pk.group_id));
+      if (g) jobName = g.group_id[1];
+    } catch (e) { /* ไม่มี field/โมดูล → ข้าม */ }
     doc = {
       name: 'PO ' + r.name,
       partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
       date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
-      poNote: noteClean,
+      poNote: noteClean, jobName,
       totalOrdered, totalReceived, totalRemain,
       lines: linesMapped
     };
@@ -2811,9 +2818,11 @@ export async function odooBilledNotReceived(sinceIso, companyIds) {
 //   origin เป็น PO → เทียบ product_qty vs qty_received (รับเข้าครบไหม)
 //   origin เป็น SO → เทียบ product_uom_qty vs qty_delivered (ส่งออกครบไหม)
 //   คืน: { type:'po'|'so'|null, complete:bool, lines:[{product, ordered, done, remain, uom}], totalRemain }
-export async function odooReceiveDeliveryStatus(origin) {
+export async function odooReceiveDeliveryStatus(origin, companyId) {
   const raw = String(origin || '').trim();
   if (!raw) return { type: null, found: false };
+  // มี 4 บริษัท เลข PO/SO ซ้ำข้ามบริษัทได้ → กรองตามบริษัทของใบงาน (ถ้าส่งมา)
+  const coId = Array.isArray(companyId) ? companyId[0] : companyId;
 
   // origin อาจมีหลายเลข (เช่น "P2606044, P2606050") → แยกเอาเลขแรกที่เจอ
   // ข้าม token ที่ไม่มีตัวเลขเลย (เช่น "PO", "SO", "MO" ที่หลุดมาจาก caller ที่ลืมตัด
@@ -2834,7 +2843,7 @@ export async function odooReceiveDeliveryStatus(origin) {
   for (const tok of tokens) {
     try {
       const pos = await searchRead('purchase.order',
-        ['|', ['name', '=', tok], ['name', 'ilike', tok]],
+        withCompany(['|', ['name', '=', tok], ['name', 'ilike', tok]], coId),
         ['id', 'name', 'order_line', 'notes', 'partner_id'], 3);
       if (pos.length) {
         const po = pos[0];
@@ -2895,7 +2904,7 @@ export async function odooReceiveDeliveryStatus(origin) {
   for (const tok of tokens) {
     try {
       const sos = await searchRead('sale.order',
-        ['|', ['name', '=', tok], ['name', 'ilike', tok]],
+        withCompany(['|', ['name', '=', tok], ['name', 'ilike', tok]], coId),
         ['id', 'name', 'order_line', 'note', 'partner_id'], 3);
       if (sos.length) {
         const so = sos[0];
