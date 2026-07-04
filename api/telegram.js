@@ -406,6 +406,8 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     const totalLines = (p.lines || []).length;
     const date = String(p.scheduled_date || '').slice(0, 10);
     const images = p.images || [];
+    const jobName = Array.isArray(p.group_id) ? p.group_id[1] : '';  // ชื่องาน (Reference/โครงการ)
+    const contact = Array.isArray(p.partner_id) ? p.partner_id[1] : '';  // ผู้รับ/ผู้ติดต่อ (Contact)
 
     // สร้างข้อความรายการ
     let lineItems = lines.map((l, i) => {
@@ -449,15 +451,17 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     let statusBlock = '', stVendor = '', stIsPO = true;
     try {
       const { odooReceiveDeliveryStatus } = await import('./odoo.js');
-      const st = await odooReceiveDeliveryStatus(origin);
+      const st = await odooReceiveDeliveryStatus(origin, p.company_id);
       statusBlock = buildReceiveStatusBlock(st);
       if (st) { stVendor = st.vendor || ''; stIsPO = st.type !== 'so'; }
     } catch (e) { /* เช็คไม่ได้ ข้าม */ }
 
     const msg =
       '📊 รายงาน: ' + name + '\n' +
+      (jobName ? '🏷️ <b>ชื่องาน: ' + tgEsc(jobName) + '</b>\n' : '') +
       (origin ? '📋 โครงการ: ' + origin + '\n' : '') +
       (stVendor ? '🏢 <b>' + (stIsPO ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + tgEsc(stVendor) + '</b>\n' : '') +
+      (!stVendor && contact ? '👤 <b>ผู้รับ: ' + tgEsc(contact) + '</b>\n' : '') +
       '📅 วันที่: ' + date + '\n' +
       '📷 รูปงาน: ' + images.length + ' รูป\n\n' +
       '📦 รายการสินค้า' + (totalLines > 5 ? ' (5 จาก ' + totalLines + ')' : '') + ':\n' +
@@ -528,11 +532,12 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       let recvStatus = null;
       try {
         const { odooReceiveDeliveryStatus } = await import('./odoo.js');
-        recvStatus = await odooReceiveDeliveryStatus(p.origin || '');
+        recvStatus = await odooReceiveDeliveryStatus(p.origin || '', p.company_id);
       } catch (e) { /* ข้าม */ }
       picksData.push({
         name: p.name,
         origin: p.origin || '',
+        jobName: Array.isArray(p.group_id) ? p.group_id[1] : '',  // ชื่องาน (Reference/โครงการ)
         partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
         date: String(p.scheduled_date || '').slice(0, 10),
         statusText: stMap[p.state] || 'รอส่ง',
@@ -568,9 +573,10 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       '📷 รูปงานรวม: ' + totalImages + ' รูป\n\n' +
       picksData.map(p =>
         '📋 ' + p.name + ' — ' + (p.statusText) + '\n' +
+        (p.jobName ? '   🏷️ <b>ชื่องาน: ' + tgEsc(p.jobName) + '</b>\n' : '') +
         (p.recvStatus && p.recvStatus.vendor
           ? '   🏢 <b>' + (p.recvStatus.type !== 'so' ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + tgEsc(p.recvStatus.vendor) + '</b>\n'
-          : '') +
+          : (p.partner ? '   👤 <b>ผู้รับ: ' + tgEsc(p.partner) + '</b>\n' : '')) +
         '   ' + p.lines.length + ' รายการสินค้า' +
         buildReceiveStatusBlock(p.recvStatus)
       ).join('\n') + '\n\n' +
@@ -690,6 +696,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
 
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
+      (d.jobName ? '🏷️ <b>ชื่องาน: ' + tgEsc(d.jobName) + '</b>\n' : '') +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
