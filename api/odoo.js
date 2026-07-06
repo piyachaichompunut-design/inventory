@@ -2696,6 +2696,7 @@ export async function odooRecentStockMoves(sinceIso, companyIds) {
       write_user: u.name || wname || '', write_login: u.login || '',
       create_user: cu.name || cname || '', create_login: cu.login || '',
       company: Array.isArray(r.company_id) ? r.company_id[1] : '',
+      companyId: Array.isArray(r.company_id) ? r.company_id[0] : null,
       direction, srcUsage, destUsage,
       picking: Array.isArray(r.picking_id) ? r.picking_id[1] : '',
       scrapped: r.scrapped === true, date: r.date || ''
