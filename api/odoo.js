@@ -2479,17 +2479,21 @@ export async function odooDocDetail(model, id) {
       });
     }
     const totalRemain = Math.max(0, totalOrdered - totalReceived);
-    // ชื่องาน = group_id ของ picking ที่ผูกกับ PO นี้ (ผ่าน purchase_id — แม่นตาม PO id)
-    let jobName = '';
+    // ชื่องาน + วันรับจริง จาก picking ที่ผูกกับ PO นี้ (ผ่าน purchase_id — แม่นตาม PO id)
+    //   วันรับจริง = scheduled_date ของใบรับ (ผู้ใช้ตั้งเป็นวันจริง) ไม่ใช่วันเปิด PO
+    let jobName = '', deliverDate = '';
     try {
-      const picks = await searchRead('stock.picking', [['purchase_id', '=', id]], ['group_id'], 5);
+      const picks = await searchRead('stock.picking', [['purchase_id', '=', id]],
+        ['group_id', 'scheduled_date'], 5);
       const g = (picks || []).find(pk => Array.isArray(pk.group_id));
       if (g) jobName = g.group_id[1];
+      const pk = (picks || []).find(pk => pk.scheduled_date);
+      if (pk) deliverDate = String(pk.scheduled_date || '').slice(0, 10);
     } catch (e) { /* ไม่มี field/โมดูล → ข้าม */ }
     doc = {
       name: 'PO ' + r.name,
       partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
-      date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
+      date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
       poNote: noteClean, jobName,
       totalOrdered, totalReceived, totalRemain,
       lines: linesMapped
@@ -2499,8 +2503,18 @@ export async function odooDocDetail(model, id) {
     if (!rows.length) return null;
     const r = rows[0];
     const lines = await searchRead('sale.order.line', [['order_id','=',id]], ['product_id','name','product_uom_qty','product_uom'], 50);
+    // ชื่องาน + วันส่งจริง จาก picking ที่ผูกกับ SO นี้ (ผ่าน sale_id) — ไม่ใช่วันเปิด SO
+    let jobName = '', deliverDate = '';
+    try {
+      const picks = await searchRead('stock.picking', [['sale_id','=',id]],
+        ['group_id','scheduled_date'], 5);
+      const g = (picks || []).find(pk => Array.isArray(pk.group_id));
+      if (g) jobName = g.group_id[1];
+      const pk = (picks || []).find(pk => pk.scheduled_date);
+      if (pk) deliverDate = String(pk.scheduled_date || '').slice(0,10);
+    } catch (e) { /* ไม่มี field sale_id → ข้าม */ }
     doc = { name: 'SO ' + r.name, partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ลูกค้า',
-      date: String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
+      date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0, jobName,
       lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_uom_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
   } else if (model === 'purchase.request') {
     const rows = await searchRead('purchase.request', [['id','=',id]], ['name','requested_by','date_start'], 1);
