@@ -134,12 +134,23 @@ function buildReceiveStatusBlockGr(status) {
   const verb = isPO ? 'รับ' : 'ส่ง';
   const docLabel = isPO ? 'PO' : 'SO';
 
+  // ── ผู้ขาย/ลูกค้า ของเอกสาร / วัตถุประสงค์ / เลข PR / ผู้ขอสั่งซื้อ (ต้นทางก่อนจะมาเป็น PO) ──
+  const vendorLine = status.vendor
+    ? '\n🏢 <b>' + (isPO ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + status.vendor + '</b>\n'
+    : '';
+  const noteLine = status.note ? '🎯 <b>วัตถุประสงค์: ' + status.note + '</b>\n' : '';
+  const prLine = (status.prName || status.prBy)
+    ? '📄 <b>PR: ' + (status.prName || '-') +
+      (status.prBy ? '  •  👤 ผู้ขอ: ' + status.prBy : '') + '</b>\n'
+    : '';
+  const headLines = vendorLine + noteLine + prLine;
+
   if (status.complete) {
-    return '\n✅ <b>' + verb + 'ครบ ' + docLabel +
+    return headLines + '\n✅ <b>' + verb + 'ครบ ' + docLabel +
            (status.docName ? ' (' + status.docName + ')' : '') + '</b> — ครบทุกรายการแล้ว\n';
   }
 
-  let block = '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
+  let block = headLines + '\n🔴🔴 <b>⚠️ ' + verb + 'สินค้าไม่ครบ!</b> 🔴🔴\n';
   block += '<b>📌 ' + docLabel + (status.docName ? ' ' + status.docName : '') +
            ' ยังค้าง' + verb + 'อีก ' + fmtQtyGr(status.totalRemain) + ' หน่วย</b>\n';
   const rl = status.remainLines || [];
@@ -299,7 +310,7 @@ export default async function handler(req, res) {
         // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คครบไหม กันคีย์จำนวนผิด
         if (g.origin) {
           try {
-            const st = await odooReceiveDeliveryStatus(g.origin);
+            const st = await odooReceiveDeliveryStatus(g.origin, g.companyId);
             msg += buildReceiveStatusBlockGr(st);
           } catch (e) { /* ข้าม */ }
         }
@@ -407,7 +418,7 @@ export default async function handler(req, res) {
       // สถานะรับ/ส่ง จาก origin (PO/SO) — เช็คว่าครบไหม กันคีย์จำนวนผิด
       if (g.origin) {
         try {
-          const st = await odooReceiveDeliveryStatus(g.origin);
+          const st = await odooReceiveDeliveryStatus(g.origin, g.companyId);
           msg += buildReceiveStatusBlockGr(st);
         } catch (e) { /* เช็คไม่ได้ ข้าม */ }
       }
