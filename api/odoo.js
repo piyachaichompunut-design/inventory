@@ -102,6 +102,28 @@ async function searchRead(model, domain, fields, limit = 20, context = null, ord
   ]);
 }
 
+// ── หาชื่อทางเทคนิคของฟิลด์จาก "ป้ายชื่อ" (label) — cache ต่อโมเดล ─────────────
+//   ใช้ตอนไม่รู้ชื่อฟิลด์จริง (เช่น custom field "PR No." บน purchase.order)
+//   คืน technical name ตัวแรกที่ label ตรง (case-insensitive) หรือ null ถ้าไม่เจอ
+const _fieldsGetCache = {};
+async function odooFieldByLabel(model, labels) {
+  if (!_fieldsGetCache[model]) {
+    try {
+      const uid = await odooAuth();
+      _fieldsGetCache[model] = await jsonRpc('object', 'execute_kw', [
+        ODOO_DB, uid, ODOO_KEY, model, 'fields_get', [], { attributes: ['string'] }
+      ]) || {};
+    } catch (e) { _fieldsGetCache[model] = {}; }
+  }
+  const fg = _fieldsGetCache[model];
+  const want = (Array.isArray(labels) ? labels : [labels]).map(s => String(s).trim().toLowerCase());
+  for (const tech of Object.keys(fg)) {
+    const lbl = String((fg[tech] && fg[tech].string) || '').trim().toLowerCase();
+    if (want.includes(lbl)) return tech;
+  }
+  return null;
+}
+
 // ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
 // ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
 function withCompany(domain, companyId) {
@@ -2885,22 +2907,44 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
             if (remain > 0.0001) totalRemain += remain;
           }
         }
-        // ── ดึง PR ที่ผูกกับ PO นี้ (เลขที่ PR + ผู้ขอ) — OCA purchase_request ──
-        //   PO.order_line ↔ purchase.request.line.purchase_lines → request_id
+        // ── ดึง PR ที่ผูกกับ PO นี้ (เลขที่ PR + ผู้ขอ + วัตถุประสงค์) — OCA purchase_request ──
         //   กันพังด้วย try/catch: ถ้า Odoo ไม่มีโมดูลนี้ ก็แค่ไม่แสดง (ไม่ error)
-        let prName = '', prBy = '';
+        let prName = '', prBy = '', prPurpose = '';
         try {
+          let reqs = [];
+          // (1) เส้นทางมาตรฐาน OCA: PO.order_line ↔ purchase.request.line.purchase_lines → request_id
           const poLineIds = po.order_line || [];
           if (poLineIds.length) {
             const prLines = await searchRead('purchase.request.line',
               [['purchase_lines', 'in', poLineIds]], ['request_id'], 100);
             const reqIds = [...new Set(prLines.map(l => Array.isArray(l.request_id) ? l.request_id[0] : null).filter(Boolean))];
             if (reqIds.length) {
-              const reqs = await searchRead('purchase.request',
-                [['id', 'in', reqIds]], ['name', 'requested_by'], 20);
-              prName = [...new Set(reqs.map(r => r.name).filter(Boolean))].join(', ');
-              prBy = [...new Set(reqs.map(r => Array.isArray(r.requested_by) ? r.requested_by[1] : '').filter(Boolean))].join(', ');
+              reqs = await searchRead('purchase.request',
+                [['id', 'in', reqIds]], ['name', 'requested_by', 'description'], 20);
             }
+          }
+          // (2) สำรอง: บาง setup ไม่ผูก m2m → อ่านฟิลด์ "PR No." บน PO ตรงๆ แล้วค้น purchase.request
+          if (!reqs.length) {
+            const prField = await odooFieldByLabel('purchase.order',
+              ['PR No.', 'PR No', 'PR', 'เลขที่ PR', 'เลขที่ใบขอซื้อ', 'ใบขอซื้อ']);
+            if (prField) {
+              const poFull = await searchRead('purchase.order', [['id', '=', po.id]], [prField], 1);
+              let prRef = poFull.length ? poFull[0][prField] : '';
+              if (Array.isArray(prRef)) prRef = prRef[1] || '';   // เผื่อเป็น many2one
+              prRef = String(prRef || '').trim();
+              if (prRef) {
+                reqs = await searchRead('purchase.request',
+                  ['|', ['name', '=', prRef], ['name', 'ilike', prRef]],
+                  ['name', 'requested_by', 'description'], 3);
+              }
+            }
+          }
+          if (reqs.length) {
+            prName = [...new Set(reqs.map(r => r.name).filter(Boolean))].join(', ');
+            prBy = [...new Set(reqs.map(r => Array.isArray(r.requested_by) ? r.requested_by[1] : '').filter(Boolean))].join(', ');
+            prPurpose = [...new Set(reqs.map(r => String(r.description || '')
+              .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim())
+              .filter(Boolean))].join(' | ');
           }
         } catch (e) { /* ไม่มีโมดูล PR หรือ field ต่าง → ข้าม */ }
 
@@ -2909,7 +2953,8 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
           complete: totalRemain <= 0.0001,
           lines: detail, totalRemain,
           remainLines: detail.filter(d => d.remain > 0.0001),
-          note: poNote, prName, prBy, vendor
+          // วัตถุประสงค์: ใช้จาก PR ก่อน (ตรงกับที่ผู้ใช้กรอกตอนขอซื้อ) ไม่มีค่อย fallback หมายเหตุ PO
+          note: prPurpose || poNote, prName, prBy, vendor
         };
       }
     } catch (e) { /* ลอง token ถัดไป */ }
