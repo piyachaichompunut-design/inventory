@@ -30,6 +30,18 @@ const STORE_MSG_KEYWORDS = /(นำส่ง|ส่งของ|นำส่ง.
 const STORE_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗|--|---+)[\s\S]{0,15}$/i;
 // คำที่ถือว่าเป็น "ทักทาย/ตอบรับ" ล้วนๆ → ไม่ต้องส่งเข้า chat 1
 const WITHDRAW_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ขอบคุณครับ|ขอบคุณค่ะ|โอเค|okay|ok|ครับ|ค่ะ|คับ|จ้า|ได้ครับ|ได้ค่ะ|👍|🙏|❤️|สวัสดี|เรียบร้อย|👌|🆗)[\s\S]{0,15}$/i;
+
+// ── ระบบจับ "แจ้งส่ง/รับของ" อัตโนมัติ จากกลุ่มฝ่ายจัดซื้อ → บันทึกงาน + แจ้งกลุ่มใหม่ ──
+//   (เป็นทางเลือกที่ 2 — reply @บอท แบบเดิมยังใช้ได้ปกติ)
+const PURCHASE_GROUP_ID = process.env.PURCHASE_GROUP_ID || '-1001954468509'; // กลุ่มฝ่ายจัดซื้อ
+// เฉพาะ 2 คนนี้เท่านั้นที่บอทจับข้อความแจ้งส่ง (ฝ้าย + เมย์)
+const PURCHASE_SENDER_IDS = (process.env.PURCHASE_SENDER_IDS || '6165102439,7233671051')
+  .split(',').map(s => s.trim()).filter(Boolean);
+// ต้องมีคำแจ้งส่ง/เลขเอกสาร (กันข้อความทั่วไป)
+const PURCHASE_MSG_KEYWORDS = /(แจ้งส่ง|แจ้งรับ|รับของ|เข้าคลัง|แจ้งสินค้า|PO\s*\d|PR\s*\d|PO\s*NO|PR\s*NO)/i;
+// ต้องมีแท็ก/ชื่อผู้รับแจ้ง (กันคุยเล่น) — @Nutnut011993 / Anonthaphon / โอม
+const PURCHASE_MENTION = /(@?Nutnut011993|Anonthaphon|โอม)/i;
+
 const todayStr = () => new Date().toISOString().slice(0,10);
 
 // escape อักขระ HTML สำหรับ Telegram parse_mode=HTML (กัน < > & ทำให้ส่งไม่ได้)
@@ -748,6 +760,75 @@ export default async function handler(req, res) {
   try {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const msg = update.message || update.channel_post;
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  กลุ่มฝ่ายจัดซื้อ: จับ "แจ้งส่ง/รับของ" ของ ฝ้าย+เมย์ อัตโนมัติ → บันทึกงาน + แจ้งกลุ่มใหม่
+    //  (ทางเลือกที่ 2 — reply @บอท แบบเดิมยังใช้ได้ปกติ)
+    // ════════════════════════════════════════════════════════════════════════
+    if (msg && String(msg.chat?.id) === String(PURCHASE_GROUP_ID)) {
+      try {
+        const senderId = msg.from ? String(msg.from.id) : '';
+        // เฉพาะ ฝ้าย + เมย์ เท่านั้น — คนอื่นเงียบ
+        if (!PURCHASE_SENDER_IDS.includes(senderId)) { res.status(200).json({ ok: true }); return; }
+        const pText = msg.text || msg.caption || '';
+        const pFrom = msg.from ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim() : '';
+
+        // (A) แก้วันที่ — reply ข้อความเดิมที่บันทึกไว้ + มีคำ แก้/เปลี่ยน/เลื่อน + วันที่
+        if (msg.reply_to_message && /แก้|เปลี่ยน|เลื่อน/.test(pText)) {
+          const dm = pText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+          const newDate = dm ? parseDate(dm[1]) : null;
+          if (newDate) {
+            const upd = await updateTaskDateByMessage(msg.reply_to_message.message_id, newDate);
+            if (upd.ok) {
+              await sendTelegramReply(msg.chat.id, '✅ แก้วันที่งานแล้วครับ 📅 ' + upd.dateDisplay);
+              await notifyMainChat('✏️ <b>แก้ไขวันที่งาน (ฝ่ายจัดซื้อ)</b>\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (pFrom ? '\n✍️ โดย: ' + pFrom : ''));
+            } else if (upd.notFound) {
+              await sendTelegramReply(msg.chat.id, '⚠️ ไม่พบงานเดิมที่ผูกกับข้อความนี้ครับ (ลอง reply ข้อความแจ้งส่งอันแรก)');
+            }
+            res.status(200).json({ ok: true }); return;
+          }
+        }
+
+        // (B) แจ้งส่งใหม่ — ต้องมีคำแจ้งส่ง/เลขเอกสาร + แท็กผู้รับแจ้ง (กันคุยเล่น)
+        if (!(PURCHASE_MSG_KEYWORDS.test(pText) && PURCHASE_MENTION.test(pText))) {
+          res.status(200).json({ ok: true }); return; // ไม่เข้าเงื่อนไข → เงียบ
+        }
+
+        // ดึงไฟล์แนบ (รูป/เอกสาร) ถ้ามี
+        let attachmentObj = null, fileUrl = null, fileName = null;
+        const tgToken = process.env.TELEGRAM_BOT_TOKEN || '';
+        try {
+          if (msg.photo && msg.photo.length && tgToken) {
+            const photo = msg.photo[msg.photo.length - 1];
+            const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${photo.file_id}`)).json();
+            if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = i.result.file_path.split('/').pop(); }
+          } else if (msg.document && tgToken) {
+            const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${msg.document.file_id}`)).json();
+            if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = msg.document.file_name || i.result.file_path.split('/').pop(); }
+          }
+        } catch (e) { /* ดึงไฟล์ไม่ได้ ไม่เป็นไร */ }
+        if (fileUrl && db) {
+          try {
+            const buffer = Buffer.from(await (await fetch(fileUrl)).arrayBuffer());
+            const ext = fileName ? fileName.split('.').pop() : 'jpg';
+            const storageName = 'tg_' + Date.now() + '.' + ext;
+            const { error: upErr } = await db.storage.from('attachments').upload(storageName, buffer, { contentType: 'application/octet-stream', upsert: false });
+            if (!upErr) { const { data: u } = db.storage.from('attachments').getPublicUrl(storageName); attachmentObj = { name: fileName || storageName, wl: u?.publicUrl || '', source: 'telegram' }; }
+          } catch (e) { /* อัปไฟล์ไม่ได้ บันทึกงานต่อไป */ }
+        }
+
+        // บันทึกงาน (ผูก message_id ของข้อความนี้ → reply แก้วันได้ทีหลัง) — เป็นงาน "รับ"
+        const result = await saveTaskFromReply(pText, pFrom, msg.chat.id, attachmentObj, '', msg.message_id, 'รับ');
+        if (result.ok) {
+          const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
+          await notifyMainChat(result.mainMsg + fileLink);   // → กลุ่มใหม่ (TELEGRAM_CHAT_ID_3)
+          await sendTelegramReply(msg.chat.id, '✅ รับข้อมูลแจ้งส่งแล้วครับ บันทึกลงระบบให้เรียบร้อย' + (attachmentObj ? ' (แนบไฟล์แล้ว)' : ''));
+        } else {
+          console.error('purchase saveTask failed:', result.error);
+        }
+      } catch (e) { console.error('purchase capture error:', e.message); }
+      res.status(200).json({ ok: true }); return;
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     //  ระบบเบิกของ: ข้อความ/รูปจากกลุ่มเบิกของ → แจ้งเข้า chat 1 (บอทเงียบ)
