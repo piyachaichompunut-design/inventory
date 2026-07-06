@@ -37,8 +37,8 @@ const PURCHASE_GROUP_ID = process.env.PURCHASE_GROUP_ID || '-1001954468509'; // 
 // เฉพาะ 2 คนนี้เท่านั้นที่บอทจับข้อความแจ้งส่ง (ฝ้าย + เมย์)
 const PURCHASE_SENDER_IDS = (process.env.PURCHASE_SENDER_IDS || '6165102439,7233671051')
   .split(',').map(s => s.trim()).filter(Boolean);
-// ต้องมีคำแจ้งส่ง/เลขเอกสาร (กันข้อความทั่วไป)
-const PURCHASE_MSG_KEYWORDS = /(แจ้งส่ง|แจ้งรับ|รับของ|เข้าคลัง|แจ้งสินค้า|PO\s*\d|PR\s*\d|PO\s*NO|PR\s*NO)/i;
+// ต้องเป็น "ประโยคแจ้งส่ง" จริงๆ (ไม่ใช่แค่มีเลข PO/PR — กันข้อความแก้ไข/คุยเล่น เช่น "PO xxx ไม่ได้สั่ง")
+const PURCHASE_MSG_KEYWORDS = /(แจ้งส่ง|แจ้งรับ|แจ้งสินค้า|เข้าคลัง|นำส่ง|ฝาก.{0,25}ส่ง)/i;
 // ต้องมีแท็ก/ชื่อผู้รับแจ้ง (กันคุยเล่น) — @Nutnut011993 / Anonthaphon / โอม
 const PURCHASE_MENTION = /(@?Nutnut011993|Anonthaphon|โอม)/i;
 
@@ -773,17 +773,17 @@ export default async function handler(req, res) {
         const pText = msg.text || msg.caption || '';
         const pFrom = msg.from ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim() : '';
 
-        // (A) แก้วันที่ — reply ข้อความเดิมที่บันทึกไว้ + มีคำ แก้/เปลี่ยน/เลื่อน + วันที่
-        if (msg.reply_to_message && /แก้|เปลี่ยน|เลื่อน/.test(pText)) {
+        // (A) แก้วันที่ — reply ข้อความเดิม + มีคำเกี่ยวกับ "วัน" ชัดเจน (กันเจอ "แก้ไขจำนวน" แล้วเข้าใจผิด)
+        //   ตรงเงื่อนไข เช่น "เปลี่ยนวัน...", "เลื่อนวัน...", "แก้วันที่...", "เลื่อนเป็น 7/7", "เปลี่ยนเป็น 7/7"
+        const isDateChange = /(เปลี่ยน|แก้|เลื่อน)\s*(วันที่|วัน|เป็นวันที่|เป็น\s*\d|ไป\s*\d)/.test(pText);
+        if (msg.reply_to_message && isDateChange) {
           const dm = pText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
           const newDate = dm ? parseDate(dm[1]) : null;
           if (newDate) {
             const upd = await updateTaskDateByMessage(msg.reply_to_message.message_id, newDate);
+            // บอทเงียบในกลุ่มสั่งของเสมอ — แจ้งเฉพาะกลุ่มใหม่ (ถ้าเจองาน)
             if (upd.ok) {
-              await sendTelegramReply(msg.chat.id, '✅ แก้วันที่งานแล้วครับ 📅 ' + upd.dateDisplay);
               await notifyMainChat('✏️ <b>แก้ไขวันที่งาน (ฝ่ายจัดซื้อ)</b>\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (pFrom ? '\n✍️ โดย: ' + pFrom : ''));
-            } else if (upd.notFound) {
-              await sendTelegramReply(msg.chat.id, '⚠️ ไม่พบงานเดิมที่ผูกกับข้อความนี้ครับ (ลอง reply ข้อความแจ้งส่งอันแรก)');
             }
             res.status(200).json({ ok: true }); return;
           }
@@ -821,8 +821,8 @@ export default async function handler(req, res) {
         const result = await saveTaskFromReply(pText, pFrom, msg.chat.id, attachmentObj, '', msg.message_id, 'รับ');
         if (result.ok) {
           const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
-          await notifyMainChat(result.mainMsg + fileLink);   // → กลุ่มใหม่ (TELEGRAM_CHAT_ID_3)
-          await sendTelegramReply(msg.chat.id, '✅ รับข้อมูลแจ้งส่งแล้วครับ บันทึกลงระบบให้เรียบร้อย' + (attachmentObj ? ' (แนบไฟล์แล้ว)' : ''));
+          await notifyMainChat(result.mainMsg + fileLink);   // → กลุ่มใหม่ (TELEGRAM_CHAT_ID_3) เท่านั้น
+          // ไม่ตอบในกลุ่มสั่งของ — เงียบสนิท
         } else {
           console.error('purchase saveTask failed:', result.error);
         }
