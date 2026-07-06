@@ -106,22 +106,46 @@ async function searchRead(model, domain, fields, limit = 20, context = null, ord
 //   ใช้ตอนไม่รู้ชื่อฟิลด์จริง (เช่น custom field "PR No." บน purchase.order)
 //   คืน technical name ตัวแรกที่ label ตรง (case-insensitive) หรือ null ถ้าไม่เจอ
 const _fieldsGetCache = {};
-async function odooFieldByLabel(model, labels) {
+async function odooFieldsGet(model) {
   if (!_fieldsGetCache[model]) {
     try {
       const uid = await odooAuth();
       _fieldsGetCache[model] = await jsonRpc('object', 'execute_kw', [
-        ODOO_DB, uid, ODOO_KEY, model, 'fields_get', [], { attributes: ['string'] }
+        ODOO_DB, uid, ODOO_KEY, model, 'fields_get', [], { attributes: ['string', 'type'] }
       ]) || {};
     } catch (e) { _fieldsGetCache[model] = {}; }
   }
-  const fg = _fieldsGetCache[model];
-  const want = (Array.isArray(labels) ? labels : [labels]).map(s => String(s).trim().toLowerCase());
-  for (const tech of Object.keys(fg)) {
-    const lbl = String((fg[tech] && fg[tech].string) || '').trim().toLowerCase();
-    if (want.includes(lbl)) return tech;
-  }
-  return null;
+  return _fieldsGetCache[model];
+}
+
+// ── หาเลข PR (เช่น "PR01979") ที่เก็บอยู่บน record ของ PO โดยไม่ต้องรู้ชื่อฟิลด์ ──
+//   บาง setup ไม่ผูก m2m ของ OCA แต่เก็บเลข PR ไว้ในฟิลด์ custom ("PR No." ฯลฯ)
+//   วิธี: หาฟิลด์ประเภทข้อความ/many2one ที่ชื่อหรือ label สื่อถึง PR → อ่านค่า → จับ /PR\d+/
+async function odooFindPrRefOnPO(poId) {
+  try {
+    const fg = await odooFieldsGet('purchase.order');
+    const cand = [];
+    for (const tech of Object.keys(fg)) {
+      const meta = fg[tech] || {};
+      if (!['char', 'text', 'many2one', 'reference'].includes(meta.type)) continue;
+      const lbl = String(meta.string || '');
+      if (/pr[\s_]*no|purchase[._\s]?request|ใบขอซื้อ|เลขที่\s*pr/i.test(tech) ||
+          /pr[\s_]*no|ใบขอซื้อ|เลขที่\s*pr|ใบขอ/i.test(lbl)) {
+        cand.push(tech);
+      }
+    }
+    if (!cand.length) return '';
+    const rows = await searchRead('purchase.order', [['id', '=', poId]], cand, 1);
+    if (!rows.length) return '';
+    const row = rows[0];
+    for (const f of cand) {
+      let v = row[f];
+      if (Array.isArray(v)) v = v[1] || '';       // many2one → เอาชื่อ
+      const m = String(v || '').match(/PR\s*0*\d{3,}/i);
+      if (m) return m[0].replace(/\s+/g, '');     // "PR 01979" → "PR01979"
+    }
+    return '';
+  } catch (e) { return ''; }
 }
 
 // ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
@@ -2923,20 +2947,14 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
                 [['id', 'in', reqIds]], ['name', 'requested_by', 'description'], 20);
             }
           }
-          // (2) สำรอง: บาง setup ไม่ผูก m2m → อ่านฟิลด์ "PR No." บน PO ตรงๆ แล้วค้น purchase.request
+          // (2) สำรอง: บาง setup ไม่ผูก m2m → อ่านเลข PR ที่เก็บบนตัว PO ("PR No.") แล้วค้น purchase.request
+          //   เลข PR ก็ซ้ำข้ามบริษัทได้ → กรองด้วย company เดียวกับ PO (มี 4 บริษัท)
           if (!reqs.length) {
-            const prField = await odooFieldByLabel('purchase.order',
-              ['PR No.', 'PR No', 'PR', 'เลขที่ PR', 'เลขที่ใบขอซื้อ', 'ใบขอซื้อ']);
-            if (prField) {
-              const poFull = await searchRead('purchase.order', [['id', '=', po.id]], [prField], 1);
-              let prRef = poFull.length ? poFull[0][prField] : '';
-              if (Array.isArray(prRef)) prRef = prRef[1] || '';   // เผื่อเป็น many2one
-              prRef = String(prRef || '').trim();
-              if (prRef) {
-                reqs = await searchRead('purchase.request',
-                  ['|', ['name', '=', prRef], ['name', 'ilike', prRef]],
-                  ['name', 'requested_by', 'description'], 3);
-              }
+            const prRef = await odooFindPrRefOnPO(po.id);
+            if (prRef) {
+              reqs = await searchRead('purchase.request',
+                withCompany(['|', ['name', '=', prRef], ['name', 'ilike', prRef]], coId),
+                ['name', 'requested_by', 'description'], 3);
             }
           }
           if (reqs.length) {
