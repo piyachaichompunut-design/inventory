@@ -706,11 +706,19 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       } catch (e) { /* ข้าม */ }
     }
 
+    // วัตถุประสงค์ / เลข PR / ผู้ขอ (ต้นทางก่อนเป็น PO) — ตัวหนาให้ชัด
+    const purposeLine = d.prPurpose ? '🎯 <b>วัตถุประสงค์: ' + tgEsc(d.prPurpose) + '</b>\n' : '';
+    const prInfoLine = (d.prName || d.prBy)
+      ? '📄 <b>PR: ' + tgEsc(d.prName || '-') +
+        (d.prBy ? '  •  👤 ผู้ขอ: ' + tgEsc(d.prBy) : '') + '</b>\n'
+      : '';
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
       (d.jobName ? '🏷️ <b>ชื่องาน: ' + tgEsc(d.jobName) + '</b>\n' : '') +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
+      purposeLine +
+      prInfoLine +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
       (d.total ? '💰 ยอดรวม: ' + d.total.toLocaleString('th-TH') + ' บาท\n' : '') +
       // ── หมายเหตุ PO ──
