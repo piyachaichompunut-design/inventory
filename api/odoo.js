@@ -148,6 +148,44 @@ async function odooFindPrRefOnPO(poId) {
   } catch (e) { return ''; }
 }
 
+// ── ดึง PR (เลขที่ + ผู้ขอ + วัตถุประสงค์) ที่ผูกกับ PO ─────────────────────────
+//   ใช้ร่วมกันทั้ง odooReceiveDeliveryStatus และ odooDocDetail
+//   ทางที่ 1: link มาตรฐาน OCA (purchase.request.line.purchase_lines ↔ PO.order_line)
+//   ทางที่ 2 (สำรอง): อ่านเลข PR ที่เก็บบนตัว PO ("PR No.") แล้วค้น purchase.request
+//                     (กรองบริษัทเดียวกับ PO เพราะเลข PR ซ้ำข้ามบริษัทได้ — มี 4 บริษัท)
+//   วัตถุประสงค์ = ช่อง Description ของ PR (ตรงกับที่ผู้ใช้กรอกตอนขอซื้อ)
+async function lookupPrForPO(orderLineIds, poId, coId) {
+  let prName = '', prBy = '', prPurpose = '';
+  try {
+    let reqs = [];
+    if (orderLineIds && orderLineIds.length) {
+      const prLines = await searchRead('purchase.request.line',
+        [['purchase_lines', 'in', orderLineIds]], ['request_id'], 100);
+      const reqIds = [...new Set(prLines.map(l => Array.isArray(l.request_id) ? l.request_id[0] : null).filter(Boolean))];
+      if (reqIds.length) {
+        reqs = await searchRead('purchase.request',
+          [['id', 'in', reqIds]], ['name', 'requested_by', 'description'], 20);
+      }
+    }
+    if (!reqs.length && poId) {
+      const prRef = await odooFindPrRefOnPO(poId);
+      if (prRef) {
+        reqs = await searchRead('purchase.request',
+          withCompany(['|', ['name', '=', prRef], ['name', 'ilike', prRef]], coId),
+          ['name', 'requested_by', 'description'], 3);
+      }
+    }
+    if (reqs.length) {
+      prName = [...new Set(reqs.map(r => r.name).filter(Boolean))].join(', ');
+      prBy = [...new Set(reqs.map(r => Array.isArray(r.requested_by) ? r.requested_by[1] : '').filter(Boolean))].join(', ');
+      prPurpose = [...new Set(reqs.map(r => String(r.description || '')
+        .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim())
+        .filter(Boolean))].join(' | ');
+    }
+  } catch (e) { /* ไม่มีโมดูล PR หรือ field ต่าง → ข้าม */ }
+  return { prName, prBy, prPurpose };
+}
+
 // ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
 // ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
 function withCompany(domain, companyId) {
@@ -2496,7 +2534,7 @@ export async function odooDocDetail(model, id) {
   let doc = {};
   if (model === 'purchase.order') {
     const rows = await searchRead('purchase.order', [['id','=',id]],
-      ['name','partner_id','date_order','amount_total','notes'], 1);
+      ['name','partner_id','date_order','amount_total','notes','order_line','company_id'], 1);
     if (!rows.length) return null;
     const r = rows[0];
     // ดึงยอดสั่ง + รับแล้ว ต่อ line เพื่อคำนวณค้างรับ
@@ -2536,11 +2574,15 @@ export async function odooDocDetail(model, id) {
       const pk = (picks || []).find(pk => pk.scheduled_date);
       if (pk) deliverDate = String(pk.scheduled_date || '').slice(0, 10);
     } catch (e) { /* ไม่มี field/โมดูล → ข้าม */ }
+    // เลขที่ PR + ผู้ขอ + วัตถุประสงค์ (ต้นทางก่อนเป็น PO) — กรองบริษัทเดียวกับ PO
+    const poCoId = Array.isArray(r.company_id) ? r.company_id[0] : r.company_id;
+    const { prName, prBy, prPurpose } = await lookupPrForPO(r.order_line, id, poCoId);
     doc = {
       name: 'PO ' + r.name,
       partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
       date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
       poNote: noteClean, jobName,
+      prName, prBy, prPurpose,
       totalOrdered, totalReceived, totalRemain,
       lines: linesMapped
     };
@@ -2932,39 +2974,7 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
           }
         }
         // ── ดึง PR ที่ผูกกับ PO นี้ (เลขที่ PR + ผู้ขอ + วัตถุประสงค์) — OCA purchase_request ──
-        //   กันพังด้วย try/catch: ถ้า Odoo ไม่มีโมดูลนี้ ก็แค่ไม่แสดง (ไม่ error)
-        let prName = '', prBy = '', prPurpose = '';
-        try {
-          let reqs = [];
-          // (1) เส้นทางมาตรฐาน OCA: PO.order_line ↔ purchase.request.line.purchase_lines → request_id
-          const poLineIds = po.order_line || [];
-          if (poLineIds.length) {
-            const prLines = await searchRead('purchase.request.line',
-              [['purchase_lines', 'in', poLineIds]], ['request_id'], 100);
-            const reqIds = [...new Set(prLines.map(l => Array.isArray(l.request_id) ? l.request_id[0] : null).filter(Boolean))];
-            if (reqIds.length) {
-              reqs = await searchRead('purchase.request',
-                [['id', 'in', reqIds]], ['name', 'requested_by', 'description'], 20);
-            }
-          }
-          // (2) สำรอง: บาง setup ไม่ผูก m2m → อ่านเลข PR ที่เก็บบนตัว PO ("PR No.") แล้วค้น purchase.request
-          //   เลข PR ก็ซ้ำข้ามบริษัทได้ → กรองด้วย company เดียวกับ PO (มี 4 บริษัท)
-          if (!reqs.length) {
-            const prRef = await odooFindPrRefOnPO(po.id);
-            if (prRef) {
-              reqs = await searchRead('purchase.request',
-                withCompany(['|', ['name', '=', prRef], ['name', 'ilike', prRef]], coId),
-                ['name', 'requested_by', 'description'], 3);
-            }
-          }
-          if (reqs.length) {
-            prName = [...new Set(reqs.map(r => r.name).filter(Boolean))].join(', ');
-            prBy = [...new Set(reqs.map(r => Array.isArray(r.requested_by) ? r.requested_by[1] : '').filter(Boolean))].join(', ');
-            prPurpose = [...new Set(reqs.map(r => String(r.description || '')
-              .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim())
-              .filter(Boolean))].join(' | ');
-          }
-        } catch (e) { /* ไม่มีโมดูล PR หรือ field ต่าง → ข้าม */ }
+        const { prName, prBy, prPurpose } = await lookupPrForPO(po.order_line, po.id, coId);
 
         return {
           type: 'po', found: true, docName: po.name,
