@@ -38,11 +38,34 @@ const PURCHASE_GROUP_ID = process.env.PURCHASE_GROUP_ID || '-1001954468509'; // 
 const PURCHASE_SENDER_IDS = (process.env.PURCHASE_SENDER_IDS || '6165102439,7233671051')
   .split(',').map(s => s.trim()).filter(Boolean);
 // ต้องเป็น "ประโยคแจ้งส่ง" จริงๆ (ไม่ใช่แค่มีเลข PO/PR — กันข้อความแก้ไข/คุยเล่น เช่น "PO xxx ไม่ได้สั่ง")
-const PURCHASE_MSG_KEYWORDS = /(แจ้งส่ง|แจ้งรับ|แจ้งสินค้า|เข้าคลัง|นำส่ง|ฝาก.{0,25}ส่ง)/i;
+//   รองรับสำนวนจริงของ ฝ้าย/เมย์: "ขอเรียกเข้า PO...", "ซัพเข้าส่งพรุ่งนี้", "นำส่ง", "ฝากส่ง"
+const PURCHASE_MSG_KEYWORDS = /(แจ้งส่ง|แจ้งรับ|แจ้งสินค้า|เข้าคลัง|นำส่ง|เรียกเข้า|เข้าส่ง|ขอส่ง|จัดส่ง|ฝาก.{0,25}ส่ง|ส่ง\s*(วันที่\s*)?\d{1,2}[\/\-]\d{1,2}|ส่ง.{0,6}(วันนี้|พรุ่งนี้|พรุ้งนี้|มะรืน)|(วันนี้|พรุ่งนี้|พรุ้งนี้|มะรืน).{0,6}ส่ง)/i;
 // ต้องมีแท็ก/ชื่อผู้รับแจ้ง (กันคุยเล่น) — @Nutnut011993 / Anonthaphon / โอม
 const PURCHASE_MENTION = /(@?Nutnut011993|Anonthaphon|โอม)/i;
 
 const todayStr = () => new Date().toISOString().slice(0,10);
+
+// ── แปลง "วันส่ง" จากข้อความ → YYYY-MM-DD (รองรับวันที่ชัดเจน + คำบอกวันแบบสัมพัทธ์) ──
+//   "7/7", "7/7/69" → parseDate | "พรุ่งนี้" → +1 วัน | "วันนี้" → วันนี้ | "มะรืน" → +2 วัน
+//   คิดวันตามเวลาไทย (เซิร์ฟเวอร์เป็น UTC)
+function resolveShipDate(text) {
+  if (!text) return null;
+  const t = String(text);
+  // วันที่ชัดเจนก่อน (ตัดขนาดนิ้ว/เศษส่วนออกกัน 1-1/2" อ่านเป็นวันที่)
+  const cleaned = t.replace(/\d{1,2}(?:-\d{1,2})?\/\d{1,2}\s*(?:["”″']|นิ้ว|inch)/gi, ' ');
+  const m = cleaned.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+  if (m) { const d = parseDate(m[1]); if (d) return d; }
+  // คำบอกวันแบบสัมพัทธ์
+  const nowTh = new Date(Date.now() + 7 * 3600 * 1000);
+  const addDays = (n) => {
+    const x = new Date(nowTh.getTime() + n * 86400000);
+    return x.getUTCFullYear() + '-' + String(x.getUTCMonth() + 1).padStart(2, '0') + '-' + String(x.getUTCDate()).padStart(2, '0');
+  };
+  if (/มะรืน/.test(t)) return addDays(2);
+  if (/พรุ่งนี้|พรุ้งนี้|พรุ่งนี|วันพรุ่ง/.test(t)) return addDays(1);
+  if (/วันนี้|เข้าวันนี้/.test(t)) return addDays(0);
+  return null;
+}
 
 // escape อักขระ HTML สำหรับ Telegram parse_mode=HTML (กัน < > & ทำให้ส่งไม่ได้)
 function tgEsc(s) {
@@ -171,10 +194,12 @@ function parseTaskFromText(text, catKeyword, forceDuration) {
 }
 
 // ── บันทึกงานจาก reply ───────────────────────────────────────────────────────
-async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null, forceDuration = null) {
+async function saveTaskFromReply(text, fromUser, chatId, attachmentObj = null, catKeyword = '', messageId = null, forceDuration = null, forceDate = null) {
   if (!db) return { ok: false, error: 'ยังไม่ได้เชื่อมต่อฐานข้อมูลครับ' };
 
   const taskData = parseTaskFromText(text, catKeyword, forceDuration);
+  // วันส่งที่คิดมาแล้ว (เช่น "พรุ่งนี้" → วันที่จริง) → ทับวันที่ที่ดึงจากข้อความ
+  if (forceDate) taskData.actionDate = forceDate;
   const id = rid();
   const attachments = attachmentObj ? [attachmentObj] : [];
 
@@ -783,61 +808,69 @@ export default async function handler(req, res) {
         if (!PURCHASE_SENDER_IDS.includes(senderId)) { res.status(200).json({ ok: true }); return; }
         const pText = msg.text || msg.caption || '';
         const pFrom = msg.from ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim() : '';
+        // ข้อความต้นทางที่ถูก reply (เช่น ฝ้ายรีพายใบสั่ง "ขอเรียกเข้า PO..." แล้วบอกว่าส่งวันไหน)
+        //   → บอทต้องไปอ่านต้นทางเอารายละเอียด (PO/สินค้า) มาลงงาน
+        const origMsg = msg.reply_to_message || null;
+        const origText = origMsg ? (origMsg.text || origMsg.caption || '') : '';
+        const combined = origText ? (origText + '\n' + pText) : pText;
+        // วันส่ง: ดูข้อความที่พิมพ์ก่อน ("พรุ่งนี้"/"8/7") ไม่มีค่อยดูจากต้นทาง — รองรับคำบอกวันสัมพัทธ์
+        const shipDate = resolveShipDate(pText) || (origText ? resolveShipDate(origText) : null);
+        const hasMention = PURCHASE_MENTION.test(pText) || PURCHASE_MENTION.test(origText);
+        const isShip = PURCHASE_MSG_KEYWORDS.test(combined);
+        // ผูกงานไว้กับ "ข้อความต้นทาง" ถ้าเป็นการ reply (reply ครั้งถัดไปจะแก้วันงานเดิมได้)
+        const anchorId = origMsg ? origMsg.message_id : msg.message_id;
 
-        // (A) แก้วันที่ — reply ข้อความเดิม + มีเจตนา "เลื่อน/เปลี่ยนวัน" (กันเจอ "แก้ไขจำนวน" แล้วเข้าใจผิด)
-        //   รองรับ: "ขอเลื่อนส่งเป็นวันพรุ่งนี้ 7/7", "เลื่อนเป็น 7/7", "เปลี่ยนวันรับเป็น 8/7", "แก้วันที่ 9/7"
-        //   "เลื่อน/พรุ่งนี้/มะรืน" = สัญญาณเลื่อนวันชัดเจน | หรือ เปลี่ยน/แก้ + คำว่า วัน/กำหนด
-        const isDateChange =
-          /เลื่อน|พรุ่งนี้|มะรืน/.test(pText) ||
-          /(เปลี่ยน|แก้ไข|แก้)\s*(เป็น\s*)?(กำหนด|วันที่|วัน)/.test(pText) ||
-          /(เปลี่ยน|แก้ไข|แก้)\s*เป็น\s*\d{1,2}[\/\-]\d{1,2}/.test(pText);
-        if (msg.reply_to_message && isDateChange) {
-          const dm = pText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
-          const newDate = dm ? parseDate(dm[1]) : null;
-          if (newDate) {
-            const upd = await updateTaskDateByMessage(msg.reply_to_message.message_id, newDate);
-            // บอทเงียบในกลุ่มสั่งของเสมอ — แจ้งเฉพาะกลุ่มใหม่ (ถ้าเจองาน)
-            if (upd.ok) {
-              await notifyMainChat('✏️ <b>แก้ไขวันที่งาน (ฝ่ายจัดซื้อ)</b>\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (pFrom ? '\n✍️ โดย: ' + pFrom : ''));
-            }
+        // (A) reply ไป "งานเดิม" ที่บอทเคยบันทึกไว้ + มีวันส่ง → แก้วันงานเดิม (ไม่สร้างซ้ำ)
+        if (origMsg && shipDate) {
+          const upd = await updateTaskDateByMessage(origMsg.message_id, shipDate);
+          if (upd.ok) {
+            // บอทเงียบในกลุ่มสั่งของเสมอ — แจ้งเฉพาะกลุ่มใหม่
+            await notifyMainChat('✏️ <b>แก้ไขวันที่งาน (ฝ่ายจัดซื้อ)</b>\n📋 ' + upd.task.task + '\n📅 เปลี่ยนเป็น ' + upd.dateDisplay + (pFrom ? '\n✍️ โดย: ' + pFrom : ''));
             res.status(200).json({ ok: true }); return;
           }
+          // งานเดิมยังไม่มีในระบบ → ไปสร้างใหม่จากข้อความต้นทางข้างล่าง (ถ้าเข้าเงื่อนไขแจ้งส่ง)
         }
 
-        // ข้อความที่ "แก้ไข" (edited) → ใช้เฉพาะจับการเลื่อนวันข้างบนเท่านั้น
-        // ไม่บันทึกงานใหม่ซ้ำ (กันงานเด้งซ้ำเวลาแค่แก้คำผิดในข้อความแจ้งส่งเดิม)
+        // ข้อความที่ "แก้ไข" (edited) → ใช้เฉพาะจับการเลื่อนวันงานเดิมข้างบน ไม่สร้างงานใหม่ซ้ำ
         if (isEdited) { res.status(200).json({ ok: true }); return; }
 
-        // (B) แจ้งส่งใหม่ — ต้องมีคำแจ้งส่ง/เลขเอกสาร + แท็กผู้รับแจ้ง (กันคุยเล่น)
-        if (!(PURCHASE_MSG_KEYWORDS.test(pText) && PURCHASE_MENTION.test(pText))) {
+        // (B) แจ้งส่งใหม่ — ต้องเป็นประโยคแจ้งส่ง + มีแท็กผู้รับแจ้ง (กันคุยเล่น)
+        if (!(isShip && hasMention)) {
           res.status(200).json({ ok: true }); return; // ไม่เข้าเงื่อนไข → เงียบ
         }
 
-        // ดึงไฟล์แนบ (รูป/เอกสาร) ถ้ามี
-        let attachmentObj = null, fileUrl = null, fileName = null;
+        // เนื้อหางาน = ข้อความต้นทาง (มีเลข PO/รายการสินค้า) ถ้ามีรายละเอียด ไม่งั้นใช้ข้อความที่พิมพ์
+        const origHasDetail = origText && /(P[OR]\s?\d|จำนวน|รายการ|ท่อ|แพค|ขวด|กล่อง|ชุด|ออกซิเจน|คาร์บอน|EA|เมตร|เหล็ก)/i.test(origText);
+        const taskContent = origHasDetail ? combined : pText;
+
+        // ดึงไฟล์แนบ (รูป/เอกสาร) — จากข้อความนี้ก่อน ไม่มีค่อยดูข้อความต้นทาง
         const tgToken = process.env.TELEGRAM_BOT_TOKEN || '';
-        try {
-          if (msg.photo && msg.photo.length && tgToken) {
-            const photo = msg.photo[msg.photo.length - 1];
-            const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${photo.file_id}`)).json();
-            if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = i.result.file_path.split('/').pop(); }
-          } else if (msg.document && tgToken) {
-            const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${msg.document.file_id}`)).json();
-            if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = msg.document.file_name || i.result.file_path.split('/').pop(); }
-          }
-        } catch (e) { /* ดึงไฟล์ไม่ได้ ไม่เป็นไร */ }
-        if (fileUrl && db) {
+        const fetchAttach = async (m) => {
+          if (!m || !tgToken || !db) return null;
           try {
+            let fileUrl = null, fileName = null;
+            if (m.photo && m.photo.length) {
+              const photo = m.photo[m.photo.length - 1];
+              const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${photo.file_id}`)).json();
+              if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = i.result.file_path.split('/').pop(); }
+            } else if (m.document) {
+              const i = await (await fetch(`https://api.telegram.org/bot${tgToken}/getFile?file_id=${m.document.file_id}`)).json();
+              if (i.ok) { fileUrl = `https://api.telegram.org/file/bot${tgToken}/${i.result.file_path}`; fileName = m.document.file_name || i.result.file_path.split('/').pop(); }
+            }
+            if (!fileUrl) return null;
             const buffer = Buffer.from(await (await fetch(fileUrl)).arrayBuffer());
             const ext = fileName ? fileName.split('.').pop() : 'jpg';
-            const storageName = 'tg_' + Date.now() + '.' + ext;
+            const storageName = 'tg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) + '.' + ext;
             const { error: upErr } = await db.storage.from('attachments').upload(storageName, buffer, { contentType: 'application/octet-stream', upsert: false });
-            if (!upErr) { const { data: u } = db.storage.from('attachments').getPublicUrl(storageName); attachmentObj = { name: fileName || storageName, wl: u?.publicUrl || '', source: 'telegram' }; }
-          } catch (e) { /* อัปไฟล์ไม่ได้ บันทึกงานต่อไป */ }
-        }
+            if (upErr) return null;
+            const { data: u } = db.storage.from('attachments').getPublicUrl(storageName);
+            return { name: fileName || storageName, wl: u?.publicUrl || '', source: 'telegram' };
+          } catch (e) { return null; }
+        };
+        const attachmentObj = (await fetchAttach(msg)) || (await fetchAttach(origMsg));
 
-        // บันทึกงาน (ผูก message_id ของข้อความนี้ → reply แก้วันได้ทีหลัง) — เป็นงาน "รับ"
-        const result = await saveTaskFromReply(pText, pFrom, msg.chat.id, attachmentObj, '', msg.message_id, 'รับ');
+        // บันทึกงาน (ผูกกับข้อความต้นทาง → reply แก้วันทีหลังได้) — งาน "รับ", วันส่งที่คิดแล้ว
+        const result = await saveTaskFromReply(taskContent, pFrom, msg.chat.id, attachmentObj, '', anchorId, 'รับ', shipDate);
         if (result.ok) {
           const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
           await notifyMainChat(result.mainMsg + fileLink);   // → กลุ่มใหม่ (TELEGRAM_CHAT_ID_3) เท่านั้น
