@@ -540,7 +540,7 @@ async function sendReport(fromChatId, picking, target, lineGroups, db) {
     // เวอร์ชัน plain (ตัด HTML tag) สำหรับ LINE ที่ไม่รองรับ HTML
     const msgPlain = msg.replace(/<\/?b>/g, '');
 
-    if (target === '__self__' || target === 'เทเลแกรม') {
+    if (target === '__self__' || target === 'สั่งของ') {
       // __self__ → ส่งกลับกลุ่มที่พิมพ์คำสั่ง | เทเลแกรม → ส่งเข้า TELEGRAM_CHAT_ID_2
       const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
       if (!destId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2 ใน env'); return; }
@@ -649,7 +649,7 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
     const msgPlain = msg.replace(/<\/?b>/g, '');
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-    if (target === '__self__' || target === 'เทเลแกรม') {
+    if (target === '__self__' || target === 'สั่งของ') {
       const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -785,7 +785,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
     const msgPlain = msg.replace(/<\/?b>/g, '');
 
     const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-    if (target === '__self__' || target === 'เทเลแกรม') {
+    if (target === '__self__' || target === 'สั่งของ') {
       const destId = target === '__self__' ? String(fromChatId) : (process.env.TELEGRAM_CHAT_ID_2 || '');
       if (!destId) { await sendTelegramReply(fromChatId, '⚠️⚠️⚠️ ไม่พบ TELEGRAM_CHAT_ID_2'); return; }
       await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
@@ -1430,12 +1430,12 @@ export default async function handler(req, res) {
             'พิมพ์ชื่องาน/เลขเอกสารต่อท้ายครับ เช่น:\n' +
             '/รายงาน กท.1002 12/6\n' +
             '/รายงาน po2606025 เทส\n' +
-            '/รายงาน so2606011 เทเลแกรม\n' +
+            '/รายงาน so2606011 สั่งของ\n' +
             '/รายงาน mo SET/MO/00002\n' +
             '/รายงาน mo เสาไฟกิ่ง\n\n' +
             '➡️ บอทจะให้ส่งรูป แล้วพิมพ์ /จบรายงาน\n' +
             '   (อัปรูปเข้า Odoo + แสดงรายงานในครั้งเดียว)\n' +
-            'ปลายทาง: ไลน์ / เทส / เทเลแกรม (ไม่ใส่ = แสดงในกลุ่มนี้)'
+            'ปลายทาง: ฟ้า / เทส / ชุบ / สั่งของ (ไม่ใส่ = แสดงในกลุ่มนี้)'
           );
           res.status(200).json({ ok: true }); return;
         }
@@ -1443,15 +1443,15 @@ export default async function handler(req, res) {
         // แยก target (ไลน์/เทส/เทเลแกรม) จากท้ายคำสั่ง
         var repTarget = null;
         var LINE_GROUPS = {
-          'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+          'ฟ้า': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
           'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
         };
         var repKw = rawRep;
-        if (/\sไลน์\s*$/i.test(repKw))      { repTarget = 'ไลน์';     repKw = repKw.replace(/\sไลน์\s*$/, '').trim(); }
+        if (/\sฟ้า\s*$/i.test(repKw))       { repTarget = 'ฟ้า';      repKw = repKw.replace(/\sฟ้า\s*$/, '').trim(); }
         else if (/\sเทส\s*$/i.test(repKw))  { repTarget = 'เทส';      repKw = repKw.replace(/\sเทส\s*$/, '').trim(); }
         else if (/\sชุบ\s*$/i.test(repKw))  { repTarget = 'ชุบ';      repKw = repKw.replace(/\sชุบ\s*$/, '').trim(); }
-        else if (/\sเทเลแกรม\s*$/i.test(repKw)) { repTarget = 'เทเลแกรม'; repKw = repKw.replace(/\sเทเลแกรม\s*$/, '').trim(); }
+        else if (/\sสั่งของ\s*$/i.test(repKw)) { repTarget = 'สั่งของ'; repKw = repKw.replace(/\sสั่งของ\s*$/, '').trim(); }
 
         if (!repTarget) {
           repTarget = '__self__'; // ไม่ระบุปลายทาง → ส่งกลับกลุ่มที่พิมพ์คำสั่ง
@@ -1947,7 +1947,7 @@ export default async function handler(req, res) {
 
           const repTarget = sess.options || '__self__';
           const LINE_GROUPS = {
-            'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+            'ฟ้า': 'C9adc5d856cc04bdefa31523f8c98a520',
             'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
             'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
           };
@@ -2184,7 +2184,7 @@ export default async function handler(req, res) {
       if (selSess2 && selAge2 < 5) {
         const picks = selSess2.picks || [];
         const LINE_GROUPS3 = {
-          'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
+          'ฟ้า': 'C9adc5d856cc04bdefa31523f8c98a520',
           'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
           'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
         };
