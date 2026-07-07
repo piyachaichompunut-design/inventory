@@ -1316,7 +1316,8 @@ export default async function handler(req, res) {
       }
     }
 
-    if (!msg || !msg.text) { res.status(200).json({ ok: true }); return; }
+    // ปล่อยให้ "รูป+caption" ผ่าน (ใช้กับคำสั่ง /บอก ที่แนบรูป) — ข้อความไม่มีทั้ง text/caption ค่อยตัด
+    if (!msg || (!msg.text && !msg.caption)) { res.status(200).json({ ok: true }); return; }
 
     // ── กัน Telegram retry ส่ง update เดิมซ้ำ (สาเหตุบอทค้าง/ตอบซ้ำ) ──
     // ถ้าเคยเห็น update_id นี้แล้ว → ตอบ 200 ทันที ไม่ประมวลผลซ้ำ
@@ -1345,6 +1346,110 @@ export default async function handler(req, res) {
     }
 
     if (!isAllowedChat(chatId)) { res.status(200).json({ ok: true }); return; }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  /ประกาศ <ปลายทาง> <ข้อความ> — "บอทพูดแทน" (relay) จากกลุ่มใหม่(chat 3) → กลุ่มปลายทาง
+    //    คนปลายทางเห็นแค่บอทเป็นคนพิมพ์ ไม่รู้ว่าใครสั่ง | แนบรูปได้ (reply รูป หรือ ส่งรูป+caption)
+    //    ใช้ได้เฉพาะกลุ่มใหม่(chat 3) เพื่อกันคนอื่นแอบใช้
+    // ══════════════════════════════════════════════════════════════════════════
+    {
+      const relayRaw = (msg.text || msg.caption || '').replace(new RegExp('@' + (BOT_USERNAME || '\\w+'), 'gi'), '').trim();
+      const relayMatch = relayRaw.match(/^\/(?:ประกาศ|บอก|พูด)\s+(\S+)\s*([\s\S]*)$/i);
+      if (relayMatch && getChatType(chatId) === 'new') {
+        const RELAY_TARGETS = {
+          'ฟ้า':     { type: 'line', id: 'C9adc5d856cc04bdefa31523f8c98a520' },
+          'เทส':     { type: 'line', id: 'Cd888f9bcfe77f27d6ad9b488a6bb24bc' },
+          'ชุบ':     { type: 'line', id: 'C0479aa47a7c02d6c7c0dd6346142391b' },
+          'สั่งของ': { type: 'tg',   id: process.env.TELEGRAM_CHAT_ID_2 || '' },
+          'ใหม่':    { type: 'tg',   id: process.env.TELEGRAM_CHAT_ID_3 || '' },
+        };
+        const destKey = relayMatch[1];
+        const message = (relayMatch[2] || '').trim();
+        const dest = RELAY_TARGETS[destKey];
+        if (!dest) {
+          await sendTelegramReply(chatId, '⚠️ ไม่รู้จักปลายทาง "' + destKey + '"\nปลายทางที่ใช้ได้: ' + Object.keys(RELAY_TARGETS).join(' / '));
+          res.status(200).json({ ok: true }); return;
+        }
+        if (!dest.id) {
+          await sendTelegramReply(chatId, '⚠️ ปลายทาง "' + destKey + '" ยังไม่ได้ตั้งค่า id ครับ');
+          res.status(200).json({ ok: true }); return;
+        }
+        // หา "รูป" จากข้อความนี้ (ส่งรูป+caption) หรือจากข้อความที่ reply (reply รูป)
+        const srcPhotoMsg = (msg.photo && msg.photo.length) ? msg
+          : (msg.reply_to_message && msg.reply_to_message.photo && msg.reply_to_message.photo.length ? msg.reply_to_message : null);
+        if (!message && !srcPhotoMsg) {
+          await sendTelegramReply(chatId, '⚠️ ใส่ข้อความด้วยครับ เช่น\n/บอก ' + destKey + ' ข้อความที่ต้องการ');
+          res.status(200).json({ ok: true }); return;
+        }
+        const TG_TOK = process.env.TELEGRAM_BOT_TOKEN || '';
+        try {
+          // เตรียมรูป: TG ใช้ file_id ได้เลย | LINE ต้องมี public URL → อัปขึ้น storage
+          let photoFileId = null, photoUrl = null;
+          if (srcPhotoMsg) {
+            const ph = srcPhotoMsg.photo[srcPhotoMsg.photo.length - 1];
+            photoFileId = ph.file_id;
+            if (dest.type === 'line' && db) {
+              const gi = await (await fetch(`https://api.telegram.org/bot${TG_TOK}/getFile?file_id=${photoFileId}`)).json();
+              if (gi.ok) {
+                const furl = `https://api.telegram.org/file/bot${TG_TOK}/${gi.result.file_path}`;
+                const buf = Buffer.from(await (await fetch(furl)).arrayBuffer());
+                const sname = 'relay_' + Date.now() + '.jpg';
+                const { error: upErr } = await db.storage.from('attachments').upload(sname, buf, { contentType: 'image/jpeg', upsert: false });
+                if (!upErr) { const { data: u } = db.storage.from('attachments').getPublicUrl(sname); photoUrl = u?.publicUrl || null; }
+              }
+              if (!photoUrl) { await sendTelegramReply(chatId, '⚠️ เตรียมรูปสำหรับ LINE ไม่สำเร็จ (ส่งเฉพาะข้อความแทน)'); }
+            }
+          }
+
+          // ── ห่อข้อความเป็น "ประกาศ" สวยๆ + ลงท้ายฝ่ายคลัง ──
+          const annLine = '━━━━━━━━━━━━━━━';
+          const buildAnn = (forHtml) => {
+            const head = '📢 ' + (forHtml ? '<b>ประกาศ</b>' : 'ประกาศ');
+            const foot = '🏬 ' + (forHtml ? '<b>From Warehouse Department</b>' : 'From Warehouse Department');
+            if (!message) return head + '\n' + annLine + '\n' + foot;
+            const body = forHtml ? tgEsc(message) : message;
+            return head + '\n' + annLine + '\n' + body + '\n' + annLine + '\n' + foot;
+          };
+          const annHtml = buildAnn(true);
+          const annPlain = buildAnn(false);
+
+          if (dest.type === 'tg') {
+            if (photoFileId) {
+              await fetch(`https://api.telegram.org/bot${TG_TOK}/sendPhoto`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: dest.id, photo: photoFileId, caption: annHtml, parse_mode: 'HTML' })
+              });
+            } else {
+              await fetch(`https://api.telegram.org/bot${TG_TOK}/sendMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: dest.id, text: annHtml, parse_mode: 'HTML' })
+              });
+            }
+          } else {
+            const LINE_TOK = process.env.LINE_CHANNEL_TOKEN || '';
+            const messages = [];
+            messages.push({ type: 'text', text: annPlain });
+            if (photoUrl) messages.push({ type: 'image', originalContentUrl: photoUrl, previewImageUrl: photoUrl });
+            const lr = await fetch('https://api.line.me/v2/bot/message/push', {
+              method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + LINE_TOK },
+              body: JSON.stringify({ to: dest.id, messages })
+            });
+            if (!lr.ok) {
+              const et = await lr.text();
+              await sendTelegramReply(chatId, '⚠️ ส่งเข้า LINE ไม่สำเร็จ: ' + et);
+              res.status(200).json({ ok: true }); return;
+            }
+          }
+          await sendTelegramReply(chatId, '✅ ส่งไปกลุ่ม "' + destKey + '" แล้วครับ (ในนามบอท)' + (photoFileId ? ' 📷' : ''));
+        } catch (e) {
+          await sendTelegramReply(chatId, '⚠️ ส่งไม่สำเร็จ: ' + e.message);
+        }
+        res.status(200).json({ ok: true }); return;
+      }
+    }
+
+    // ข้อความที่ไม่ใช่ text (รูป/ไฟล์) และไม่ใช่คำสั่ง /บอก → ไม่ประมวลผลต่อ (คงพฤติกรรมเดิม)
+    if (!msg.text) { res.status(200).json({ ok: true }); return; }
 
     // ── @บอท เรียบร้อย (reply ใบเบิกใน chat 1/chat 2) → ตอบกลับกลุ่มเบิกของ ──
     //    ทำงานทุกกลุ่มที่อนุญาต ก่อนแยกเส้นทาง main/sub (วางก่อน text.trim กัน crash)
