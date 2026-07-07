@@ -767,7 +767,10 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(200).json({ ok: true }); return; }
   try {
     const update = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
-    const msg = update.message || update.channel_post;
+    // รับข้อความที่ "แก้ไข" (edited) ด้วย — ฝ่ายจัดซื้อมักพิมพ์แล้วแก้ทีหลัง (เช่น เลื่อนวันส่ง)
+    const editedMsg = update.edited_message || update.edited_channel_post || null;
+    const msg = update.message || update.channel_post || editedMsg;
+    const isEdited = !!editedMsg && !update.message && !update.channel_post;
 
     // ════════════════════════════════════════════════════════════════════════
     //  กลุ่มฝ่ายจัดซื้อ: จับ "แจ้งส่ง/รับของ" ของ ฝ้าย+เมย์ อัตโนมัติ → บันทึกงาน + แจ้งกลุ่มใหม่
@@ -781,9 +784,13 @@ export default async function handler(req, res) {
         const pText = msg.text || msg.caption || '';
         const pFrom = msg.from ? ((msg.from.first_name || '') + (msg.from.last_name ? ' ' + msg.from.last_name : '')).trim() : '';
 
-        // (A) แก้วันที่ — reply ข้อความเดิม + มีคำเกี่ยวกับ "วัน" ชัดเจน (กันเจอ "แก้ไขจำนวน" แล้วเข้าใจผิด)
-        //   ตรงเงื่อนไข เช่น "เปลี่ยนวัน...", "เลื่อนวัน...", "แก้วันที่...", "เลื่อนเป็น 7/7", "เปลี่ยนเป็น 7/7"
-        const isDateChange = /(เปลี่ยน|แก้|เลื่อน)\s*(วันที่|วัน|เป็นวันที่|เป็น\s*\d|ไป\s*\d)/.test(pText);
+        // (A) แก้วันที่ — reply ข้อความเดิม + มีเจตนา "เลื่อน/เปลี่ยนวัน" (กันเจอ "แก้ไขจำนวน" แล้วเข้าใจผิด)
+        //   รองรับ: "ขอเลื่อนส่งเป็นวันพรุ่งนี้ 7/7", "เลื่อนเป็น 7/7", "เปลี่ยนวันรับเป็น 8/7", "แก้วันที่ 9/7"
+        //   "เลื่อน/พรุ่งนี้/มะรืน" = สัญญาณเลื่อนวันชัดเจน | หรือ เปลี่ยน/แก้ + คำว่า วัน/กำหนด
+        const isDateChange =
+          /เลื่อน|พรุ่งนี้|มะรืน/.test(pText) ||
+          /(เปลี่ยน|แก้ไข|แก้)\s*(เป็น\s*)?(กำหนด|วันที่|วัน)/.test(pText) ||
+          /(เปลี่ยน|แก้ไข|แก้)\s*เป็น\s*\d{1,2}[\/\-]\d{1,2}/.test(pText);
         if (msg.reply_to_message && isDateChange) {
           const dm = pText.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
           const newDate = dm ? parseDate(dm[1]) : null;
@@ -796,6 +803,10 @@ export default async function handler(req, res) {
             res.status(200).json({ ok: true }); return;
           }
         }
+
+        // ข้อความที่ "แก้ไข" (edited) → ใช้เฉพาะจับการเลื่อนวันข้างบนเท่านั้น
+        // ไม่บันทึกงานใหม่ซ้ำ (กันงานเด้งซ้ำเวลาแค่แก้คำผิดในข้อความแจ้งส่งเดิม)
+        if (isEdited) { res.status(200).json({ ok: true }); return; }
 
         // (B) แจ้งส่งใหม่ — ต้องมีคำแจ้งส่ง/เลขเอกสาร + แท็กผู้รับแจ้ง (กันคุยเล่น)
         if (!(PURCHASE_MSG_KEYWORDS.test(pText) && PURCHASE_MENTION.test(pText))) {
@@ -837,6 +848,9 @@ export default async function handler(req, res) {
       } catch (e) { console.error('purchase capture error:', e.message); }
       res.status(200).json({ ok: true }); return;
     }
+
+    // ข้อความที่ถูกแก้ไข (edited) นอกกลุ่มสั่งของ → ไม่ประมวลผลต่อ (กันคำสั่ง/งานเด้งซ้ำ)
+    if (isEdited) { res.status(200).json({ ok: true }); return; }
 
     // ════════════════════════════════════════════════════════════════════════
     //  ระบบเบิกของ: ข้อความ/รูปจากกลุ่มเบิกของ → แจ้งเข้า chat 1 (บอทเงียบ)
