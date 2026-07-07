@@ -1444,11 +1444,13 @@ export default async function handler(req, res) {
         var repTarget = null;
         var LINE_GROUPS = {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
-          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
+          'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
         };
         var repKw = rawRep;
         if (/\sไลน์\s*$/i.test(repKw))      { repTarget = 'ไลน์';     repKw = repKw.replace(/\sไลน์\s*$/, '').trim(); }
         else if (/\sเทส\s*$/i.test(repKw))  { repTarget = 'เทส';      repKw = repKw.replace(/\sเทส\s*$/, '').trim(); }
+        else if (/\sชุบ\s*$/i.test(repKw))  { repTarget = 'ชุบ';      repKw = repKw.replace(/\sชุบ\s*$/, '').trim(); }
         else if (/\sเทเลแกรม\s*$/i.test(repKw)) { repTarget = 'เทเลแกรม'; repKw = repKw.replace(/\sเทเลแกรม\s*$/, '').trim(); }
 
         if (!repTarget) {
@@ -1946,7 +1948,8 @@ export default async function handler(req, res) {
           const repTarget = sess.options || '__self__';
           const LINE_GROUPS = {
             'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
-            'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+            'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
+            'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
           };
 
           await sendTelegramReply(chatId, '✅ อัปรูป ' + (sess.uploaded || 0) + ' รูปเข้า Odoo แล้ว กำลังสร้างรายงาน...');
@@ -2182,7 +2185,8 @@ export default async function handler(req, res) {
         const picks = selSess2.picks || [];
         const LINE_GROUPS3 = {
           'ไลน์': 'C9adc5d856cc04bdefa31523f8c98a520',
-          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc'
+          'เทส':  'Cd888f9bcfe77f27d6ad9b488a6bb24bc',
+          'ชุบ':  'C0479aa47a7c02d6c7c0dd6346142391b'
         };
         // เลือกได้หลายใบ — ใบแรกที่เลือก (ตามลำดับเลขที่พิมพ์) รับรูป ที่เหลือรวมรายการอย่างเดียว
         const validNums = [...new Set(pickedNums)].filter(n => n >= 1 && n <= picks.length);
