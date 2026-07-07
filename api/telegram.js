@@ -1362,6 +1362,9 @@ export default async function handler(req, res) {
           'ชุบ':     { type: 'line', id: 'C0479aa47a7c02d6c7c0dd6346142391b' },
           'สั่งของ': { type: 'tg',   id: process.env.TELEGRAM_CHAT_ID_2 || '' },
           'ใหม่':    { type: 'tg',   id: process.env.TELEGRAM_CHAT_ID_3 || '' },
+          'ครูภูมิใจ': { type: 'tg', id: process.env.TELEGRAM_CHAT_ID || '' },
+          'สโตร์':   { type: 'tg',   id: '-1001817927448' },
+          'เบิกของ': { type: 'tg',   id: '-1001698212414' },
         };
         const destKey = relayMatch[1];
         const message = (relayMatch[2] || '').trim();
