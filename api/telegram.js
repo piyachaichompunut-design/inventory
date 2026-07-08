@@ -1460,11 +1460,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // ข้อความที่ไม่ใช่ text (รูป/ไฟล์) และไม่ใช่คำสั่ง /บอก → ไม่ประมวลผลต่อ (คงพฤติกรรมเดิม)
-    if (!msg.text) { res.status(200).json({ ok: true }); return; }
-
     // ── @บอท เรียบร้อย (reply ใบเบิกใน chat 1/chat 2) → ตอบกลับกลุ่มเบิกของ ──
-    //    ทำงานทุกกลุ่มที่อนุญาต ก่อนแยกเส้นทาง main/sub (วางก่อน text.trim กัน crash)
+    //    ทำงานทุกกลุ่มที่อนุญาต | รองรับแนบรูป (photo+caption) → ส่งรูปกลับกลุ่มเบิกด้วย
     if (msg && msg.reply_to_message) {
       const wMsgText = msg.text || msg.caption || '';
       const wMentioned = BOT_USERNAME
@@ -1500,7 +1497,17 @@ export default async function handler(req, res) {
                 reply_to_message_id: d.srcMessageId
               })
             });
-            await sendTelegramReply(chatId, '✅ ส่งแจ้ง "เรียบร้อยครับ" กลับกลุ่มเบิกของแล้วครับ');
+            // ผู้ตอบแนบรูปมาด้วย → ส่งรูปกลับกลุ่มเบิก (ให้คนเบิกเห็นของ/ตำแหน่ง)
+            let sentPhoto = false;
+            if (msg.photo && msg.photo.length) {
+              const ph = msg.photo[msg.photo.length - 1];
+              await fetch(`https://api.telegram.org/bot${TG_TOK}/sendPhoto`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: d.srcChatId, photo: ph.file_id, reply_to_message_id: d.srcMessageId })
+              });
+              sentPhoto = true;
+            }
+            await sendTelegramReply(chatId, '✅ ส่งแจ้ง "เรียบร้อยครับ" กลับกลุ่มเบิกของแล้วครับ' + (sentPhoto ? ' 📷 (แนบรูปให้แล้ว)' : ''));
             await db.from('delivery_views').delete().eq('id', rec.id);
           } else {
             await sendTelegramReply(chatId, '⚠️ ไม่พบใบเบิกที่ผูกกับข้อความนี้ครับ (อาจตอบไปแล้ว หรือ reply ผิดข้อความ)');
@@ -1511,6 +1518,9 @@ export default async function handler(req, res) {
         res.status(200).json({ ok: true }); return;
       }
     }
+
+    // ข้อความที่ไม่ใช่ text (รูป/ไฟล์) และไม่ใช่คำสั่ง → ไม่ประมวลผลต่อ (คงพฤติกรรมเดิม)
+    if (!msg.text) { res.status(200).json({ ok: true }); return; }
 
     // ── chat 1 (กลุ่มหลัก): ปิดคำสั่ง/ฟีเจอร์ทั้งหมด ────────────────────────────
     //   เหลือไว้แค่ reply "เรียบร้อย" (จัดการไปข้างบนแล้ว) — คำสั่งอื่นๆ ให้ไปใช้กลุ่มใหม่
