@@ -664,7 +664,8 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
 
 // ── บันทึกงานจากไฟล์ที่ reply (อ่านไฟล์ด้วย AI + hybrid PR→Odoo) — ใช้ร่วมหลายกลุ่ม ──
 //   เงียบในไลน์เสมอ แจ้งเฉพาะกลุ่มใหม่ (Telegram) | ตั้ง line_last_task ให้ +1/+2 แนบไฟล์เพิ่มได้
-async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
+async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, contextText, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
+  console.log('[SET-DEBUG] recordTaskFromReplyFile START qType=' + qType + ' dur=' + duration + ' cat=' + categories);
   const isFile = (qType === 'image' || qType === 'file');
   let itemsText = '', fileAttach = null;
   if (isFile) {
@@ -690,7 +691,17 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
   let bodyText = itemsText, srcFrom = itemsText ? 'AI' : '', srcRef = '';
   let doc = null;
   // "รับ" → เลือก PO ก่อน (ซื้อเข้า) | "ส่ง" → เลือก SO ก่อน (ขายออก)
-  try { doc = await odooDocForFile(itemsText, itemsText, duration === 'รับ' ? 'PO' : 'SO'); } catch (e) { console.error('docForFile:', e.message); }
+  //   ค้นเลขเอกสารจากหลายแหล่งตามลำดับ: จากไฟล์ → ข้อความที่ reply → ข้อความล่าสุดในกลุ่ม
+  //   (เผื่อ reply "รูป" แต่เลข SO อยู่ในข้อความข้างเคียง)
+  const prefer = duration === 'รับ' ? 'PO' : 'SO';
+  const allHint = [itemsText, quotedText, contextText].filter(Boolean).join('\n');
+  for (const src of [itemsText, quotedText, contextText]) {
+    if (!src) continue;
+    try {
+      const d = await odooDocForFile(src, allHint, prefer);
+      if (d && d.lines.length) { doc = d; break; }
+    } catch (e) { console.error('docForFile:', e.message); }
+  }
   if (doc && doc.lines.length) {
     const lineStr = doc.lines.map((l, i) => (i + 1) + '. ' + l.desc + (l.qty ? ' — จำนวน ' + fmtQ(l.qty) + (l.uom ? ' ' + l.uom : '') : '')).join('\n');
     bodyText =
@@ -718,6 +729,7 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
     categories: categories || '', note: '', doing: false, done: false,
     attachments: fileAttach ? [fileAttach] : []
   });
+  console.log('[SET-DEBUG] insert result: ' + (error ? 'ERROR ' + error.message : 'OK id=' + id) + ' | bodyLen=' + bodyText.length + ' | src=' + srcFrom);
   if (error) {
     try { await notifyMainChat('⚠️ <b>บันทึกงาน (จากไลน์) ไม่สำเร็จ</b>\n' + error.message); } catch (e) {}
     return { ok: false };
@@ -1539,6 +1551,7 @@ export default async function handler(req, res) {
         }
       }
 
+      if (botMentioned && quotedId) console.log('[SET-DEBUG] pre botMentioned=1 pushTarget=' + pushTarget + ' isFA=' + (String(pushTarget) === FA_LINE_GROUP) + ' tt=' + JSON.stringify(String(tt).slice(0, 40)));
       // ══ กลุ่ม SET สั่งของ/ส่งของ: reply "ไฟล์" + @บอท "ส่ง|รับ <วันที่> <หมวดหมู่> <ผู้รับผิดชอบ>" ══
       //    ต่างจากกลุ่มชุบตรงที่ "ระบุหมวดหมู่เองในข้อความ" | รายการ = ให้ AI อ่านจากไฟล์
       //    (คำสั่งเดิม reply ข้อความ + @บอท ยังใช้ได้ปกติ สำหรับกรณีฉุกเฉิน)
@@ -1576,9 +1589,20 @@ export default async function handler(req, res) {
           const isFileF = (qTypeF === 'image' || qTypeF === 'file');
           const qtextF = quotedText || qrowF?.text || '';
           const hasDocNo = /\b(?:SO|PO|PR)\s*0*\d{3,}/i.test(qtextF);
+          console.log('[SET-DEBUG] quotedId=' + quotedId + ' qType=' + qTypeF + ' isFile=' + isFileF +
+            ' hasDocNo=' + hasDocNo + ' dur=' + duration + ' cat=' + categories + ' resp=' + responsible +
+            ' qtext=' + JSON.stringify(String(qtextF).slice(0, 50)));
           if (isFileF || hasDocNo) {
+            // ดึงข้อความล่าสุดในกลุ่ม (เผื่อ reply รูป แต่เลข SO อยู่ในข้อความข้างเคียง)
+            let contextText = '';
+            try {
+              const { data: recent } = await db.from('line_messages')
+                .select('text').eq('group_id', pushTarget)
+                .order('created_at', { ascending: false }).limit(10);
+              contextText = (recent || []).map(r => r.text).filter(Boolean).join('\n');
+            } catch (e) {}
             await recordTaskFromReplyFile({
-              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '', quotedText: qtextF,
+              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '', quotedText: qtextF, contextText,
               duration, actionDate, categories, responsible, pushTarget,
               headVerb: (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน'),
               notifyTitle: 'งาน' + (duration === 'ส่ง' ? 'ส่ง' : 'รับ') + ' (จากไลน์)'
