@@ -253,6 +253,95 @@ export async function odooPurchaseRequestByName(prName, companyHint = '') {
   } catch (e) { console.error('odooPurchaseRequestByName:', e.message); return null; }
 }
 
+// ── ดึงเอกสารจาก "ข้อความที่อ่านได้จากไฟล์" — รองรับ SO / PO / PR / งาน(picking) ──
+//   ใช้กับ flow กลุ่มไลน์ที่อ่านไฟล์: หาเลขเอกสาร/ชื่องาน แล้วดึงข้อมูลจริงจาก Odoo
+//   เลือกบริษัทให้ตรง (เลขเอกสารซ้ำข้ามบริษัทได้ — มี 4 บริษัท) โดยเทียบชื่อบริษัทในไฟล์
+export async function odooDocForFile(fullText, companyHint = '') {
+  const txt = String(fullText || '');
+  const scrub = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  const arr = v => Array.isArray(v) ? v[1] : (v || '');
+  const core = s => String(s || '').replace(/บริษัท|จำกัด|มหาชน|ห้างหุ้นส่วน|\(?สำนักงานใหญ่\)?|\(|\)|\s/g, '').toLowerCase();
+  const pick = (rows) => {
+    if (rows.length <= 1) return { row: rows[0], ambiguous: false };
+    const hint = core(companyHint);
+    let best = null, bestScore = 0;
+    for (const row of rows) {
+      const cName = arr(row.company_id); const cCore = core(cName); let score = 0;
+      if (cCore && hint) {
+        if (hint.includes(cCore) || cCore.includes(hint)) score = 100;
+        else for (const w of String(cName).split(/\s+/)) { const wc = core(w); if (wc.length >= 3 && hint.includes(wc)) score++; }
+      }
+      if (score > bestScore) { bestScore = score; best = row; }
+    }
+    return best && bestScore > 0 ? { row: best, ambiguous: false } : { row: rows[0], ambiguous: true };
+  };
+  try {
+    // ── SO (ใบเสนอราคา/ใบสั่งขาย) ──
+    let m = txt.match(/\bSO\s*0*\d{4,}/i);
+    if (m) {
+      const key = m[0].replace(/\s+/g, '').toUpperCase();
+      const rows = await searchRead('sale.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
+        ['name', 'company_id', 'partner_id', 'date_order', 'note'], 10);
+      if (rows.length) {
+        const { row: r, ambiguous } = pick(rows);
+        const lines = await searchRead('sale.order.line', [['order_id', '=', r.id]],
+          ['name', 'product_id', 'product_uom_qty', 'product_uom'], 100);
+        return { kind: 'SO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
+          partner: arr(r.partner_id), partnerLabel: 'ลูกค้า', docName: r.name,
+          date: String(r.date_order || '').slice(0, 10), note: scrub(r.note),
+          lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_uom_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
+      }
+    }
+    // ── PO (ใบสั่งซื้อ) ──
+    m = txt.match(/\bPO\s*0*\d{4,}/i);
+    if (m) {
+      const key = m[0].replace(/\s+/g, '').toUpperCase();
+      const rows = await searchRead('purchase.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
+        ['name', 'company_id', 'partner_id', 'date_order', 'notes'], 10);
+      if (rows.length) {
+        const { row: r, ambiguous } = pick(rows);
+        const lines = await searchRead('purchase.order.line', [['order_id', '=', r.id]],
+          ['name', 'product_id', 'product_qty', 'product_uom'], 100);
+        return { kind: 'PO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
+          partner: arr(r.partner_id), partnerLabel: 'ผู้ขาย', docName: r.name,
+          date: String(r.date_order || '').slice(0, 10), note: scrub(r.notes),
+          lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
+      }
+    }
+    // ── PR (ใบขอซื้อ) ──
+    m = txt.match(/\bPR\s*0*\d{3,}/i);
+    if (m) {
+      const pr = await odooPurchaseRequestByName(m[0].replace(/\s+/g, ''), companyHint);
+      if (pr && pr.lines.length) {
+        return { kind: 'PR', ambiguous: pr.ambiguous, matchCount: pr.matchCount, company: pr.company,
+          partner: pr.requestedBy, partnerLabel: 'ผู้ขอ', docName: pr.name, date: pr.dateStart,
+          purpose: pr.purpose, note: pr.note, lines: pr.lines };
+      }
+    }
+    // ── งานตั้งชื่อ (stock.picking) — จาก "DOCREF:" หรือ "ชื่องาน/เลขที่" ที่ AI อ่านได้ ──
+    let ref = '';
+    const dr = txt.match(/DOCREF\s*[:：]\s*(.+)/i);
+    if (dr) ref = dr[1];
+    if (!ref) { const jn = txt.match(/(?:ชื่องาน|โครงการ|เลขที่(?:เอกสาร)?)\s*[:：]\s*(.+)/); if (jn) ref = jn[1]; }
+    ref = String(ref).replace(/\s{2,}.*$/, '').trim().slice(0, 60);
+    if (ref && ref.length >= 4 && !/^(SO|PO|PR)\s*\d/i.test(ref)) {
+      const rows = await searchRead('stock.picking',
+        ['|', '|', ['name', 'ilike', ref], ['origin', 'ilike', ref], ['group_id', 'ilike', ref]],
+        ['name', 'company_id', 'partner_id', 'scheduled_date', 'origin', 'group_id'], 10);
+      if (rows.length) {
+        const { row: r, ambiguous } = pick(rows);
+        const moves = await searchRead('stock.move', [['picking_id', '=', r.id]],
+          ['product_id', 'product_uom_qty', 'product_uom'], 100);
+        return { kind: 'งาน', ambiguous, matchCount: rows.length, company: arr(r.company_id),
+          partner: arr(r.partner_id), partnerLabel: 'ปลายทาง', docName: arr(r.group_id) || r.name,
+          date: String(r.scheduled_date || '').slice(0, 10), note: scrub(r.origin),
+          lines: moves.map(l => ({ desc: arr(l.product_id), qty: l.product_uom_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
+      }
+    }
+  } catch (e) { console.error('odooDocForFile:', e.message); }
+  return null;
+}
+
 // ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
 // ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
 function withCompany(domain, companyId) {
