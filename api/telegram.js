@@ -1404,14 +1404,23 @@ export default async function handler(req, res) {
             }
           }
 
-          // ── ห่อข้อความเป็น "ประกาศ" สวยๆ + ลงท้ายฝ่ายคลัง ──
-          const annLine = '━━━━━━━━━━━━━━━';
+          // ── ห่อข้อความเป็น "ประกาศ" โทนฟ้า + ใส่วันที่อัตโนมัติ (เวลาไทย) + ลงท้ายฝ่ายคลัง ──
+          const _now = new Date(Date.now() + 7 * 3600 * 1000); // เวลาไทย (UTC+7)
+          const _thM = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+          const annDate = _now.getUTCDate() + ' ' + _thM[_now.getUTCMonth()] + ' ' + (_now.getUTCFullYear() + 543) +
+            '  •  ' + String(_now.getUTCHours()).padStart(2, '0') + ':' + String(_now.getUTCMinutes()).padStart(2, '0') + ' น.';
+          const annBar = '💠═══════════════💠';
           const buildAnn = (forHtml) => {
-            const head = '📢 ' + (forHtml ? '<b>ประกาศ</b>' : 'ประกาศ');
-            const foot = '🏬 ' + (forHtml ? '<b>From Warehouse Department</b>' : 'From Warehouse Department');
-            if (!message) return head + '\n' + annLine + '\n' + foot;
+            const b = (t) => forHtml ? '<b>' + t + '</b>' : t;
             const body = forHtml ? tgEsc(message) : message;
-            return head + '\n' + annLine + '\n' + body + '\n' + annLine + '\n' + foot;
+            return annBar + '\n' +
+              '📢 ' + b('ป ร ะ ก า ศ') + '\n' +
+              '🗓️ ' + annDate + '\n' +
+              annBar + '\n' +
+              (message ? '💬 ' + body + '\n' : '') +
+              '〰️〰️〰️〰️〰️〰️〰️〰️\n' +
+              '🏢 ' + b('From Warehouse Department') + '\n' +
+              '💙 ฝ่ายคลังสินค้า';
           };
           const annHtml = buildAnn(true);
           const annPlain = buildAnn(false);
