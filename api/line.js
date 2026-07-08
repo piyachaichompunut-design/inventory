@@ -664,25 +664,33 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
 
 // ── บันทึกงานจากไฟล์ที่ reply (อ่านไฟล์ด้วย AI + hybrid PR→Odoo) — ใช้ร่วมหลายกลุ่ม ──
 //   เงียบในไลน์เสมอ แจ้งเฉพาะกลุ่มใหม่ (Telegram) | ตั้ง line_last_task ให้ +1/+2 แนบไฟล์เพิ่มได้
-async function recordTaskFromReplyFile({ quotedId, qType, fileName, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
+async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
+  const isFile = (qType === 'image' || qType === 'file');
   let itemsText = '', fileAttach = null;
-  try {
-    const raw = await getLineContent(quotedId);
-    itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, fileName || '');
-    const { buffer: cbuf, contentType: cct } = await compressIfImage(raw.buffer, raw.contentType);
-    const safeName = fileName || (qType === 'image' ? 'image.jpg' : 'file.bin');
-    const ext = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : (/pdf/i.test(cct) ? '.pdf' : '.jpg');
-    const storagePath = 'linefile_' + Date.now() + ext;
-    const { error: upErr } = await db.storage.from('attachments').upload(storagePath, cbuf, { contentType: cct, upsert: true });
-    if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
-  } catch (e) { console.error('recordTaskFromReplyFile read:', e.message); }
+  if (isFile) {
+    // reply ที่ "ไฟล์" → อ่านไฟล์ด้วย AI + โหลดเก็บใน web (แนบเข้างาน)
+    try {
+      const raw = await getLineContent(quotedId);
+      itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, fileName || '');
+      const { buffer: cbuf, contentType: cct } = await compressIfImage(raw.buffer, raw.contentType);
+      const safeName = fileName || (qType === 'image' ? 'image.jpg' : 'file.bin');
+      const ext = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : (/pdf/i.test(cct) ? '.pdf' : '.jpg');
+      const storagePath = 'linefile_' + Date.now() + ext;
+      const { error: upErr } = await db.storage.from('attachments').upload(storagePath, cbuf, { contentType: cct, upsert: true });
+      if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
+    } catch (e) { console.error('recordTaskFromReplyFile read:', e.message); }
+  } else {
+    // reply ที่ "ข้อความ" (มีเลข SO/PO/PR) → ใช้ข้อความนั้นหาเอกสารจาก Odoo (ไม่มีไฟล์แนบ)
+    itemsText = String(quotedText || '');
+  }
 
   // HYBRID: หาเอกสาร (SO/PO/PR/งาน) จากที่ AI อ่าน → ดึงข้อมูลจริงจาก Odoo (แม่นสุด)
   //   ไม่เจอ → ใช้ที่ AI อ่านจากไฟล์ | เลือกบริษัทให้ตรง (เลขเอกสารซ้ำข้ามบริษัทได้ — มี 4 บริษัท)
   const fmtQ = (n) => { const v = Number(n) || 0; return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, ''); };
   let bodyText = itemsText, srcFrom = itemsText ? 'AI' : '', srcRef = '';
   let doc = null;
-  try { doc = await odooDocForFile(itemsText, itemsText); } catch (e) { console.error('docForFile:', e.message); }
+  // "รับ" → เลือก PO ก่อน (ซื้อเข้า) | "ส่ง" → เลือก SO ก่อน (ขายออก)
+  try { doc = await odooDocForFile(itemsText, itemsText, duration === 'รับ' ? 'PO' : 'SO'); } catch (e) { console.error('docForFile:', e.message); }
   if (doc && doc.lines.length) {
     const lineStr = doc.lines.map((l, i) => (i + 1) + '. ' + l.desc + (l.qty ? ' — จำนวน ' + fmtQ(l.qty) + (l.uom ? ' ' + l.uom : '') : '')).join('\n');
     bodyText =
@@ -1560,14 +1568,17 @@ export default async function handler(req, res) {
           }
           const responsible = words.filter((_, i) => i !== catIdx).join(' ').trim();
 
-          // เฉพาะเมื่อ reply "ไฟล์/รูป" เท่านั้น → อ่านไฟล์ลงงาน
-          //   ถ้า reply "ข้อความ" (ไม่ใช่ไฟล์) → ตกไปใช้ flow เดิมด้านล่าง (ฉุกเฉิน)
+          // เข้าเงื่อนไขเมื่อ: reply "ไฟล์/รูป"  หรือ  reply "ข้อความที่มีเลขเอกสาร SO/PO/PR"
+          //   ถ้าไม่เข้าทั้งคู่ → ตกไปใช้ flow เดิมด้านล่าง (ฉุกเฉิน — reply ข้อความธรรมดา)
           const { data: qrowF } = await db.from('line_messages')
-            .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
+            .select('msg_type, file_name, text').eq('message_id', quotedId).maybeSingle();
           const qTypeF = qrowF?.msg_type || '';
-          if (qTypeF === 'image' || qTypeF === 'file') {
+          const isFileF = (qTypeF === 'image' || qTypeF === 'file');
+          const qtextF = quotedText || qrowF?.text || '';
+          const hasDocNo = /\b(?:SO|PO|PR)\s*0*\d{3,}/i.test(qtextF);
+          if (isFileF || hasDocNo) {
             await recordTaskFromReplyFile({
-              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '',
+              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '', quotedText: qtextF,
               duration, actionDate, categories, responsible, pushTarget,
               headVerb: (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน'),
               notifyTitle: 'งาน' + (duration === 'ส่ง' ? 'ส่ง' : 'รับ') + ' (จากไลน์)'
@@ -1733,12 +1744,7 @@ export default async function handler(req, res) {
           const hasDocNum = /(so|po|pr)\s*\d{3,}/i.test(body) || /\d{4,}/.test(body);
           const hasProjectWord = /(ทล\.|ทช\.|ทางหลวง|โครงการ|แขวง|หมายเลข)/.test(body);
           if (!hasDocNum && !hasProjectWord) {
-            await pushLine(pushTarget, [{ type: 'text', text:
-              '⚠️ รับงานไม่สำเร็จครับ\n\n' +
-              'บอทดึงข้อความงานที่ reply ไม่ได้ (ข้อความเดิมอาจถูกส่งก่อนบอทเข้ากลุ่ม หรือเป็นข้อความที่บอทมองไม่เห็น)\n\n' +
-              '✅ วิธีแก้: ก๊อปปี้ข้อความงาน (ที่มีชื่อโครงการ/เลข SO) มาวางใหม่ในกลุ่มนี้ แล้ว reply ข้อความนั้น พิมพ์ @บอท รับ หรือ @บอท ส่ง อีกครั้งครับ'
-            }]);
-            continue;
+            continue; // ข้อมูลไม่พอ → เงียบ ไม่ตอบกลับ (กันบอทตอบรก/เปลือง)
           }
         }
 
