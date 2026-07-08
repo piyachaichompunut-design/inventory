@@ -256,7 +256,7 @@ export async function odooPurchaseRequestByName(prName, companyHint = '') {
 // ── ดึงเอกสารจาก "ข้อความที่อ่านได้จากไฟล์" — รองรับ SO / PO / PR / งาน(picking) ──
 //   ใช้กับ flow กลุ่มไลน์ที่อ่านไฟล์: หาเลขเอกสาร/ชื่องาน แล้วดึงข้อมูลจริงจาก Odoo
 //   เลือกบริษัทให้ตรง (เลขเอกสารซ้ำข้ามบริษัทได้ — มี 4 บริษัท) โดยเทียบชื่อบริษัทในไฟล์
-export async function odooDocForFile(fullText, companyHint = '') {
+export async function odooDocForFile(fullText, companyHint = '', prefer = 'SO') {
   const txt = String(fullText || '');
   const scrub = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
   const arr = v => Array.isArray(v) ? v[1] : (v || '');
@@ -275,40 +275,44 @@ export async function odooDocForFile(fullText, companyHint = '') {
     }
     return best && bestScore > 0 ? { row: best, ambiguous: false } : { row: rows[0], ambiguous: true };
   };
+  // ── SO (ใบเสนอราคา/ใบสั่งขาย) → ลูกค้า, รายการขาย ──
+  const trySO = async () => {
+    const m = txt.match(/\bSO\s*0*\d{4,}/i);
+    if (!m) return null;
+    const key = m[0].replace(/\s+/g, '').toUpperCase();
+    const rows = await searchRead('sale.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
+      ['name', 'company_id', 'partner_id', 'date_order', 'note'], 10);
+    if (!rows.length) return null;
+    const { row: r, ambiguous } = pick(rows);
+    const lines = await searchRead('sale.order.line', [['order_id', '=', r.id]],
+      ['name', 'product_id', 'product_uom_qty', 'product_uom'], 100);
+    return { kind: 'SO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
+      partner: arr(r.partner_id), partnerLabel: 'ลูกค้า', docName: r.name,
+      date: String(r.date_order || '').slice(0, 10), note: scrub(r.note),
+      lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_uom_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
+  };
+  // ── PO (ใบสั่งซื้อ) → ผู้ขาย, รายการซื้อ ──
+  const tryPO = async () => {
+    const m = txt.match(/\bPO\s*0*\d{4,}/i);
+    if (!m) return null;
+    const key = m[0].replace(/\s+/g, '').toUpperCase();
+    const rows = await searchRead('purchase.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
+      ['name', 'company_id', 'partner_id', 'date_order', 'notes'], 10);
+    if (!rows.length) return null;
+    const { row: r, ambiguous } = pick(rows);
+    const lines = await searchRead('purchase.order.line', [['order_id', '=', r.id]],
+      ['name', 'product_id', 'product_qty', 'product_uom'], 100);
+    return { kind: 'PO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
+      partner: arr(r.partner_id), partnerLabel: 'ผู้ขาย', docName: r.name,
+      date: String(r.date_order || '').slice(0, 10), note: scrub(r.notes),
+      lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
+  };
   try {
-    // ── SO (ใบเสนอราคา/ใบสั่งขาย) ──
-    let m = txt.match(/\bSO\s*0*\d{4,}/i);
-    if (m) {
-      const key = m[0].replace(/\s+/g, '').toUpperCase();
-      const rows = await searchRead('sale.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
-        ['name', 'company_id', 'partner_id', 'date_order', 'note'], 10);
-      if (rows.length) {
-        const { row: r, ambiguous } = pick(rows);
-        const lines = await searchRead('sale.order.line', [['order_id', '=', r.id]],
-          ['name', 'product_id', 'product_uom_qty', 'product_uom'], 100);
-        return { kind: 'SO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
-          partner: arr(r.partner_id), partnerLabel: 'ลูกค้า', docName: r.name,
-          date: String(r.date_order || '').slice(0, 10), note: scrub(r.note),
-          lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_uom_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
-      }
-    }
-    // ── PO (ใบสั่งซื้อ) ──
-    m = txt.match(/\bPO\s*0*\d{4,}/i);
-    if (m) {
-      const key = m[0].replace(/\s+/g, '').toUpperCase();
-      const rows = await searchRead('purchase.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
-        ['name', 'company_id', 'partner_id', 'date_order', 'notes'], 10);
-      if (rows.length) {
-        const { row: r, ambiguous } = pick(rows);
-        const lines = await searchRead('purchase.order.line', [['order_id', '=', r.id]],
-          ['name', 'product_id', 'product_qty', 'product_uom'], 100);
-        return { kind: 'PO', ambiguous, matchCount: rows.length, company: arr(r.company_id),
-          partner: arr(r.partner_id), partnerLabel: 'ผู้ขาย', docName: r.name,
-          date: String(r.date_order || '').slice(0, 10), note: scrub(r.notes),
-          lines: lines.map(l => ({ desc: scrub(l.name) || arr(l.product_id), qty: l.product_qty || 0, uom: arr(l.product_uom) })).filter(l => l.desc) };
-      }
-    }
+    // "รับ" → เอา PO ก่อน (ซื้อเข้า) | "ส่ง" → เอา SO ก่อน (ขายออก)
+    const order = prefer === 'PO' ? [tryPO, trySO] : [trySO, tryPO];
+    for (const fn of order) { const r = await fn(); if (r) return r; }
     // ── PR (ใบขอซื้อ) ──
+    let m;
     m = txt.match(/\bPR\s*0*\d{3,}/i);
     if (m) {
       const pr = await odooPurchaseRequestByName(m[0].replace(/\s+/g, ''), companyHint);
