@@ -186,6 +186,73 @@ async function lookupPrForPO(orderLineIds, poId, coId) {
   return { prName, prBy, prPurpose };
 }
 
+// ── ดึงรายละเอียด "ใบขอซื้อ (PR)" จากเลขที่ PR โดยตรง (เช่น PR01986) ───────────
+//   คืน บริษัท / เลขที่ / วันที่ / ผู้ขอ / วัตถุประสงค์ / หมายเหตุ(ใช้ในงาน) / รายการทั้งหมด
+//   ใช้กับ flow กลุ่มชุบ: AI อ่านเลข PR จากไฟล์ → เอาข้อมูลจริงจาก Odoo มาลง (แม่นสุด)
+export async function odooPurchaseRequestByName(prName, companyHint = '') {
+  const clean = String(prName || '').trim().replace(/\s+/g, '').toUpperCase();
+  if (!clean) return null;
+  const scrub = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  // ตัดคำทั่วไปออกจากชื่อบริษัท เหลือ "แก่น" ไว้เทียบ (มี 4 บริษัท เลข PR ซ้ำข้ามบริษัทได้)
+  const core = s => String(s || '').replace(/บริษัท|จำกัด|มหาชน|ห้างหุ้นส่วน|\(?สำนักงานใหญ่\)?|\(|\)|\s/g, '').toLowerCase();
+  try {
+    let noteField = null;
+    try {
+      const fg = await odooFieldsGet('purchase.request');
+      for (const tech of Object.keys(fg)) {
+        const meta = fg[tech] || {};
+        if (!['char', 'text'].includes(meta.type)) continue;
+        if (/ใช้ในงาน|หมายเหตุ|remark|\bnote\b/i.test(String(meta.string || ''))) { noteField = tech; break; }
+      }
+    } catch (e) {}
+    const hdr = ['name', 'company_id', 'requested_by', 'date_start', 'description'];
+    if (noteField && !hdr.includes(noteField)) hdr.push(noteField);
+    // ดึงทุกใบที่เลข PR ตรง (ข้ามบริษัท) มาก่อน แล้วค่อยเลือกบริษัทที่ตรงกับไฟล์
+    const rows = await searchRead('purchase.request',
+      ['|', ['name', '=', clean], ['name', 'ilike', clean]], hdr, 10);
+    if (!rows.length) return null;
+
+    // ── เลือกใบให้ตรงบริษัท (จากชื่อบริษัทที่อ่านได้จากไฟล์) ──
+    let r = rows[0], ambiguous = false;
+    if (rows.length > 1) {
+      const hint = core(companyHint);
+      let best = null, bestScore = 0;
+      for (const row of rows) {
+        const cName = Array.isArray(row.company_id) ? row.company_id[1] : '';
+        const cCore = core(cName);
+        let score = 0;
+        if (cCore && hint) {
+          if (hint.includes(cCore) || cCore.includes(hint)) score = 100;
+          else { // นับคำเด่นของชื่อบริษัทที่โผล่ในข้อความไฟล์
+            for (const w of String(cName).split(/\s+/)) { const wc = core(w); if (wc.length >= 3 && hint.includes(wc)) score++; }
+          }
+        }
+        if (score > bestScore) { bestScore = score; best = row; }
+      }
+      if (best && bestScore > 0) r = best;
+      else ambiguous = true; // ระบุบริษัทไม่ได้ → เตือนให้ตรวจสอบ
+    }
+
+    const lines = await searchRead('purchase.request.line',
+      [['request_id', '=', r.id]], ['name', 'product_id', 'product_qty', 'product_uom_id'], 100);
+    return {
+      name: r.name,
+      company: Array.isArray(r.company_id) ? r.company_id[1] : '',
+      requestedBy: Array.isArray(r.requested_by) ? r.requested_by[1] : '',
+      dateStart: String(r.date_start || '').slice(0, 10),
+      purpose: scrub(r.description),
+      note: noteField ? scrub(r[noteField]) : '',
+      matchCount: rows.length,
+      ambiguous,   // true = เลข PR ซ้ำหลายบริษัท และเลือกอัตโนมัติไม่ได้
+      lines: lines.map(l => ({
+        desc: scrub(l.name) || (Array.isArray(l.product_id) ? l.product_id[1] : ''),
+        qty: l.product_qty || 0,
+        uom: Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : ''
+      })).filter(l => l.desc)
+    };
+  } catch (e) { console.error('odooPurchaseRequestByName:', e.message); return null; }
+}
+
 // ── เติมเงื่อนไขบริษัทเข้า domain (AND) ──────────────────────────────────────
 // ถ้ามี companyId → ['&', ['company_id','=',companyId], ...domainเดิม]
 function withCompany(domain, companyId) {
