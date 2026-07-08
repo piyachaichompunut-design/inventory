@@ -2,7 +2,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
-import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById } from './odoo.js';
+import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooPurchaseRequestByName } from './odoo.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -599,10 +599,12 @@ async function compressIfImage(buffer, contentType) {
 
 // ── อ่าน "รายการสินค้า" จากไฟล์ใบงาน (รูป → Groq vision | PDF → ดึงข้อความ+Groq) ──
 const EXTRACT_PROMPT =
-  'นี่คือเอกสารใบขอซื้อ/ใบสั่งงานชุบกัลวาไนซ์ ช่วยดึง "รายการสินค้า" ทั้งหมดออกมา ' +
-  'ตอบเป็นบรรทัดสั้นๆ บรรทัดละ 1 รายการ รูปแบบ: "<ลำดับ>. <รายละเอียดสินค้า> — จำนวน <qty> <หน่วย>" ' +
-  'เอาเฉพาะรายการสินค้าจริงในตาราง ไม่ต้องใส่หัวตาราง ไม่ต้องมีคำอธิบายหรือคำนำอื่น ' +
-  'ถ้าบางรายการไม่มีจำนวนก็ข้ามส่วนจำนวนไป ตอบเป็นภาษาไทย';
+  'นี่คือเอกสารใบขอซื้อ/ใบสั่งงานชุบกัลวาไนซ์ ช่วยดึงข้อมูลต่อไปนี้ (คัดลอกตามที่เห็นเป๊ะๆ ห้ามเดา/ห้ามแปล/ห้ามสรุป):\n' +
+  '- ชื่อบริษัทที่ออกเอกสาร\n' +
+  '- เลขที่เอกสาร (เช่น PR01986) และวันที่เอกสาร\n' +
+  '- รายการสินค้าทั้งหมดในตาราง คอลัมน์ DESCRIPTION แบบคำต่อคำ พร้อมจำนวน+หน่วย (รูปแบบ "<ลำดับ>. <รายละเอียด> — จำนวน <qty> <หน่วย>")\n' +
+  '- หมายเหตุ/ใช้ในงาน ท้ายเอกสาร\n' +
+  'ตอบเป็นข้อความสั้นๆ ไม่ต้องมีคำอธิบายหรือคำนำอื่น';
 
 async function readItemsFromFileAI(buffer, contentType, fileName) {
   if (!GROQ_KEY) return '';
@@ -1509,9 +1511,33 @@ export default async function handler(req, res) {
             if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
           } catch (e) { console.error('galv read/attach:', e.message); }
 
-          // ชื่องาน = หัว + รายการที่ AI อ่านได้จากไฟล์
+          // ── HYBRID: หาเลข PR จากที่ AI อ่าน (หรือชื่อไฟล์) → ดึงข้อมูลจริงจาก Odoo (แม่นสุด) ──
+          //   เจอ PR ใน Odoo → ใช้ข้อมูลจริง (บริษัท/PR/วันที่/วัตถุประสงค์/ใช้ในงาน/รายการ)
+          //   ไม่เจอ → fallback ใช้ที่ AI อ่านจากไฟล์
+          const fmtQ = (n) => { const v = Number(n) || 0; return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, ''); };
+          const prMatch = (itemsText.match(/PR\s*0*\d{3,}/i) || String(qrow?.file_name || '').match(/PR\s*0*\d{3,}/i));
+          const prNum = prMatch ? prMatch[0].replace(/\s+/g, '') : '';
+          let bodyText = itemsText, srcFrom = itemsText ? 'AI' : '';
+          if (prNum) {
+            let prInfo = null;
+            // ส่งข้อความที่อ่านจากไฟล์เป็น hint บริษัท (เลข PR ซ้ำข้ามบริษัทได้ — มี 4 บริษัท)
+            try { prInfo = await odooPurchaseRequestByName(prNum, itemsText); } catch (e) { console.error('galv PR lookup:', e.message); }
+            if (prInfo && prInfo.lines.length) {
+              const lineStr = prInfo.lines.map((l, i) => (i + 1) + '. ' + l.desc + (l.qty ? ' — จำนวน ' + fmtQ(l.qty) + (l.uom ? ' ' + l.uom : '') : '')).join('\n');
+              bodyText =
+                (prInfo.ambiguous ? '⚠️ เลข PR นี้ซ้ำ ' + prInfo.matchCount + ' บริษัท — ระบุบริษัทอัตโนมัติไม่ได้ โปรดตรวจสอบว่าตรงบริษัทไหม\n' : '') +
+                (prInfo.company ? '🏢 บริษัท: ' + prInfo.company + '\n' : '') +
+                '📄 PR: ' + prInfo.name + (prInfo.dateStart ? '  •  วันที่ ' + prInfo.dateStart : '') + '\n' +
+                (prInfo.purpose ? '🎯 วัตถุประสงค์: ' + prInfo.purpose + '\n' : '') +
+                (prInfo.note ? '📝 ใช้ในงาน: ' + prInfo.note + '\n' : '') +
+                '📦 รายการ:\n' + lineStr;
+              srcFrom = prInfo.ambiguous ? 'Odoo?' : 'Odoo';
+            }
+          }
+
+          // ชื่องาน = หัว + เนื้อหา (จาก Odoo ถ้าเจอ ไม่งั้นจาก AI)
           const head = (duration === 'ส่ง' ? 'ส่งชุบกัลวาไนซ์' : 'รับงานชุบกัลวาไนซ์') + (responsible ? ' — ' + responsible : '');
-          const taskName = (itemsText ? (head + '\n' + itemsText) : head).slice(0, 1500);
+          const taskName = (bodyText ? (head + '\n' + bodyText) : head).slice(0, 2000);
 
           const id = rid();
           const { error } = await db.from('tasks').insert({
@@ -1535,7 +1561,8 @@ export default async function handler(req, res) {
                 (responsible ? '👤 ผู้รับผิดชอบ: ' + responsible + '\n' : '') +
                 '📅 วันที่: ' + actionDate + '\n' +
                 '🏷️ หมวด: บริการชุบกัลวาไนซ์\n' +
-                (itemsText ? '📦 รายการ:\n' + itemsText.slice(0, 900) + '\n' : '📦 (อ่านรายการจากไฟล์ไม่ได้ — โปรดตรวจสอบ)\n') +
+                (bodyText ? bodyText.slice(0, 1200) + '\n' : '📦 (อ่านข้อมูลจากไฟล์ไม่ได้ — โปรดตรวจสอบ)\n') +
+                (srcFrom ? '🔎 ที่มา: ' + (srcFrom.startsWith('Odoo') ? 'Odoo (PR ' + prNum + ')' + (srcFrom === 'Odoo?' ? ' ⚠️ต้องยืนยันบริษัท' : '') : 'อ่านจากไฟล์') + '\n' : '') +
                 (fileAttach ? '📎 แนบไฟล์แล้ว' : '')
               );
             } catch (e) {}
