@@ -2,7 +2,7 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
-import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooPurchaseRequestByName } from './odoo.js';
+import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooPurchaseRequestByName, odooDocForFile } from './odoo.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -15,6 +15,8 @@ const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'; // อ่
 const GROQ_TEXT_MODEL   = 'llama-3.3-70b-versatile';                   // จัดข้อความ (จาก PDF)
 // กลุ่มไลน์ "แจ้งชุบกัลวาไนซ์" — flow พิเศษ: reply ไฟล์ + @บอท ส่ง/รับ ผู้รับผิดชอบ วันที่
 const GALVANIZE_LINE_GROUP = 'C0479aa47a7c02d6c7c0dd6346142391b';
+// กลุ่มไลน์ "SET สั่งของ/ส่งของ" — flow: reply ไฟล์ + @บอท ส่ง/รับ วันที่ หมวดหมู่ ผู้รับผิดชอบ
+const FA_LINE_GROUP = 'C9adc5d856cc04bdefa31523f8c98a520';
 
 const db = (SUPABASE_URL && SERVICE_KEY)
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
@@ -599,11 +601,13 @@ async function compressIfImage(buffer, contentType) {
 
 // ── อ่าน "รายการสินค้า" จากไฟล์ใบงาน (รูป → Groq vision | PDF → ดึงข้อความ+Groq) ──
 const EXTRACT_PROMPT =
-  'นี่คือเอกสารใบขอซื้อ/ใบสั่งงานชุบกัลวาไนซ์ ช่วยดึงข้อมูลต่อไปนี้ (คัดลอกตามที่เห็นเป๊ะๆ ห้ามเดา/ห้ามแปล/ห้ามสรุป):\n' +
+  'นี่คือเอกสารของบริษัท (อาจเป็นใบเสนอราคา SO / ใบสั่งซื้อ PO / ใบขอซื้อ PR / ใบส่งสินค้า/ใบตัดเหล็ก/ใบงาน) ' +
+  'ช่วยดึงข้อมูล (คัดลอกตามที่เห็นเป๊ะๆ ห้ามเดา/ห้ามแปล/ห้ามสรุป):\n' +
+  'บรรทัดแรกขึ้นต้นว่า "DOCREF: " ตามด้วยเลขที่เอกสาร (เช่น SO2607003, PO..., PR...) ถ้าไม่มีเลข ให้ใส่ชื่องาน/เลขที่/โครงการ ที่อยู่บนหัวเอกสาร\n' +
   '- ชื่อบริษัทที่ออกเอกสาร\n' +
-  '- เลขที่เอกสาร (เช่น PR01986) และวันที่เอกสาร\n' +
-  '- รายการสินค้าทั้งหมดในตาราง คอลัมน์ DESCRIPTION แบบคำต่อคำ พร้อมจำนวน+หน่วย (รูปแบบ "<ลำดับ>. <รายละเอียด> — จำนวน <qty> <หน่วย>")\n' +
-  '- หมายเหตุ/ใช้ในงาน ท้ายเอกสาร\n' +
+  '- วันที่เอกสาร\n' +
+  '- รายการสินค้าทั้งหมดในตาราง คอลัมน์รายละเอียด/ชื่อสินค้า แบบคำต่อคำ พร้อมจำนวน+หน่วย (รูปแบบ "<ลำดับ>. <รายละเอียด> — จำนวน <qty> <หน่วย>")\n' +
+  '- หมายเหตุ/ใช้ในงาน/เอกสารอ้างอิง (ถ้ามี)\n' +
   'ตอบเป็นข้อความสั้นๆ ไม่ต้องมีคำอธิบายหรือคำนำอื่น';
 
 async function readItemsFromFileAI(buffer, contentType, fileName) {
@@ -656,6 +660,77 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
     }
   } catch (e) { console.error('readItemsFromFileAI:', e.message); }
   return '';
+}
+
+// ── บันทึกงานจากไฟล์ที่ reply (อ่านไฟล์ด้วย AI + hybrid PR→Odoo) — ใช้ร่วมหลายกลุ่ม ──
+//   เงียบในไลน์เสมอ แจ้งเฉพาะกลุ่มใหม่ (Telegram) | ตั้ง line_last_task ให้ +1/+2 แนบไฟล์เพิ่มได้
+async function recordTaskFromReplyFile({ quotedId, qType, fileName, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
+  let itemsText = '', fileAttach = null;
+  try {
+    const raw = await getLineContent(quotedId);
+    itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, fileName || '');
+    const { buffer: cbuf, contentType: cct } = await compressIfImage(raw.buffer, raw.contentType);
+    const safeName = fileName || (qType === 'image' ? 'image.jpg' : 'file.bin');
+    const ext = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : (/pdf/i.test(cct) ? '.pdf' : '.jpg');
+    const storagePath = 'linefile_' + Date.now() + ext;
+    const { error: upErr } = await db.storage.from('attachments').upload(storagePath, cbuf, { contentType: cct, upsert: true });
+    if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
+  } catch (e) { console.error('recordTaskFromReplyFile read:', e.message); }
+
+  // HYBRID: หาเอกสาร (SO/PO/PR/งาน) จากที่ AI อ่าน → ดึงข้อมูลจริงจาก Odoo (แม่นสุด)
+  //   ไม่เจอ → ใช้ที่ AI อ่านจากไฟล์ | เลือกบริษัทให้ตรง (เลขเอกสารซ้ำข้ามบริษัทได้ — มี 4 บริษัท)
+  const fmtQ = (n) => { const v = Number(n) || 0; return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, ''); };
+  let bodyText = itemsText, srcFrom = itemsText ? 'AI' : '', srcRef = '';
+  let doc = null;
+  try { doc = await odooDocForFile(itemsText, itemsText); } catch (e) { console.error('docForFile:', e.message); }
+  if (doc && doc.lines.length) {
+    const lineStr = doc.lines.map((l, i) => (i + 1) + '. ' + l.desc + (l.qty ? ' — จำนวน ' + fmtQ(l.qty) + (l.uom ? ' ' + l.uom : '') : '')).join('\n');
+    bodyText =
+      (doc.ambiguous ? '⚠️ เลขเอกสารนี้ซ้ำ ' + doc.matchCount + ' บริษัท — ระบุบริษัทอัตโนมัติไม่ได้ โปรดตรวจสอบ\n' : '') +
+      (doc.company ? '🏢 บริษัท: ' + doc.company + '\n' : '') +
+      '📄 ' + doc.kind + ': ' + doc.docName + (doc.date ? '  •  วันที่ ' + doc.date : '') + '\n' +
+      (doc.partner ? '👤 ' + (doc.partnerLabel || 'คู่ค้า') + ': ' + doc.partner + '\n' : '') +
+      (doc.purpose ? '🎯 วัตถุประสงค์: ' + doc.purpose + '\n' : '') +
+      (doc.note ? '📝 อ้างอิง: ' + doc.note + '\n' : '') +
+      '📦 รายการ:\n' + lineStr;
+    srcFrom = doc.ambiguous ? 'Odoo?' : 'Odoo';
+    srcRef = doc.kind + ' ' + doc.docName;
+  }
+  // ไม่เจอใน Odoo → ใช้ที่ AI อ่านจากไฟล์ (เลขที่/งาน + วันที่ + รายการ ตามที่วงในเอกสาร)
+  if (srcFrom === 'AI' && bodyText) {
+    bodyText = bodyText.replace(/DOCREF\s*[:：]\s*/i, '📄 เลขที่/งาน: ');
+  }
+
+  const head = headVerb + (responsible ? ' — ' + responsible : '');
+  const taskName = (bodyText ? (head + '\n' + bodyText) : head).slice(0, 2000);
+  const id = rid();
+  const { error } = await db.from('tasks').insert({
+    id, task: taskName, duration, action_date: actionDate,
+    sales_name: responsible, task_status: 'To Do', notification: 'แจ้งล่วงหน้า',
+    categories: categories || '', note: '', doing: false, done: false,
+    attachments: fileAttach ? [fileAttach] : []
+  });
+  if (error) {
+    try { await notifyMainChat('⚠️ <b>บันทึกงาน (จากไลน์) ไม่สำเร็จ</b>\n' + error.message); } catch (e) {}
+    return { ok: false };
+  }
+  try {
+    await db.from('line_last_task').upsert({ group_id: pushTarget, task_id: id, task_name: taskName.slice(0, 100), created_at: new Date().toISOString() }, { onConflict: 'group_id' });
+    await db.from('line_messages').update({ task_id: id }).eq('message_id', quotedId);
+  } catch (e) {}
+  try {
+    await notifyMainChat(
+      '🆕 <b>' + notifyTitle + '</b>\n' +
+      '📋 ' + (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน') + '\n' +
+      (categories ? '🏷️ หมวด: ' + categories + '\n' : '') +
+      (responsible ? '👤 ผู้รับผิดชอบ: ' + responsible + '\n' : '') +
+      '📅 วันที่: ' + actionDate + '\n' +
+      (bodyText ? bodyText.slice(0, 1200) + '\n' : '📦 (อ่านข้อมูลจากไฟล์ไม่ได้ — โปรดตรวจสอบ)\n') +
+      (srcFrom ? '🔎 ที่มา: ' + (srcFrom.startsWith('Odoo') ? 'Odoo (' + srcRef + ')' + (srcFrom === 'Odoo?' ? ' ⚠️ต้องยืนยันบริษัท' : '') : 'อ่านจากไฟล์') + '\n' : '') +
+      (fileAttach ? '📎 แนบไฟล์แล้ว' : '')
+    );
+  } catch (e) {}
+  return { ok: true, taskId: id };
 }
 
 // ── แนบไฟล์เข้างานล่าสุด (ภายใน 5 นาที) ──────────────────────────────────────
@@ -1453,6 +1528,52 @@ export default async function handler(req, res) {
             );
           } catch (e) {}
           continue;
+        }
+      }
+
+      // ══ กลุ่ม SET สั่งของ/ส่งของ: reply "ไฟล์" + @บอท "ส่ง|รับ <วันที่> <หมวดหมู่> <ผู้รับผิดชอบ>" ══
+      //    ต่างจากกลุ่มชุบตรงที่ "ระบุหมวดหมู่เองในข้อความ" | รายการ = ให้ AI อ่านจากไฟล์
+      //    (คำสั่งเดิม reply ข้อความ + @บอท ยังใช้ได้ปกติ สำหรับกรณีฉุกเฉิน)
+      if (botMentioned && quotedId && String(pushTarget) === FA_LINE_GROUP && db) {
+        let fClean = tt;
+        const fm = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a, b) => b.index - a.index);
+        for (const m of fm) fClean = fClean.slice(0, m.index) + fClean.slice(m.index + m.length);
+        fClean = fClean.replace(/@[^\s@]+/g, ' ').replace(/\bBot\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const fMatch = fClean.match(/^(ส่ง|รับ)(?=\s|$)\s*([\s\S]*)$/);
+        if (fMatch) {
+          const duration = fMatch[1];
+          let rest = (fMatch[2] || '').trim();
+          // วันที่ (รองรับ วันนี้/พรุ่งนี้/16/6/16มิ.ย.) → คิดวันแล้วตัดออกจากข้อความ
+          const actionDate = smartParseDate(rest) || todayStr();
+          rest = rest
+            .replace(/วันนี้|พรุ่งนี้|มะรืน/g, ' ')
+            .replace(/\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/g, ' ')
+            .replace(/\d{1,2}\s*(?:มกราคม|ม\.ค|กุมภาพันธ์|ก\.พ|มีนาคม|มี\.ค|เมษายน|เม\.ย|พฤษภาคม|พ\.ค|มิถุนายน|มิ\.ย|กรกฎาคม|ก\.ค|สิงหาคม|ส\.ค|กันยายน|ก\.ย|ตุลาคม|ต\.ค|พฤศจิกายน|พ\.ย|ธันวาคม|ธ\.ค)\.?\s*\d{0,4}/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+          // หมวดหมู่ = คำแรกที่ตรงกับ CAT_ALIAS (อยู่ตรงไหนก็ได้) | ที่เหลือ = ผู้รับผิดชอบ
+          const words = rest.split(/\s+/).filter(Boolean);
+          let categories = '', catIdx = -1;
+          for (let i = 0; i < words.length; i++) {
+            const key = words[i].toLowerCase();
+            if (CAT_ALIAS[key]) { categories = CAT_ALIAS[key]; catIdx = i; break; }
+          }
+          const responsible = words.filter((_, i) => i !== catIdx).join(' ').trim();
+
+          // เฉพาะเมื่อ reply "ไฟล์/รูป" เท่านั้น → อ่านไฟล์ลงงาน
+          //   ถ้า reply "ข้อความ" (ไม่ใช่ไฟล์) → ตกไปใช้ flow เดิมด้านล่าง (ฉุกเฉิน)
+          const { data: qrowF } = await db.from('line_messages')
+            .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
+          const qTypeF = qrowF?.msg_type || '';
+          if (qTypeF === 'image' || qTypeF === 'file') {
+            await recordTaskFromReplyFile({
+              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '',
+              duration, actionDate, categories, responsible, pushTarget,
+              headVerb: (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน'),
+              notifyTitle: 'งาน' + (duration === 'ส่ง' ? 'ส่ง' : 'รับ') + ' (จากไลน์)'
+            });
+            continue;
+          }
         }
       }
 
