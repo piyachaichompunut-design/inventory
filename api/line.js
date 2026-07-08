@@ -9,6 +9,13 @@ const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// ── Groq AI (อ่านรายการในไฟล์ใบงานชุบ) ───────────────────────────────────────
+const GROQ_KEY          = process.env.GROQ_API_KEY || '';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'; // อ่านรูปได้
+const GROQ_TEXT_MODEL   = 'llama-3.3-70b-versatile';                   // จัดข้อความ (จาก PDF)
+// กลุ่มไลน์ "แจ้งชุบกัลวาไนซ์" — flow พิเศษ: reply ไฟล์ + @บอท ส่ง/รับ ผู้รับผิดชอบ วันที่
+const GALVANIZE_LINE_GROUP = 'C0479aa47a7c02d6c7c0dd6346142391b';
+
 const db = (SUPABASE_URL && SERVICE_KEY)
   ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
   : null;
@@ -588,6 +595,65 @@ async function compressIfImage(buffer, contentType) {
     // sharp ใช้ไม่ได้ → เก็บรูปเต็มแทน (ไม่พัง)
     return { buffer, contentType };
   }
+}
+
+// ── อ่าน "รายการสินค้า" จากไฟล์ใบงาน (รูป → Groq vision | PDF → ดึงข้อความ+Groq) ──
+const EXTRACT_PROMPT =
+  'นี่คือเอกสารใบขอซื้อ/ใบสั่งงานชุบกัลวาไนซ์ ช่วยดึง "รายการสินค้า" ทั้งหมดออกมา ' +
+  'ตอบเป็นบรรทัดสั้นๆ บรรทัดละ 1 รายการ รูปแบบ: "<ลำดับ>. <รายละเอียดสินค้า> — จำนวน <qty> <หน่วย>" ' +
+  'เอาเฉพาะรายการสินค้าจริงในตาราง ไม่ต้องใส่หัวตาราง ไม่ต้องมีคำอธิบายหรือคำนำอื่น ' +
+  'ถ้าบางรายการไม่มีจำนวนก็ข้ามส่วนจำนวนไป ตอบเป็นภาษาไทย';
+
+async function readItemsFromFileAI(buffer, contentType, fileName) {
+  if (!GROQ_KEY) return '';
+  const isImage = /^image\//i.test(contentType || '') || /\.(jpe?g|png|webp|gif)$/i.test(fileName || '');
+  const isPdf   = /pdf/i.test(contentType || '') || /\.pdf$/i.test(fileName || '');
+  try {
+    if (isImage) {
+      // ย่อรูปให้เล็กพอส่ง base64 (Groq จำกัดขนาด)
+      const { buffer: small } = await compressIfImage(buffer, /^image\//.test(contentType || '') ? contentType : 'image/jpeg');
+      const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({
+          model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 1200,
+          messages: [{ role: 'user', content: [
+            { type: 'text', text: EXTRACT_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]}]
+        })
+      });
+      const j = await res.json();
+      if (j.error) { console.error('groq vision:', j.error.message); return ''; }
+      return String(j.choices?.[0]?.message?.content || '').trim();
+    }
+    if (isPdf) {
+      // ดึงข้อความจาก PDF (ใบงานจาก Odoo มี text layer) แล้วให้ Groq จัดเป็นรายการ
+      let text = '';
+      try {
+        const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
+        const data = await pdfParse(buffer);
+        text = String(data.text || '').replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
+      } catch (e) { console.error('pdf-parse:', e.message); }
+      if (!text) return '';
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({
+          model: GROQ_TEXT_MODEL, temperature: 0, max_tokens: 1200,
+          messages: [
+            { role: 'system', content: EXTRACT_PROMPT },
+            { role: 'user', content: 'ข้อความที่ดึงจากไฟล์:\n' + text.slice(0, 6000) }
+          ]
+        })
+      });
+      const j = await res.json();
+      if (j.error) { console.error('groq text:', j.error.message); return text.slice(0, 1200); }
+      return String(j.choices?.[0]?.message?.content || text.slice(0, 1200)).trim();
+    }
+  } catch (e) { console.error('readItemsFromFileAI:', e.message); }
+  return '';
 }
 
 // ── แนบไฟล์เข้างานล่าสุด (ภายใน 5 นาที) ──────────────────────────────────────
@@ -1384,6 +1450,96 @@ export default async function handler(req, res) {
               '📅 เปลี่ยนเป็น ' + dateDisplay + warnGuess
             );
           } catch (e) {}
+          continue;
+        }
+      }
+
+      // ══ กลุ่มชุบกัลวาไนซ์: reply "ไฟล์/รูป" ใบงาน + @บอท "ส่ง|รับ <ผู้รับผิดชอบ> <วันที่>" ══
+      //    หมวด = บริการชุบกัลวาไนซ์ เสมอ | รายการ = ให้ AI อ่านจากไฟล์มาลงให้
+      if (botMentioned && quotedId && String(pushTarget) === GALVANIZE_LINE_GROUP && db) {
+        // ตัด @mention บอทออก
+        let gClean = tt;
+        const gm = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a, b) => b.index - a.index);
+        for (const m of gm) gClean = gClean.slice(0, m.index) + gClean.slice(m.index + m.length);
+        gClean = gClean.replace(/@[^\s@]+/g, ' ').replace(/\bBot\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const gMatch = gClean.match(/^(ส่ง|รับ)(?=\s|$)\s*([\s\S]*)$/);
+        if (gMatch) {
+          const duration = gMatch[1];
+          let rest = (gMatch[2] || '').trim();
+          // วันที่ = อยู่ตรงไหนก็ได้ (เช่น "รับ 16/6 ไบโอ" หรือ "รับ ไบโอ 16/6") — ที่เหลือ = ผู้รับผิดชอบ
+          let actionDate = todayStr();
+          let dm = rest.match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+          // LINE บางทีแปลงวันที่ (16/6) เป็น URL entity → ดึงจาก entities สำรอง
+          if (!dm) {
+            const ents = event.message?.entities || [];
+            for (const ent of ents) {
+              if (ent.type === 'url') {
+                const um = tt.slice(ent.offset, ent.offset + ent.length).match(/(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/);
+                if (um) { dm = um; break; }
+              }
+            }
+          }
+          if (dm) {
+            const pd = parseDate(dm[1]);
+            if (pd) {
+              actionDate = pd;
+              // ตัดวันที่ออกจากข้อความ เหลือแค่ชื่อผู้รับผิดชอบ
+              rest = rest.replace(dm[1], ' ').replace(/\s+/g, ' ').trim();
+            }
+          }
+          const responsible = rest.trim();
+
+          // ต้องเป็นการ reply "ไฟล์/รูป" — ถ้าไม่ใช่ ให้เงียบ (ไม่ตอบในกลุ่ม)
+          const { data: qrow } = await db.from('line_messages')
+            .select('msg_type, file_name').eq('message_id', quotedId).maybeSingle();
+          const qType = qrow?.msg_type || '';
+          if (qType !== 'image' && qType !== 'file') { continue; }
+
+          // โหลดไฟล์ → อ่านรายการด้วย AI + แนบไฟล์เข้างาน
+          let itemsText = '', fileAttach = null;
+          try {
+            const raw = await getLineContent(quotedId);
+            itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, qrow?.file_name || '');
+            const { buffer: cbuf, contentType: cct } = await compressIfImage(raw.buffer, raw.contentType);
+            const safeName = qrow?.file_name || (qType === 'image' ? 'image.jpg' : 'file.bin');
+            const ext = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : (/pdf/i.test(cct) ? '.pdf' : '.jpg');
+            const storagePath = 'galv_' + Date.now() + ext;
+            const { error: upErr } = await db.storage.from('attachments').upload(storagePath, cbuf, { contentType: cct, upsert: true });
+            if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
+          } catch (e) { console.error('galv read/attach:', e.message); }
+
+          // ชื่องาน = หัว + รายการที่ AI อ่านได้จากไฟล์
+          const head = (duration === 'ส่ง' ? 'ส่งชุบกัลวาไนซ์' : 'รับงานชุบกัลวาไนซ์') + (responsible ? ' — ' + responsible : '');
+          const taskName = (itemsText ? (head + '\n' + itemsText) : head).slice(0, 1500);
+
+          const id = rid();
+          const { error } = await db.from('tasks').insert({
+            id, task: taskName, duration, action_date: actionDate,
+            sales_name: responsible, task_status: 'To Do', notification: 'แจ้งล่วงหน้า',
+            categories: 'บริการชุบกัลวาไนซ์', note: '', doing: false, done: false,
+            attachments: fileAttach ? [fileAttach] : []
+          });
+          // บอทเงียบในกลุ่มชุบเสมอ — แจ้งเฉพาะกลุ่มใหม่ (Telegram) เท่านั้น ไม่ตอบในไลน์
+          if (error) {
+            try { await notifyMainChat('⚠️ <b>บันทึกงานชุบ (จากไลน์) ไม่สำเร็จ</b>\n' + error.message); } catch (e) {}
+          } else {
+            try {
+              await db.from('line_last_task').upsert({ group_id: pushTarget, task_id: id, task_name: taskName.slice(0, 100), created_at: new Date().toISOString() }, { onConflict: 'group_id' });
+              await db.from('line_messages').update({ task_id: id }).eq('message_id', quotedId);
+            } catch (e) {}
+            try {
+              await notifyMainChat(
+                '🆕 <b>งานชุบกัลวาไนซ์ (จากไลน์)</b>\n' +
+                '📋 ' + (duration === 'ส่ง' ? 'ส่งชุบ' : 'รับชุบ') + '\n' +
+                (responsible ? '👤 ผู้รับผิดชอบ: ' + responsible + '\n' : '') +
+                '📅 วันที่: ' + actionDate + '\n' +
+                '🏷️ หมวด: บริการชุบกัลวาไนซ์\n' +
+                (itemsText ? '📦 รายการ:\n' + itemsText.slice(0, 900) + '\n' : '📦 (อ่านรายการจากไฟล์ไม่ได้ — โปรดตรวจสอบ)\n') +
+                (fileAttach ? '📎 แนบไฟล์แล้ว' : '')
+              );
+            } catch (e) {}
+          }
           continue;
         }
       }
