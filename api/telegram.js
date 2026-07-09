@@ -1670,8 +1670,9 @@ export default async function handler(req, res) {
         if (repDocType !== 'picking') {
           try {
             const { odooFindDoc } = await import('./odoo.js');
-            const { keyword: repKwClean, company: repCompany } = parseCompany(repKw);
-            const doc = await odooFindDoc(repDocType, repKwClean, null, repCompany.id);
+            const { keyword: repKwClean, company: repCompany, explicit: repCoExplicit } = parseCompany(repKw);
+            // ไม่ได้ระบุบริษัท (md/cg/sep/akn) → ค้นทุกบริษัท (เลขเอกสารอยู่บริษัทไหนก็เจอ — มี 4 บริษัท)
+            const doc = await odooFindDoc(repDocType, repKwClean, null, repCoExplicit ? repCompany.id : null);
             if (!doc) {
               await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKwClean + '" ครับ');
               res.status(200).json({ ok: true }); return;
