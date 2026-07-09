@@ -1468,7 +1468,8 @@ export default async function handler(req, res) {
         ? new RegExp('@' + BOT_USERNAME + '\\b', 'i').test(wMsgText)
         : (msg.entities || msg.caption_entities || []).some(e => e.type === 'mention');
       const wBody = wMsgText.replace(new RegExp('@' + (BOT_USERNAME || '[\\w]+') + '\\b', 'gi'), '').trim();
-      if (wMentioned && /เรียบร้อย|เสร็จ|จัดเสร็จ|จัดให้แล้ว/.test(wBody) && db) {
+      // ไม่ต้องแท็กบอทก็ได้ — แค่ reply ที่ใบเบิก + พิมพ์ "เรียบร้อย" ก็พอ (แท็กบอทมักเลือกไม่ได้ในแคปชั่นรูป)
+      if (/เรียบร้อย|เสร็จ|จัดเสร็จ|จัดให้แล้ว/.test(wBody) && db) {
         try {
           const replyId = msg.reply_to_message.message_id;
           const { data: rows } = await db.from('delivery_views')
@@ -1509,13 +1510,16 @@ export default async function handler(req, res) {
             }
             await sendTelegramReply(chatId, '✅ ส่งแจ้ง "เรียบร้อยครับ" กลับกลุ่มเบิกของแล้วครับ' + (sentPhoto ? ' 📷 (แนบรูปให้แล้ว)' : ''));
             await db.from('delivery_views').delete().eq('id', rec.id);
-          } else {
+            res.status(200).json({ ok: true }); return;
+          } else if (wMentioned) {
+            // แท็กบอทแต่หา reply ไม่เจอ → เตือน | ไม่ได้แท็ก = reply "เรียบร้อย" ทั่วไป → ปล่อยผ่านเงียบ
             await sendTelegramReply(chatId, '⚠️ ไม่พบใบเบิกที่ผูกกับข้อความนี้ครับ (อาจตอบไปแล้ว หรือ reply ผิดข้อความ)');
+            res.status(200).json({ ok: true }); return;
           }
         } catch (e) {
-          await sendTelegramReply(chatId, '⚠️ ตอบกลับกลุ่มเบิกของไม่สำเร็จ: ' + e.message);
+          console.error('withdraw reply error:', e.message);
+          if (wMentioned) { await sendTelegramReply(chatId, '⚠️ ตอบกลับกลุ่มเบิกของไม่สำเร็จ: ' + e.message); res.status(200).json({ ok: true }); return; }
         }
-        res.status(200).json({ ok: true }); return;
       }
     }
 
