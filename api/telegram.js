@@ -11,6 +11,14 @@ const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 
+// ป้ายบริษัทสั้นๆ (มี 4 บริษัท — ชื่องาน/เลขซ้ำข้ามบริษัทได้ ต้องโชว์ให้เลือกถูกใบ)
+const CO_SHORT = { 1: 'อาคเนย์', 2: 'เมิร์ค', 4: 'ซิลิกัล', 5: 'ศรีอาคเนย์' };
+function coLabel(cid) {
+  const id = Array.isArray(cid) ? cid[0] : cid;
+  if (CO_SHORT[id]) return CO_SHORT[id];
+  return Array.isArray(cid) ? String(cid[1]).replace(/บริษัท|จำกัด|\(?สำนักงานใหญ่\)?|\s/g, '').slice(0, 12) : '';
+}
+
 const SUPABASE_URL  = process.env.SUPABASE_URL;
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const db = (SUPABASE_URL && SERVICE_KEY)
@@ -1779,7 +1787,7 @@ export default async function handler(req, res) {
                 updated_at: new Date().toISOString()
               }, { onConflict: 'chat_id' });
             }
-            const listTxt = matchedPicks.map((p,i) => (i+1) + '. ' + p.name).join('\n');
+            const listTxt = matchedPicks.map((p,i) => (i+1) + '. ' + p.name + (p.company_id ? '  [' + coLabel(p.company_id) + ']' : '')).join('\n');
             await sendTelegramReply(chatId,
               '✅ พบ ' + matchedPicks.length + ' ใบครับ!\n' + listTxt +
               (missing.length ? '\n⚠️ ไม่พบเลข /' + missing.join(', /') : '') +
@@ -1809,11 +1817,11 @@ export default async function handler(req, res) {
 
           // เจอหลายใบ → ถามให้เลือก (ตอบเลข) — เก็บ target ไว้
           if (repPicks.length > 1) {
-            const opts = repPicks.slice(0, 8).map((p, i) => (i+1) + '. ' + (p.name || '-')).join('\n');
+            const opts = repPicks.slice(0, 15).map((p, i) => (i+1) + '. ' + (p.name || '-') + (p.company_id ? '  [' + coLabel(p.company_id) + ']' : '')).join('\n');
             if (db) {
               await db.from('tg_report_select').upsert({
                 chat_id: String(chatId),
-                picks: repPicks.slice(0, 8),
+                picks: repPicks.slice(0, 15),
                 target: repTarget,
                 keyword: repKw,
                 created_at: new Date().toISOString()
@@ -1983,12 +1991,12 @@ export default async function handler(req, res) {
               res.status(200).json({ ok: true }); return;
             }
             if (picks.length > 1) {
-              const opts = picks.slice(0,8).map((p,i) =>
-                (i+1) + '. ' + (p.name || '-') + (p.scheduled_date ? ' (' + String(p.scheduled_date).slice(0,10) + ')' : '')
+              const opts = picks.slice(0,15).map((p,i) =>
+                (i+1) + '. ' + (p.name || '-') + (p.scheduled_date ? ' (' + String(p.scheduled_date).slice(0,10) + ')' : '') + (p.company_id ? '  [' + coLabel(p.company_id) + ']' : '')
               ).join('\n');
               await db.from('tg_compare_select').upsert({
                 chat_id: String(chatId),
-                picks: picks.slice(0,8),
+                picks: picks.slice(0,15),
                 doc_ref: refOther,
                 company_id: cmp.id,
                 created_at: new Date().toISOString()
@@ -2338,7 +2346,7 @@ export default async function handler(req, res) {
             extra_names: extraPicks.map(p => p.name),
             updated_at: new Date().toISOString()
           }, { onConflict: 'chat_id' });
-          const chosenList = chosenPicks.map((p,i) => (i+1) + '. ' + p.name).join('\n');
+          const chosenList = chosenPicks.map((p,i) => (i+1) + '. ' + p.name + (p.company_id ? '  [' + coLabel(p.company_id) + ']' : '')).join('\n');
           await sendTelegramReply(chatId,
             '✅ เลือก ' + chosenPicks.length + ' ใบแล้วครับ!\n' + chosenList +
             '\n\n📷 ส่งรูปเข้ากลุ่มได้เลย (รูปจะลงที่ใบแรก: ' + onePick.name + ')\n' +
