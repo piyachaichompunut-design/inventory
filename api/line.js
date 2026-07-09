@@ -412,6 +412,8 @@ const CAT_ALIAS = {
   'so': 'ใบสั่งซื้อ( so )',
   'ผลิต': 'วัตถุดิบเพื่อการผลิต',
   'สิ้นเปลือง': 'วัตถุดิบสิ้นเปลือง',
+  'จราจร': 'จราจร',
+  'ดีเส้น': 'ดีเส้น',
   'อื่นๆ': 'อื่นๆ'
 };
 
@@ -560,7 +562,7 @@ async function parseTaskSmart(text, dbClient, typedText) {
   // ถ้าตัดจนว่าง (ไม่ได้ reply, พิมพ์อย่างเดียว) ใช้ typedBody เป็นชื่องาน
   const words = (taskBody || typedBody || '').split(' ');
   let task = words.join(' ').trim();
-  if (task.length > 200) task = task.slice(0, 200);
+  if (task.length > 1500) task = task.slice(0, 1500); // กันข้อความยาวเกิน แต่ให้ครบ (เดิม 200 สั้นไป ตัดกลางคัน)
   if (!task) return null;
 
   return { task, duration, actionDate, salesName, categories };
