@@ -50,9 +50,10 @@ export function parseCompany(text) {
   const last = (parts[parts.length - 1] || '').toLowerCase();
   if (COMPANY_ALIAS[last]) {
     parts.pop(); // เอาตัวย่อออก
-    return { keyword: parts.join(' ').trim(), company: COMPANY_ALIAS[last] };
+    return { keyword: parts.join(' ').trim(), company: COMPANY_ALIAS[last], explicit: true };
   }
-  return { keyword: String(text).trim(), company: DEFAULT_COMPANY };
+  // ไม่ได้ระบุบริษัท → คืน default (id 1) แต่ตั้ง explicit=false ให้ผู้เรียกเลือกได้ว่าจะค้นทุกบริษัท
+  return { keyword: String(text).trim(), company: DEFAULT_COMPANY, explicit: false };
 }
 
 // ── ตรวจว่าตั้งค่าครบหรือยัง ─────────────────────────────────────────────────
