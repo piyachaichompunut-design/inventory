@@ -650,7 +650,11 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
         (p.recvStatus && p.recvStatus.vendor
           ? '   🏢 <b>' + (p.recvStatus.type !== 'so' ? 'ผู้ขาย' : 'ลูกค้า') + ': ' + tgEsc(p.recvStatus.vendor) + '</b>\n'
           : (p.partner ? '   👤 <b>ผู้รับ: ' + tgEsc(p.partner) + '</b>\n' : '')) +
-        '   ' + p.lines.length + ' รายการสินค้า' +
+        '   📦 <b>รายการสินค้า (' + p.lines.length + '):</b>\n' +
+        (p.lines.length
+          ? p.lines.slice(0, 8).map((l, i) => '     ' + (i+1) + '. ' + String(l.name || '').replace(/-{2,}/g, ' ').trim().slice(0, 60) + ' — ' + fmtQty(l.qty) + (l.uom ? ' ' + l.uom : '')).join('\n') +
+            (p.lines.length > 8 ? '\n     ...และอีก ' + (p.lines.length - 8) + ' รายการ' : '')
+          : '     (ไม่มีรายการ)') +
         buildReceiveStatusBlock(p.recvStatus)
       ).join('\n') + '\n\n' +
       '📎 ดูรายละเอียดพร้อมรูป:\n' + webLink + '\n\nเรียบร้อยครับ ✅';
