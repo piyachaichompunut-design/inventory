@@ -1561,9 +1561,14 @@ export default async function handler(req, res) {
         let fClean = tt;
         const fm = [...mentionees].filter(m => m.isSelf === true && typeof m.index === 'number').sort((a, b) => b.index - a.index);
         for (const m of fm) fClean = fClean.slice(0, m.index) + fClean.slice(m.index + m.length);
-        fClean = fClean.replace(/@[^\s@]+/g, ' ').replace(/\bBot\b/g, ' ').replace(/\s+/g, ' ').trim();
+        fClean = fClean.replace(/@[^\s@]+/g, ' ').replace(/\b(?:Odoo|Bot)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+        // เผื่อตัด mention แล้วยังมีเศษคำ (ชื่อบอท) ค้างหน้า "ส่ง/รับ" → ตัดทิ้งจนเจอ ส่ง/รับ
+        const _cut = fClean.search(/(ส่ง|รับ)(?=\s|$)/);
+        if (_cut > 0) fClean = fClean.slice(_cut).trim();
+        console.log('[SET-DEBUG] fClean=' + JSON.stringify(fClean));
 
         const fMatch = fClean.match(/^(ส่ง|รับ)(?=\s|$)\s*([\s\S]*)$/);
+        if (!fMatch) console.log('[SET-DEBUG] fMatch=NO (ไม่ขึ้นต้นด้วย ส่ง/รับ)');
         if (fMatch) {
           const duration = fMatch[1];
           let rest = (fMatch[2] || '').trim();
