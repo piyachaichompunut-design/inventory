@@ -1573,7 +1573,8 @@ export default async function handler(req, res) {
           const duration = fMatch[1];
           let rest = (fMatch[2] || '').trim();
           // วันที่ (รองรับ วันนี้/พรุ่งนี้/16/6/16มิ.ย.) → คิดวันแล้วตัดออกจากข้อความ
-          const actionDate = smartParseDate(rest) || todayStr();
+          //   ไม่มีวันในคำสั่ง → ดึงจากข้อความที่ reply (เช่นต้นทางบอก "พรุ่งนี้ 14/7") ไม่มีค่อยเป็นวันนี้
+          const actionDate = smartParseDate(rest) || smartParseDate(quotedText || '') || todayStr();
           rest = rest
             .replace(/วันนี้|พรุ่งนี้|มะรืน/g, ' ')
             .replace(/\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?/g, ' ')
