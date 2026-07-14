@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
 import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooPurchaseRequestByName, odooDocForFile } from './odoo.js';
+import { tableGroupsFromBuffer, beDisplay, guessCategory } from './table.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -679,21 +680,65 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
 
 // ── บันทึกงานจากไฟล์ที่ reply (อ่านไฟล์ด้วย AI + hybrid PR→Odoo) — ใช้ร่วมหลายกลุ่ม ──
 //   เงียบในไลน์เสมอ แจ้งเฉพาะกลุ่มใหม่ (Telegram) | ตั้ง line_last_task ให้ +1/+2 แนบไฟล์เพิ่มได้
+// สร้างงานหลายบรรทัดจากตาราง (แยกตาม PO+วันส่ง) — ใช้ในกลุ่ม SET (LINE)
+async function createLineTableTasks(groups, { duration, responsible, categories, fileAttach, pushTarget, quotedId, actionDate }) {
+  const created = []; let lastId = null;
+  const verb = duration === 'ส่ง' ? 'ส่ง' : 'รับเข้า';
+  for (const g of groups) {
+    const dateISO = g.dateISO || actionDate || todayStr();
+    const dateDisplay = g.dateISO ? beDisplay(g.dateISO) : (g.dateRaw || 'รออัพเดท');
+    const itemsStr = g.lines.map((l, i) => (i + 1) + '. ' + l.product + (l.qty ? ' — จำนวน ' + l.qty + (l.unit ? ' ' + l.unit : '') : '')).join('\n');
+    const head = (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน') + (responsible ? ' — ' + responsible : '');
+    const body = head + '\n📦 ' + verb + ' — PO ' + g.po + (g.supplier ? ' • ' + g.supplier : '') +
+      '\n📅 ' + (duration === 'ส่ง' ? 'ส่ง' : 'กำหนดส่ง') + ': ' + dateDisplay + '\n📦 รายการ:\n' + itemsStr;
+    const cat = categories || guessCategory(g.lines.map(l => l.product).join(' ')) || '';
+    const id = rid();
+    const { error } = await db.from('tasks').insert({
+      id, task: body.slice(0, 2000), duration, action_date: dateISO,
+      sales_name: responsible || '', task_status: 'To Do', notification: 'แจ้งล่วงหน้า',
+      categories: cat, note: g.dateISO ? '' : 'รออัพเดทวันส่ง', doing: false, done: false,
+      attachments: fileAttach ? [fileAttach] : []
+    });
+    if (!error) { created.push({ po: g.po, date: dateDisplay, count: g.lines.length }); lastId = id; }
+    else console.error('createLineTableTasks:', error.message);
+  }
+  if (lastId) {
+    try {
+      await db.from('line_last_task').upsert({ group_id: pushTarget, task_id: lastId, task_name: 'ตาราง ' + created.length + ' งาน', created_at: new Date().toISOString() }, { onConflict: 'group_id' });
+      await db.from('line_messages').update({ task_id: lastId }).eq('message_id', quotedId);
+    } catch (e) {}
+  }
+  return created;
+}
+
 async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, contextText, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
   console.log('[SET-DEBUG] recordTaskFromReplyFile START qType=' + qType + ' dur=' + duration + ' cat=' + categories);
   const isFile = (qType === 'image' || qType === 'file');
   let itemsText = '', fileAttach = null;
   if (isFile) {
-    // reply ที่ "ไฟล์" → อ่านไฟล์ด้วย AI + โหลดเก็บใน web (แนบเข้างาน)
+    // reply ที่ "ไฟล์" → โหลดเก็บใน web (แนบเข้างาน) + ลองอ่านเป็น "ตารางหลาย PO" ก่อน
     try {
       const raw = await getLineContent(quotedId);
-      itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, fileName || '');
       const { buffer: cbuf, contentType: cct } = await compressIfImage(raw.buffer, raw.contentType);
       const safeName = fileName || (qType === 'image' ? 'image.jpg' : 'file.bin');
       const ext = safeName.includes('.') ? safeName.slice(safeName.lastIndexOf('.')) : (/pdf/i.test(cct) ? '.pdf' : '.jpg');
       const storagePath = 'linefile_' + Date.now() + ext;
       const { error: upErr } = await db.storage.from('attachments').upload(storagePath, cbuf, { contentType: cct, upsert: true });
       if (!upErr) { const { data: pub } = db.storage.from('attachments').getPublicUrl(storagePath); fileAttach = { name: safeName, size: cbuf.length, fileId: storagePath, mimeType: cct, webViewLink: pub.publicUrl }; }
+      // ★ ตารางหลาย PO/หลายวันส่ง (≥2 กลุ่ม) → แยกลง web หลายบรรทัด แล้วจบ (ไม่ต้อง odooDocForFile)
+      try {
+        const groups = await tableGroupsFromBuffer(raw.buffer, raw.contentType, fileName || '', { groqKey: GROQ_KEY, visionModel: GROQ_VISION_MODEL, textModel: GROQ_TEXT_MODEL });
+        if (groups.length >= 2) {
+          const created = await createLineTableTasks(groups, { duration, responsible, categories, fileAttach, pushTarget, quotedId, actionDate });
+          console.log('[SET-DEBUG] table split → ' + created.length + ' งาน');
+          if (created.length) {
+            try { await notifyMainChat('🔔 <b>' + (notifyTitle || 'รับเข้าหลายรายการ') + '</b>\n' + created.map(c => '• PO ' + c.po + ' — ส่ง ' + c.date + ' — ' + c.count + ' รายการ').join('\n')); } catch (e) {}
+            return { ok: true, split: created.length };
+          }
+        }
+      } catch (e) { console.error('line table split:', e.message); }
+      // ไม่ใช่ตาราง → อ่านแบบเอกสารเดียวด้วย AI (DOCREF → Odoo)
+      itemsText = await readItemsFromFileAI(raw.buffer, raw.contentType, fileName || '');
     } catch (e) { console.error('recordTaskFromReplyFile read:', e.message); }
   } else {
     // reply ที่ "ข้อความ" (มีเลข SO/PO/PR) → ใช้ข้อความนั้นหาเอกสารจาก Odoo (ไม่มีไฟล์แนบ)
