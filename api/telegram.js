@@ -874,17 +874,9 @@ export default async function handler(req, res) {
         // ข้อความที่ "แก้ไข" (edited) → ใช้เฉพาะจับการเลื่อนวันงานเดิมข้างบน ไม่สร้างงานใหม่ซ้ำ
         if (isEdited) { res.status(200).json({ ok: true }); return; }
 
-        // (B) แจ้งส่งใหม่ — ต้องเป็นประโยคแจ้งส่ง + มีแท็กผู้รับแจ้ง (กันคุยเล่น)
-        if (!(isShip && hasMention)) {
-          res.status(200).json({ ok: true }); return; // ไม่เข้าเงื่อนไข → เงียบ
-        }
-
-        // เนื้อหางาน = ข้อความต้นทาง (มีเลข PO/รายการสินค้า) ถ้ามีรายละเอียด ไม่งั้นใช้ข้อความที่พิมพ์
-        const origHasDetail = origText && /(P[OR]\s?\d|จำนวน|รายการ|ท่อ|แพค|ขวด|กล่อง|ชุด|ออกซิเจน|คาร์บอน|EA|เมตร|เหล็ก)/i.test(origText);
-        const taskContent = origHasDetail ? combined : pText;
-
-        // ดึงไฟล์แนบ (รูป/เอกสาร) — จากข้อความนี้ก่อน ไม่มีค่อยดูข้อความต้นทาง
+        // ดึงไฟล์แนบ (รูป/เอกสาร) — คืน object รูปแบบเดียวกับที่หน้าเว็บอ่าน (webViewLink/fileId)
         const tgToken = process.env.TELEGRAM_BOT_TOKEN || '';
+        const msgHasFile = !!(msg.photo || msg.document);
         const fetchAttach = async (m) => {
           if (!m || !tgToken || !db) return null;
           try {
@@ -899,19 +891,85 @@ export default async function handler(req, res) {
             }
             if (!fileUrl) return null;
             const buffer = Buffer.from(await (await fetch(fileUrl)).arrayBuffer());
-            const ext = fileName ? fileName.split('.').pop() : 'jpg';
+            const mime = (m.document && m.document.mime_type) || (m.photo ? 'image/jpeg' : 'application/octet-stream');
+            const ext = fileName && fileName.includes('.') ? fileName.split('.').pop() : (m.photo ? 'jpg' : 'bin');
             const storageName = 'tg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) + '.' + ext;
-            const { error: upErr } = await db.storage.from('attachments').upload(storageName, buffer, { contentType: 'application/octet-stream', upsert: false });
+            const { error: upErr } = await db.storage.from('attachments').upload(storageName, buffer, { contentType: mime, upsert: false });
             if (upErr) return null;
             const { data: u } = db.storage.from('attachments').getPublicUrl(storageName);
-            return { name: fileName || storageName, wl: u?.publicUrl || '', source: 'telegram' };
+            const url = u?.publicUrl || '';
+            // ต้องมี webViewLink/fileId/mimeType/size ให้หน้าเว็บแสดงไฟล์ได้ (wl ไว้ให้ notifyMainChat)
+            return { name: fileName || storageName, size: buffer.length, fileId: storageName, mimeType: mime, webViewLink: url, wl: url, source: 'telegram' };
           } catch (e) { return null; }
         };
+
+        // (B) แจ้งส่งใหม่ — ต้องเป็นประโยคแจ้งส่ง + มีแท็กผู้รับแจ้ง (กันคุยเล่น)
+        if (!(isShip && hasMention)) {
+          // ฝ่ายจัดซื้อมักพิมพ์ "แจ้งส่ง" ก่อน แล้วส่ง "ไฟล์" เป็นข้อความถัดมา (คนละ message)
+          //   → ไฟล์ที่ตามมาเดี่ยวๆ ให้แนบเข้า "งานล่าสุด" ของกลุ่มนี้ (ภายใน 1 นาที) เงียบๆ
+          //   ปกติส่งพร้อมกัน แค่มาก่อน/หลังเท่านั้น → ใช้หน้าต่างสั้นๆ กันแนบผิดงาน
+          if (msgHasFile && db) {
+            try {
+              const { data: last } = await db.from('tg_last_task')
+                .select('task_id, task_name, created_at').eq('chat_id', String(msg.chat.id)).maybeSingle();
+              const ageMin = last?.created_at ? (Date.now() - new Date(last.created_at).getTime()) / 60000 : 999;
+              const att = await fetchAttach(msg);
+              if (last && last.task_id && ageMin <= 1 && att) {
+                // ไฟล์ "มาหลัง" ข้อความแจ้งส่ง (งานเพิ่งสร้าง ≤1 นาที) → แนบเข้างานนั้นเลย
+                const { data: taskRow } = await db.from('tasks').select('attachments').eq('id', last.task_id).maybeSingle();
+                const atts = Array.isArray(taskRow?.attachments) ? taskRow.attachments : [];
+                atts.push({ name: att.name, size: att.size, fileId: att.fileId, mimeType: att.mimeType, webViewLink: att.webViewLink, source: 'telegram' });
+                await db.from('tasks').update({ attachments: atts }).eq('id', last.task_id);
+              } else if (att) {
+                // ไฟล์ "มาก่อน" ข้อความแจ้งส่ง → พักไว้ (key :pf) ให้ข้อความที่ตามมาใน 1 นาทีหยิบไปแนบ
+                await db.from('tg_last_task').upsert({
+                  chat_id: String(msg.chat.id) + ':pf', task_id: att.fileId,
+                  task_name: (att.name || '').slice(0, 100), created_at: new Date().toISOString()
+                }, { onConflict: 'chat_id' });
+              }
+            } catch (e) { console.error('purchase follow-file:', e.message); }
+          }
+          res.status(200).json({ ok: true }); return; // เงียบเสมอในกลุ่มสั่งของ
+        }
+
+        // เนื้อหางาน = ข้อความต้นทาง (มีเลข PO/รายการสินค้า) ถ้ามีรายละเอียด ไม่งั้นใช้ข้อความที่พิมพ์
+        const origHasDetail = origText && /(P[OR]\s?\d|จำนวน|รายการ|ท่อ|แพค|ขวด|กล่อง|ชุด|ออกซิเจน|คาร์บอน|EA|เมตร|เหล็ก)/i.test(origText);
+        const taskContent = origHasDetail ? combined : pText;
+
+        // ไฟล์แนบ — จากข้อความนี้ก่อน ไม่มีค่อยดูข้อความต้นทาง
         const attachmentObj = (await fetchAttach(msg)) || (await fetchAttach(origMsg));
 
         // บันทึกงาน (ผูกกับข้อความต้นทาง → reply แก้วันทีหลังได้) — งาน "รับ", วันส่งที่คิดแล้ว
         const result = await saveTaskFromReply(taskContent, pFrom, msg.chat.id, attachmentObj, '', anchorId, 'รับ', shipDate);
         if (result.ok) {
+          // จำงานล่าสุดของกลุ่มนี้ → ไฟล์ที่ฝ่ายจัดซื้อส่งตามมาจะแนบเข้างานนี้ได้
+          try {
+            await db.from('tg_last_task').upsert({
+              chat_id: String(msg.chat.id), task_id: result.taskId,
+              task_name: result.taskName, created_at: new Date().toISOString()
+            }, { onConflict: 'chat_id' });
+          } catch (e) {}
+          // ไฟล์ที่ "มาก่อน" ข้อความ (พักไว้ key :pf ≤1 นาที) → แนบเข้างานที่เพิ่งสร้าง
+          if (!attachmentObj) {
+            try {
+              const pfKey = String(msg.chat.id) + ':pf';
+              const { data: pf } = await db.from('tg_last_task')
+                .select('task_id, task_name, created_at').eq('chat_id', pfKey).maybeSingle();
+              const pAge = pf?.created_at ? (Date.now() - new Date(pf.created_at).getTime()) / 60000 : 999;
+              if (pf?.task_id && pAge <= 1) {
+                const storagePath = pf.task_id;
+                const { data: u } = db.storage.from('attachments').getPublicUrl(storagePath);
+                const ext = (storagePath.split('.').pop() || '').toLowerCase();
+                const mime = ext === 'pdf' ? 'application/pdf'
+                  : (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'image/' + (ext === 'jpg' ? 'jpeg' : ext) : 'application/octet-stream');
+                const { data: tr } = await db.from('tasks').select('attachments').eq('id', result.taskId).maybeSingle();
+                const atts = Array.isArray(tr?.attachments) ? tr.attachments : [];
+                atts.push({ name: pf.task_name || storagePath, fileId: storagePath, mimeType: mime, webViewLink: u?.publicUrl || '', source: 'telegram' });
+                await db.from('tasks').update({ attachments: atts }).eq('id', result.taskId);
+                await db.from('tg_last_task').delete().eq('chat_id', pfKey);
+              }
+            } catch (e) {}
+          }
           const fileLink = attachmentObj ? '\n📎 <a href="' + attachmentObj.wl + '">' + attachmentObj.name + '</a>' : '';
           await notifyMainChat(result.mainMsg + fileLink);   // → กลุ่มใหม่ (TELEGRAM_CHAT_ID_3) เท่านั้น
           // ไม่ตอบในกลุ่มสั่งของ — เงียบสนิท
