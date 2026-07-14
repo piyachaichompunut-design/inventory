@@ -10,6 +10,7 @@ const GROQ_KEY     = process.env.GROQ_API_KEY || '';
 const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
 // ป้ายบริษัทสั้นๆ (มี 4 บริษัท — ชื่องาน/เลขซ้ำข้ามบริษัทได้ ต้องโชว์ให้เลือกถูกใบ)
 const CO_SHORT = { 1: 'อาคเนย์', 2: 'เมิร์ค', 4: 'ซิลิกัล', 5: 'ศรีอาคเนย์' };
@@ -97,6 +98,162 @@ async function compressIfImage(buffer, contentType) {
   } catch (e) {
     return { buffer, contentType };
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  อ่าน "ตารางแจ้งสินค้าเข้า/ส่งของ" (Excel/รูป/PDF) — แยกเป็นกลุ่มตาม (PO, วันที่ส่ง)
+//  ใช้กับกลุ่มฝ่ายจัดซื้อ: 1 ไฟล์มีหลาย PO / หลายวันส่ง → ลง web แยกบรรทัด (1 กลุ่ม = 1 งาน)
+// ════════════════════════════════════════════════════════════════════════════
+// แปลง YYYY-MM-DD → วันที่ไทย (พ.ศ.)
+function beDisplay(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso || '';
+  return `${+m[3]}/${+m[2]}/${+m[1] + 543}`;
+}
+// ดึงเลข PO ให้เป็นรูปแบบ "PO<เลข>" (รองรับ "PO NO 2607017", "2607017")
+function normPO(s) {
+  if (!s) return '';
+  const m = String(s).match(/(\d{5,})/);   // เลข PO บริษัทนี้ 7 หลัก (YYMMxxx)
+  return m ? ('PO' + m[1]) : '';
+}
+// ดาวน์โหลดไฟล์จาก Telegram → { buffer, mime, fileName }
+async function tgFetchFile(m, token) {
+  try {
+    let fileId = null, fileName = null, mime = 'application/octet-stream';
+    if (m.photo && m.photo.length) { fileId = m.photo[m.photo.length - 1].file_id; mime = 'image/jpeg'; }
+    else if (m.document) { fileId = m.document.file_id; fileName = m.document.file_name || null; mime = m.document.mime_type || mime; }
+    if (!fileId || !token) return null;
+    const i = await (await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`)).json();
+    if (!i.ok) return null;
+    const url = `https://api.telegram.org/file/bot${token}/${i.result.file_path}`;
+    const buffer = Buffer.from(await (await fetch(url)).arrayBuffer());
+    if (!fileName) fileName = i.result.file_path.split('/').pop();
+    return { buffer, mime, fileName };
+  } catch (e) { return null; }
+}
+// อ่านแถวจาก Excel — หา header อัตโนมัติ แล้ว map คอลัมน์ PO/สินค้า/จำนวน/หน่วย/วันส่ง/ผู้ขาย
+async function tableRowsFromExcel(buffer) {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const grid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  let hi = -1; const col = {};
+  for (let i = 0; i < Math.min(grid.length, 20); i++) {
+    const cells = (grid[i] || []).map(c => String(c).toLowerCase());
+    const joined = cells.join('|');
+    if (/po/.test(joined) && /(product|สินค้า|รายการ|delivery|จำนวน)/.test(joined)) {
+      hi = i;
+      cells.forEach((c, ci) => {
+        if (/\bpo\b|po\s*no/.test(c) && !/pr/.test(c) && col.po == null) col.po = ci;
+        else if (/product|สินค้า|รายการ/.test(c) && col.product == null) col.product = ci;
+        else if (/จำนวน|qty|quantity/.test(c) && col.qty == null) col.qty = ci;
+        else if (/unit|หน่วย/.test(c) && col.unit == null) col.unit = ci;
+        else if (/delivery|วันที่|กำหนดส่ง|วันส่ง/.test(c) && col.date == null) col.date = ci;
+        else if (/suplier|supplier|ผู้ขาย|ผู้จำหน่าย/.test(c) && col.supplier == null) col.supplier = ci;
+      });
+      break;
+    }
+  }
+  if (hi < 0 || col.po == null || col.product == null) return [];
+  const out = []; let lastPO = '', lastDate = '';
+  for (let i = hi + 1; i < grid.length; i++) {
+    const row = grid[i] || [];
+    const g = (ci) => ci == null ? '' : String(row[ci] == null ? '' : row[ci]).trim();
+    let po = g(col.po); if (po) lastPO = po; else po = lastPO;   // เซลล์ merge เว้นว่าง → สืบทอด
+    let date = g(col.date); if (date) lastDate = date; else date = lastDate;
+    const product = g(col.product);
+    if (!product) continue;
+    out.push({ po, product, qty: g(col.qty), unit: g(col.unit), date, supplier: g(col.supplier) });
+  }
+  return out;
+}
+// อ่านแถวจากรูป/PDF ด้วย AI — คืน JSON ทีละรายการ
+async function tableRowsFromAI(buffer, mime, fileName) {
+  if (!GROQ_KEY) return [];
+  const isPdf = /pdf/i.test(mime) || /\.pdf$/i.test(fileName || '');
+  const prompt =
+    'นี่คือตาราง "แจ้งสินค้าเข้า/ส่งของ" ของบริษัท มีหลายรายการ อาจมีหลายเลข PO และหลายวันส่ง\n' +
+    'ช่วยอ่านทุกแถวในตาราง แล้วตอบกลับ "1 บรรทัด = 1 รายการสินค้า" เป็น JSON เท่านั้น รูปแบบ:\n' +
+    '{"po":"เลข PO","product":"ชื่อสินค้าเต็มตามที่เห็น","qty":"จำนวน","unit":"หน่วย","date":"วันที่ส่ง เช่น 15/7/2026 หรือ รออัพเดท","supplier":"ผู้ขาย"}\n' +
+    'กติกา: คัดลอกตามที่เห็นเป๊ะๆ ห้ามเดา/ห้ามแปล ช่องไหนไม่มีใส่ "" | ตอบเฉพาะ JSON ทีละบรรทัด ไม่ต้องมีคำอธิบายหรือ ```';
+  let content;
+  try {
+    if (isPdf) {
+      const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
+      const data = await pdfParse(buffer);
+      const text = String(data.text || '').replace(/[ \t]+/g, ' ').trim();
+      if (!text) return [];
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({ model: GROQ_MODEL, temperature: 0, max_tokens: 2500,
+          messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'ข้อความจากไฟล์:\n' + text.slice(0, 8000) }] })
+      });
+      const j = await res.json(); if (j.error) return [];
+      content = j.choices?.[0]?.message?.content || '';
+    } else {
+      const { buffer: small } = await compressIfImage(buffer, /^image\//.test(mime) ? mime : 'image/jpeg');
+      const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({ model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 2500,
+          messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl } }] }] })
+      });
+      const j = await res.json(); if (j.error) { console.error('vision table:', j.error.message); return []; }
+      content = j.choices?.[0]?.message?.content || '';
+    }
+  } catch (e) { console.error('tableRowsFromAI:', e.message); return []; }
+  const out = [];
+  for (const ln of String(content).split('\n')) {
+    const s = ln.trim(); if (!s.startsWith('{')) continue;
+    try { const o = JSON.parse(s); if (o && (o.product || o.po)) out.push(o); } catch (e) {}
+  }
+  return out;
+}
+// อ่านไฟล์ตาราง → จัดกลุ่มตาม (PO, วันส่ง) → [{ po, dateISO, dateRaw, supplier, lines:[{product,qty,unit}] }]
+async function tableGroupsFromBuffer(buffer, mime, fileName) {
+  const isExcel = /xlsx|spreadsheet|excel/i.test(mime || '') || /\.xls[xm]?$/i.test(fileName || '');
+  let rows = [];
+  try {
+    rows = isExcel ? await tableRowsFromExcel(buffer) : await tableRowsFromAI(buffer, mime, fileName);
+  } catch (e) { console.error('tableGroups:', e.message); }
+  const groups = new Map();
+  for (const r of rows) {
+    const po = normPO(r.po);
+    if (!po) continue;                                   // ต้องมี PO เท่านั้น
+    const dISO = parseDate(r.date);
+    const dateKey = dISO || ('รออัพเดท:' + String(r.date || '').trim());
+    const key = po + '|' + dateKey;
+    if (!groups.has(key)) groups.set(key, { po, dateISO: dISO, dateRaw: String(r.date || '').trim(), supplier: String(r.supplier || '').trim(), lines: [] });
+    const grp = groups.get(key);
+    if (r.supplier && !grp.supplier) grp.supplier = String(r.supplier).trim();
+    const product = String(r.product || '').trim();
+    if (product) grp.lines.push({ product, qty: String(r.qty || '').trim(), unit: String(r.unit || '').trim() });
+  }
+  return [...groups.values()].filter(g => g.lines.length);
+}
+// สร้างงานใน web จากกลุ่มที่แยกแล้ว (1 กลุ่ม = 1 บรรทัด) แนบไฟล์ต้นฉบับให้ทุกงาน
+async function createPOTableTasks(groups, { responsible = '', attachment = null } = {}) {
+  const created = [];
+  for (const g of groups) {
+    const dateDisplay = g.dateISO ? beDisplay(g.dateISO) : (g.dateRaw || 'รออัพเดท');
+    const itemsStr = g.lines.map((l, i) => (i + 1) + '. ' + l.product + (l.qty ? ' — จำนวน ' + l.qty + (l.unit ? ' ' + l.unit : '') : '')).join('\n');
+    const body =
+      '📦 รับเข้า — PO ' + g.po + (g.supplier ? ' • ' + g.supplier : '') + '\n' +
+      '📅 ส่ง: ' + dateDisplay + '\n' +
+      '📦 รายการ:\n' + itemsStr;
+    const cat = guessCategory(g.lines.map(l => l.product).join(' ')) || '';
+    const id = rid();
+    const { error } = await db.from('tasks').insert({
+      id, task: body.slice(0, 2000), duration: 'รับ',
+      action_date: g.dateISO || todayStr(),
+      sales_name: responsible || '', task_status: 'To Do', notification: 'แจ้งล่วงหน้า',
+      categories: cat, note: g.dateISO ? '' : 'รออัพเดทวันส่ง', doing: false, done: false,
+      attachments: attachment ? [attachment] : []
+    });
+    if (!error) created.push({ po: g.po, date: dateDisplay, count: g.lines.length });
+    else console.error('createPOTableTasks insert:', error.message);
+  }
+  return created;
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -903,6 +1060,36 @@ export default async function handler(req, res) {
           } catch (e) { return null; }
         };
 
+        // ── ตัวช่วย: อ่านไฟล์ในข้อความเป็น "ตารางหลาย PO" (คืน [] ถ้าไม่ใช่ตาราง) ──
+        const chatKey = String(msg.chat.id);
+        const parseTableFromTgMsg = async (m) => {
+          if (!m || !(m.photo || m.document) || !tgToken) return [];
+          const f = await tgFetchFile(m, tgToken);
+          if (!f) return [];
+          return await tableGroupsFromBuffer(f.buffer, f.mime, f.fileName);
+        };
+        const mimeFromPath = (p) => {
+          const ext = (String(p).split('.').pop() || '').toLowerCase();
+          if (ext === 'pdf') return 'application/pdf';
+          if (ext === 'xlsx' || ext === 'xls') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image/' + (ext === 'jpg' ? 'jpeg' : ext);
+          return 'application/octet-stream';
+        };
+        const parseTableFromStorage = async (storagePath) => {
+          try {
+            const { data: u } = db.storage.from('attachments').getPublicUrl(storagePath);
+            if (!u?.publicUrl) return [];
+            const buffer = Buffer.from(await (await fetch(u.publicUrl)).arrayBuffer());
+            return await tableGroupsFromBuffer(buffer, mimeFromPath(storagePath), storagePath);
+          } catch (e) { return []; }
+        };
+        const notifyTableCreated = async (created) => {
+          if (!created.length) return;
+          await notifyMainChat('🔔 <b>รับเข้าหลายรายการ (ฝ่ายจัดซื้อ)</b>\n' +
+            created.map(c => '• PO ' + c.po + ' — ส่ง ' + c.date + ' — ' + c.count + ' รายการ').join('\n') +
+            (pFrom ? '\n✍️ แจ้งโดย: ' + tgEsc(pFrom) : ''));
+        };
+
         // (B) แจ้งส่งใหม่ — ต้องเป็นประโยคแจ้งส่ง + มีแท็กผู้รับแจ้ง (กันคุยเล่น)
         if (!(isShip && hasMention)) {
           // ฝ่ายจัดซื้อมักพิมพ์ "แจ้งส่ง" ก่อน แล้วส่ง "ไฟล์" เป็นข้อความถัดมา (คนละ message)
@@ -910,8 +1097,28 @@ export default async function handler(req, res) {
           //   ปกติส่งพร้อมกัน แค่มาก่อน/หลังเท่านั้น → ใช้หน้าต่างสั้นๆ กันแนบผิดงาน
           if (msgHasFile && db) {
             try {
+              // ★ ไฟล์ "ตารางหลาย PO/หลายวันส่ง" → แยกลง web หลายบรรทัด (1 กลุ่ม = 1 งาน)
+              const groups = await parseTableFromTgMsg(msg);
+              if (groups.length) {
+                const att = await fetchAttach(msg);
+                const attach = att ? { name: att.name, size: att.size, fileId: att.fileId, mimeType: att.mimeType, webViewLink: att.webViewLink, source: 'telegram' } : null;
+                // ตารางมัก "ตามหลัง" ข้อความแจ้งส่งที่เพิ่งสร้างงานรวมไว้ → ลบงานรวมนั้น แล้วแทนด้วยรายการแยก
+                const { data: last } = await db.from('tg_last_task')
+                  .select('task_id, created_at').eq('chat_id', chatKey).maybeSingle();
+                const ageMin = last?.created_at ? (Date.now() - new Date(last.created_at).getTime()) / 60000 : 999;
+                if (last?.task_id && ageMin <= 2) {
+                  await db.from('tasks').delete().eq('id', last.task_id);
+                  await db.from('tg_last_task').delete().eq('chat_id', chatKey);
+                }
+                const created = await createPOTableTasks(groups, { attachment: attach });
+                await notifyTableCreated(created);
+                // ปักธง :tbl → ถ้าข้อความแจ้งส่งตามมาทีหลัง (ไฟล์มาก่อน) จะได้ไม่สร้างงานรวมซ้ำ
+                await db.from('tg_last_task').upsert({ chat_id: chatKey + ':tbl', task_id: 'x', task_name: 'table', created_at: new Date().toISOString() }, { onConflict: 'chat_id' });
+                res.status(200).json({ ok: true }); return;
+              }
+              // ไม่ใช่ตาราง → ไฟล์แนบเดี่ยว: แนบเข้างานล่าสุด / พักไว้ (เหมือนเดิม)
               const { data: last } = await db.from('tg_last_task')
-                .select('task_id, task_name, created_at').eq('chat_id', String(msg.chat.id)).maybeSingle();
+                .select('task_id, task_name, created_at').eq('chat_id', chatKey).maybeSingle();
               const ageMin = last?.created_at ? (Date.now() - new Date(last.created_at).getTime()) / 60000 : 999;
               const att = await fetchAttach(msg);
               if (last && last.task_id && ageMin <= 1 && att) {
@@ -923,7 +1130,7 @@ export default async function handler(req, res) {
               } else if (att) {
                 // ไฟล์ "มาก่อน" ข้อความแจ้งส่ง → พักไว้ (key :pf) ให้ข้อความที่ตามมาใน 1 นาทีหยิบไปแนบ
                 await db.from('tg_last_task').upsert({
-                  chat_id: String(msg.chat.id) + ':pf', task_id: att.fileId,
+                  chat_id: chatKey + ':pf', task_id: att.fileId,
                   task_name: (att.name || '').slice(0, 100), created_at: new Date().toISOString()
                 }, { onConflict: 'chat_id' });
               }
@@ -931,6 +1138,39 @@ export default async function handler(req, res) {
           }
           res.status(200).json({ ok: true }); return; // เงียบเสมอในกลุ่มสั่งของ
         }
+
+        // ── (C) แจ้งส่ง+แท็ก → ถ้ามี "ไฟล์ตารางหลาย PO" ให้แยกลง web หลายบรรทัด (แทนงานรวม) ──
+        try {
+          // ไฟล์มาก่อนข้อความ + ลงตารางแยกไว้แล้ว (ปักธง :tbl) → ไม่ต้องสร้างงานรวมซ้ำ
+          const tblKey = chatKey + ':tbl';
+          const { data: tbl } = await db.from('tg_last_task').select('created_at').eq('chat_id', tblKey).maybeSingle();
+          const tblAge = tbl?.created_at ? (Date.now() - new Date(tbl.created_at).getTime()) / 60000 : 999;
+          if (tblAge <= 2) { await db.from('tg_last_task').delete().eq('chat_id', tblKey); res.status(200).json({ ok: true }); return; }
+
+          let groups = [], gAttach = null;
+          if (msgHasFile) {                                  // ไฟล์อยู่ในข้อความแจ้งส่งเดียวกัน
+            groups = await parseTableFromTgMsg(msg);
+            if (groups.length) { const a = await fetchAttach(msg); gAttach = a ? { name: a.name, size: a.size, fileId: a.fileId, mimeType: a.mimeType, webViewLink: a.webViewLink, source: 'telegram' } : null; }
+          }
+          if (!groups.length) {                              // ไฟล์ "มาก่อน" ข้อความ (พักไว้ :pf) → ลองอ่านเป็นตาราง
+            const pfKey = chatKey + ':pf';
+            const { data: pf } = await db.from('tg_last_task').select('task_id, created_at').eq('chat_id', pfKey).maybeSingle();
+            const pAge = pf?.created_at ? (Date.now() - new Date(pf.created_at).getTime()) / 60000 : 999;
+            if (pf?.task_id && pAge <= 1) {
+              groups = await parseTableFromStorage(pf.task_id);
+              if (groups.length) {
+                const { data: u } = db.storage.from('attachments').getPublicUrl(pf.task_id);
+                gAttach = { name: pf.task_id, fileId: pf.task_id, mimeType: mimeFromPath(pf.task_id), webViewLink: u?.publicUrl || '', source: 'telegram' };
+                await db.from('tg_last_task').delete().eq('chat_id', pfKey);
+              }
+            }
+          }
+          if (groups.length) {
+            const created = await createPOTableTasks(groups, { attachment: gAttach });
+            await notifyTableCreated(created);
+            res.status(200).json({ ok: true }); return;
+          }
+        } catch (e) { console.error('purchase table:', e.message); }
 
         // เนื้อหางาน = ข้อความต้นทาง (มีเลข PO/รายการสินค้า) ถ้ามีรายละเอียด ไม่งั้นใช้ข้อความที่พิมพ์
         const origHasDetail = origText && /(P[OR]\s?\d|จำนวน|รายการ|ท่อ|แพค|ขวด|กล่อง|ชุด|ออกซิเจน|คาร์บอน|EA|เมตร|เหล็ก)/i.test(origText);
