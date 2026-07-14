@@ -645,6 +645,15 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
         text = String(data.text || '').replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
       } catch (e) { console.error('pdf-parse:', e.message); }
       if (!text) return '';
+      // ── ดึงเลขที่เอกสาร/ชื่องานจาก raw text แบบ deterministic (ไม่พึ่ง AI) ──
+      //   ใบส่งของ/ใบงานจากจัดซื้อ มักมีบรรทัด "เลขที่/No.: ..." หรือ SO/PO/PR
+      //   ป้องกัน AI เดา/มั่วเลขงานผิด → prepend "DOCREF: ..." ให้ odooDocForFile ค้นตรงงาน
+      let docref = '';
+      const docNoM = text.match(/(?:เลขที่?|เลขที|No\.?|Ref(?:erence)?)\s*[:：]\s*([^\n]+)/i);
+      if (docNoM) docref = docNoM[1].trim();
+      const soPoPr = text.match(/\b((?:SO|PO|PR)\s*\d{3,})\b/i);
+      if (soPoPr && (!docref || !/(?:SO|PO|PR)\s*\d/i.test(docref))) docref = soPoPr[1].replace(/\s+/g, '');
+      const docPrefix = docref ? ('DOCREF: ' + docref.slice(0, 80) + '\n') : '';
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
@@ -657,8 +666,12 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
         })
       });
       const j = await res.json();
-      if (j.error) { console.error('groq text:', j.error.message); return text.slice(0, 1200); }
-      return String(j.choices?.[0]?.message?.content || text.slice(0, 1200)).trim();
+      if (j.error) { console.error('groq text:', j.error.message); return (docPrefix + text.slice(0, 1200)).trim(); }
+      let out = String(j.choices?.[0]?.message?.content || text.slice(0, 1200)).trim();
+      // deterministic DOCREF ต้องชนะเสมอ → วางไว้บรรทัดแรก (odooDocForFile ใช้ DOCREF ตัวแรก)
+      //   ป้องกัน AI เดาเลขงานผิด (เคยไปจับเลข PO ที่ไม่เกี่ยวมาลงผิดงาน)
+      if (docPrefix) out = docPrefix + out.replace(/^DOCREF\s*[:：].*$/im, '').trim();
+      return out;
     }
   } catch (e) { console.error('readItemsFromFileAI:', e.message); }
   return '';
