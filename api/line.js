@@ -693,11 +693,11 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
   let bodyText = itemsText, srcFrom = itemsText ? 'AI' : '', srcRef = '';
   let doc = null;
   // "รับ" → เลือก PO ก่อน (ซื้อเข้า) | "ส่ง" → เลือก SO ก่อน (ขายออก)
-  //   ค้นเลขเอกสารจากหลายแหล่งตามลำดับ: จากไฟล์ → ข้อความที่ reply → ข้อความล่าสุดในกลุ่ม
-  //   (เผื่อ reply "รูป" แต่เลข SO อยู่ในข้อความข้างเคียง)
+  //   ค้นเลขเอกสาร "เฉพาะจากไฟล์ที่ reply + ข้อความที่ reply" เท่านั้น
+  //   ⚠️ ห้ามใช้ข้อความล่าสุดในกลุ่ม (contextText) เพราะเคยหยิบเลขงานเก่าที่ไม่เกี่ยวมาลงผิดงาน
   const prefer = duration === 'รับ' ? 'PO' : 'SO';
-  const allHint = [itemsText, quotedText, contextText].filter(Boolean).join('\n');
-  for (const src of [itemsText, quotedText, contextText]) {
+  const allHint = [itemsText, quotedText].filter(Boolean).join('\n');
+  for (const src of [itemsText, quotedText]) {
     if (!src) continue;
     try {
       const d = await odooDocForFile(src, allHint, prefer);
@@ -1601,16 +1601,8 @@ export default async function handler(req, res) {
             ' hasDocNo=' + hasDocNo + ' dur=' + duration + ' cat=' + categories + ' resp=' + responsible +
             ' qtext=' + JSON.stringify(String(qtextF).slice(0, 50)));
           if (isFileF || hasDocNo) {
-            // ดึงข้อความล่าสุดในกลุ่ม (เผื่อ reply รูป แต่เลข SO อยู่ในข้อความข้างเคียง)
-            let contextText = '';
-            try {
-              const { data: recent } = await db.from('line_messages')
-                .select('text').eq('group_id', pushTarget)
-                .order('created_at', { ascending: false }).limit(10);
-              contextText = (recent || []).map(r => r.text).filter(Boolean).join('\n');
-            } catch (e) {}
             await recordTaskFromReplyFile({
-              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '', quotedText: qtextF, contextText,
+              quotedId, qType: qTypeF, fileName: qrowF?.file_name || '', quotedText: qtextF,
               duration, actionDate, categories, responsible, pushTarget,
               headVerb: (duration === 'ส่ง' ? 'ส่งงาน' : 'รับงาน'),
               notifyTitle: 'งาน' + (duration === 'ส่ง' ? 'ส่ง' : 'รับ') + ' (จากไลน์)'
