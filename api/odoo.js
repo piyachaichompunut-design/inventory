@@ -278,9 +278,10 @@ export async function odooDocForFile(fullText, companyHint = '', prefer = 'SO') 
   };
   // ── SO (ใบเสนอราคา/ใบสั่งขาย) → ลูกค้า, รายการขาย ──
   const trySO = async () => {
-    const m = txt.match(/\bSO\s*0*\d{4,}/i);
+    // รองรับ "SO2607003", "SO NO 2606011", "SO No. 2606011", "เลขที่ SO 2606011" (เก็บเลข 0 นำหน้า)
+    const m = txt.match(/\bSO[\s:#.]*(?:NO\.?|No\.?|เลขที่)?[\s:#.]*(\d{4,})/i);
     if (!m) return null;
-    const key = m[0].replace(/\s+/g, '').toUpperCase();
+    const key = 'SO' + m[1];
     const rows = await searchRead('sale.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
       ['name', 'company_id', 'partner_id', 'date_order', 'note'], 10);
     if (!rows.length) return null;
@@ -294,9 +295,10 @@ export async function odooDocForFile(fullText, companyHint = '', prefer = 'SO') 
   };
   // ── PO (ใบสั่งซื้อ) → ผู้ขาย, รายการซื้อ ──
   const tryPO = async () => {
-    const m = txt.match(/\bPO\s*0*\d{4,}/i);
+    // รองรับ "PO2607018", "PO NO 2607017", "PO No. 2607023", "PONO2607026", "เลขที่ PO 2607099"
+    const m = txt.match(/\bPO[\s:#.]*(?:NO\.?|No\.?|เลขที่)?[\s:#.]*(\d{4,})/i);
     if (!m) return null;
-    const key = m[0].replace(/\s+/g, '').toUpperCase();
+    const key = 'PO' + m[1];
     const rows = await searchRead('purchase.order', ['|', ['name', '=', key], ['name', 'ilike', key]],
       ['name', 'company_id', 'partner_id', 'date_order', 'notes'], 10);
     if (!rows.length) return null;
@@ -314,9 +316,10 @@ export async function odooDocForFile(fullText, companyHint = '', prefer = 'SO') 
     for (const fn of order) { const r = await fn(); if (r) return r; }
     // ── PR (ใบขอซื้อ) ──
     let m;
-    m = txt.match(/\bPR\s*0*\d{3,}/i);
+    // รองรับ "PR01986", "PR NO 01986", "PR No. 01986", "เลขที่ PR 01986" (เก็บเลข 0 นำหน้า)
+    m = txt.match(/\bPR[\s:#.]*(?:NO\.?|No\.?|เลขที่)?[\s:#.]*(\d{3,})/i);
     if (m) {
-      const pr = await odooPurchaseRequestByName(m[0].replace(/\s+/g, ''), companyHint);
+      const pr = await odooPurchaseRequestByName('PR' + m[1], companyHint);
       if (pr && pr.lines.length) {
         return { kind: 'PR', ambiguous: pr.ambiguous, matchCount: pr.matchCount, company: pr.company,
           partner: pr.requestedBy, partnerLabel: 'ผู้ขอ', docName: pr.name, date: pr.dateStart,
