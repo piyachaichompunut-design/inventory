@@ -191,8 +191,13 @@ async function tableRowsFromAI(buffer, mime, fileName) {
       const j = await res.json(); if (j.error) return [];
       content = j.choices?.[0]?.message?.content || '';
     } else {
-      const { buffer: small } = await compressIfImage(buffer, /^image\//.test(mime) ? mime : 'image/jpeg');
-      const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
+      // ตารางแน่นๆ ต้องการความละเอียดสูงกว่าใบงานทั่วไป → ย่อที่ 2200px (ไม่ใช่ 1600) ให้ตัวหนังสือคมพออ่าน
+      let imgBuf = buffer;
+      try {
+        const sharp = (await import('sharp')).default;
+        imgBuf = await sharp(buffer).rotate().resize(2200, 2200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+      } catch (e) { const c = await compressIfImage(buffer, /^image\//.test(mime) ? mime : 'image/jpeg'); imgBuf = c.buffer; }
+      const dataUrl = 'data:image/jpeg;base64,' + imgBuf.toString('base64');
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
         body: JSON.stringify({ model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 2500,
