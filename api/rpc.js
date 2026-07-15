@@ -443,6 +443,52 @@ async function deleteWeightJob(jobId) {
 }
 
 // ============================================================================
+//  FUEL LOGS  (รายงานน้ำมันดีเซล — รับเข้า/เบิกจ่าย รถโฟล์คลิฟท์)
+// ============================================================================
+async function getFuelLogs() {
+  const { data, error } = await db.from('fuel_logs').select('*');
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: String(r.id),
+    date: dstr(r.log_date),
+    kind: String(r.kind || 'จ่าย'),
+    vehicle: String(r.vehicle || ''),
+    liters: parseFloat(r.liters) || 0,
+    baht: parseFloat(r.baht) || 0,
+    pricePerLiter: parseFloat(r.price_per_liter) || 0,
+    person: String(r.person || ''),
+    note: String(r.note || '')
+  })).sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+async function saveFuelLog(rec) {
+  rec = rec || {};
+  const liters = parseFloat(rec.liters) || 0;
+  const baht   = parseFloat(rec.baht) || 0;
+  const ppl    = parseFloat(rec.pricePerLiter) || (liters > 0 ? +(baht / liters).toFixed(2) : 0);
+  const row = {
+    log_date: rec.date || todayStr(),
+    kind: rec.kind === 'รับเข้า' ? 'รับเข้า' : 'จ่าย',
+    vehicle: rec.vehicle || '',
+    liters, baht, price_per_liter: ppl,
+    person: rec.person || '', note: rec.note || ''
+  };
+  if (rec.id) {
+    const { data, error } = await db.from('fuel_logs').update(row).eq('id', rec.id).select('id');
+    if (error) return { success: false, error: error.message };
+    if (!data || !data.length) return { success: false, error: 'ไม่พบรายการ' };
+    return { success: true, id: rec.id };
+  }
+  const id = rid('F', 5);
+  const { error } = await db.from('fuel_logs').insert({ id, ...row });
+  if (error) return { success: false, error: error.message };
+  return { success: true, id };
+}
+async function deleteFuelLog(id) {
+  const { error } = await db.from('fuel_logs').delete().eq('id', id);
+  return error ? { success: false, error: error.message } : { success: true };
+}
+
+// ============================================================================
 //  PRODUCTS
 // ============================================================================
 async function getProducts() {
@@ -2427,6 +2473,7 @@ const HANDLERS = {
   getCategories, addCategory, deleteCategory, getDashboardData,
   saveAttachment, getAttachments, deleteAttachment, getFileAsBase64,
   getWeightJobs, saveWeightJob, deleteWeightJob,
+  getFuelLogs, saveFuelLog, deleteFuelLog,
   getProducts, saveProduct, deleteProduct,
   getLoedaroonItems, saveLoedaroonItem, addLoedaroonCall, deleteLoedaroonItem, deleteLoedaroonPO,
   getOTEmployees, saveOTEmployee, deleteOTEmployee, getOTData, saveOTRecord, deleteOTRecord,
