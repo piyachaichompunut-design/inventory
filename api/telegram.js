@@ -802,6 +802,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       : '';
     const msg =
       '📊 รายงาน: ' + d.name + '\n' +
+      (d.company ? '🏢 <b>บริษัท: ' + tgEsc(d.company) + '</b>\n' : '') +
       (d.jobName ? '🏷️ <b>ชื่องาน: ' + tgEsc(d.jobName) + '</b>\n' : '') +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
