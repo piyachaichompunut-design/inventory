@@ -1436,6 +1436,7 @@ function appLogout(){
 <!-- NAV -->
 <div class="nav">
   <div class="ntab active" data-ico="📊" onclick="switchTab('dashboard')">📊 แดชบอร์ด</div>
+  <div class="ntab" data-ico="📊" onclick="switchTab('report')">📊 สรุปรายงาน</div>
   <div class="ntab" data-ico="📝" onclick="switchTab('tasks')">📝 รายการงาน</div>
   <div class="ntab" data-ico="📅" onclick="switchTab('calendar')">📅 ปฏิทิน</div>
   <div class="ntab" data-ico="🏷️" onclick="switchTab('categories')">🏷️ หมวดหมู่</div>
@@ -1745,6 +1746,107 @@ function appLogout(){
     </table></div>
     <div class="pag" id="pag"></div>
   </div>
+</div>
+
+<!-- ═══ TAB: REPORT (สรุปรายงาน — สไลด์) ═══ -->
+<div class="pane" id="tab-report">
+  <style>
+    .rp-ctrl{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 18px;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;margin-bottom:16px}
+    .rp-cg{display:flex;flex-direction:column;gap:5px}
+    .rp-cg label{font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+    .rp-cg select{padding:8px 11px;border:1.5px solid var(--border);border-radius:9px;font-size:13px;background:var(--card);color:var(--txt);cursor:pointer;font-family:inherit}
+    .rp-themes{display:flex;gap:8px;flex-wrap:wrap}
+    .rp-th{width:44px;height:34px;border-radius:9px;border:2.5px solid transparent;cursor:pointer;position:relative;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+    .rp-th.on{border-color:var(--pri);transform:scale(1.06)}
+    .rp-th1{background:linear-gradient(135deg,#1e3a8a,#3b82f6)}
+    .rp-th2{background:linear-gradient(135deg,#0f172a,#22d3ee)}
+    .rp-th3{background:linear-gradient(135deg,#f8fafc,#e2e8f0);border:1.5px solid #cbd5e1}
+    .rp-th4{background:linear-gradient(135deg,#f97316,#ec4899,#8b5cf6)}
+    .rp-secs{display:flex;gap:12px;flex-wrap:wrap}
+    .rp-secs label{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;color:var(--txt);cursor:pointer}
+    .rp-secs input{width:15px;height:15px;accent-color:var(--pri);cursor:pointer}
+    .rp-btn{padding:10px 18px;border:none;border-radius:10px;font-size:13.5px;font-weight:800;cursor:pointer;font-family:inherit}
+    .rp-btn-p{background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.35)}
+    .rp-btn-pdf{background:#fbbf24;color:#3b2606}
+    .rp-deck{display:flex;flex-direction:column;gap:22px;align-items:center}
+    /* สไลด์ 16:9 */
+    .rp-slide{width:100%;max-width:960px;aspect-ratio:16/9;border-radius:16px;overflow:hidden;position:relative;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:44px 52px;box-sizing:border-box;display:flex;flex-direction:column;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .rp-slide *{box-sizing:border-box}
+    .rp-badge{position:absolute;top:16px;right:20px;font-size:11px;font-weight:700;opacity:.5}
+    .rp-h1{font-size:34px;font-weight:900;line-height:1.1;margin:0}
+    .rp-h2{font-size:22px;font-weight:800;margin:0 0 18px}
+    .rp-sub{font-size:14px;opacity:.8;margin-top:6px}
+    .rp-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px}
+    .rp-tile{border-radius:13px;padding:16px 18px}
+    .rp-tile .n{font-size:30px;font-weight:900;line-height:1}
+    .rp-tile .l{font-size:12px;font-weight:700;opacity:.85;margin-top:5px}
+    .rp-row{display:grid;grid-template-columns:1.05fr .95fr;gap:24px;flex:1;min-height:0}
+    .rp-canwrap{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+    .rp-legend{display:flex;flex-direction:column;gap:9px;justify-content:center}
+    .rp-legrow{display:flex;align-items:center;justify-content:space-between;font-size:13px;gap:10px}
+    .rp-dot{width:11px;height:11px;border-radius:3px;flex-shrink:0}
+    .rp-note{font-size:13.5px;line-height:1.55;padding:9px 12px;border-radius:9px;margin-bottom:7px}
+    /* ── THEME 1 : Modern Blue ── */
+    .rp-t1 .rp-slide{background:#fff;color:#0f172a}
+    .rp-t1 .rp-slide.cover{background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff}
+    .rp-t1 .rp-h2{color:#1e3a8a}
+    .rp-t1 .rp-tile{background:#eff6ff;color:#1e3a8a}
+    .rp-t1 .rp-slide.cover .rp-tile{background:rgba(255,255,255,.12);color:#fff}
+    /* ── THEME 2 : Dark Neon ── */
+    .rp-t2 .rp-slide{background:#0b1220;color:#e2e8f0}
+    .rp-t2 .rp-slide.cover{background:radial-gradient(circle at 80% 20%,#155e75,#0b1220)}
+    .rp-t2 .rp-h2{color:#22d3ee}
+    .rp-t2 .rp-tile{background:#111c30;border:1px solid #1e3a5f;color:#67e8f9}
+    /* ── THEME 3 : Minimal Light ── */
+    .rp-t3 .rp-slide{background:#fff;color:#111;border:1px solid #e5e7eb}
+    .rp-t3 .rp-slide.cover{background:#fafafa;color:#111}
+    .rp-t3 .rp-h1,.rp-t3 .rp-h2{font-weight:800}
+    .rp-t3 .rp-h2{color:#111;border-bottom:3px solid #111;display:inline-block;padding-bottom:5px}
+    .rp-t3 .rp-tile{background:#f4f4f5;color:#18181b;border-radius:6px}
+    /* ── THEME 4 : Gradient Colorful ── */
+    .rp-t4 .rp-slide{background:linear-gradient(135deg,#fdf4ff,#faf5ff);color:#3b0764}
+    .rp-t4 .rp-slide.cover{background:linear-gradient(135deg,#f97316,#ec4899,#8b5cf6);color:#fff}
+    .rp-t4 .rp-h2{background:linear-gradient(90deg,#f97316,#ec4899);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .rp-t4 .rp-tile{background:#fff;color:#7c3aed;box-shadow:0 4px 12px rgba(139,92,246,.15)}
+    .rp-t4 .rp-slide.cover .rp-tile{background:rgba(255,255,255,.16);color:#fff}
+    @media(max-width:760px){.rp-row{grid-template-columns:1fr}}
+    @media print{
+      body *{visibility:hidden}
+      #tab-report,#tab-report *{visibility:visible}
+      .rp-ctrl{display:none!important}
+      #tab-report{position:absolute;left:0;top:0;width:100%}
+      .rp-deck{gap:0}
+      .rp-slide{max-width:none;width:100%;box-shadow:none;border-radius:0;page-break-after:always;aspect-ratio:auto;height:100vh}
+      @page{size:A4 landscape;margin:0}
+    }
+  </style>
+  <div class="rp-ctrl">
+    <div class="rp-cg"><label>เดือน</label><select id="rp-mn" onchange="renderReport()"></select></div>
+    <div class="rp-cg"><label>ปี</label><select id="rp-yr" onchange="renderReport()"></select></div>
+    <div class="rp-cg"><label>ธีม / รูปแบบ</label>
+      <div class="rp-themes">
+        <div class="rp-th rp-th1 on" data-th="1" onclick="rpSetTheme(1)" title="น้ำเงินโมเดิร์น"></div>
+        <div class="rp-th rp-th2" data-th="2" onclick="rpSetTheme(2)" title="ดาร์กนีออน"></div>
+        <div class="rp-th rp-th3" data-th="3" onclick="rpSetTheme(3)" title="มินิมอล"></div>
+        <div class="rp-th rp-th4" data-th="4" onclick="rpSetTheme(4)" title="ไล่สีสดใส"></div>
+      </div>
+    </div>
+    <div class="rp-cg"><label>กราฟหมวดหมู่</label>
+      <select id="rp-chart" onchange="renderReport()"><option value="bar">แท่ง</option><option value="doughnut">โดนัท</option><option value="pie">วงกลม</option></select>
+    </div>
+    <div class="rp-cg"><label>หน้าที่แสดง</label>
+      <div class="rp-secs">
+        <label><input type="checkbox" class="rp-sec" value="cover" checked onchange="renderReport()">ปก</label>
+        <label><input type="checkbox" class="rp-sec" value="kpi" checked onchange="renderReport()">ภาพรวม</label>
+        <label><input type="checkbox" class="rp-sec" value="cat" checked onchange="renderReport()">หมวดหมู่</label>
+        <label><input type="checkbox" class="rp-sec" value="trend" checked onchange="renderReport()">แนวโน้ม</label>
+        <label><input type="checkbox" class="rp-sec" value="summary" checked onchange="renderReport()">สรุป</label>
+      </div>
+    </div>
+    <div style="flex:1"></div>
+    <button class="rp-btn rp-btn-pdf" onclick="window.print()">🖨️ ปริ้นซ์ / PDF</button>
+  </div>
+  <div class="rp-deck rp-t1" id="rp-deck"></div>
 </div>
 
 <!-- ═══ TAB: FUEL (รายงานน้ำมันดีเซล) ═══ -->
@@ -4269,7 +4371,7 @@ function switchTab(t) {
   document.querySelectorAll('.pane').forEach(function(p){ p.classList.remove('active'); });
   document.querySelectorAll('.ntab').forEach(function(x){ x.classList.remove('active'); });
   document.getElementById('tab-'+t).classList.add('active');
-  var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi','docrs','fuel'].indexOf(t);
+  var idx=['dashboard','report','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi','docrs','fuel'].indexOf(t);
   document.querySelectorAll('.ntab')[idx].classList.add('active');
   // โหลดข้อมูลใหม่ทุกครั้งที่เปลี่ยนแท็บ
   if(t==='dashboard')  { loadTasks(); loadDash(); }
@@ -4288,7 +4390,134 @@ function switchTab(t) {
   if(t==='wire')       loadWireNotes();
   if(t==='wkpi')       initWKPI();
   if(t==='docrs')      initDocRS();
+  if(t==='report')     loadReport();
   if(t==='fuel')       loadFuel();
+}
+
+// ══════════════════════════════════════════════
+//  REPORT — สรุปรายงาน (สไลด์ เลือกธีม/รูปแบบได้)
+// ══════════════════════════════════════════════
+var rpTheme=1, rpCharts={}, rpInited=false;
+var RP_CATCOL=['#3b82f6','#f59e0b','#10b981','#8b5cf6','#ec4899','#ef4444','#14b8a6','#f97316','#6366f1','#84cc16'];
+var RP_MN_SHORT=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function rpInit(){
+  if(rpInited) return; rpInited=true;
+  var now=new Date();
+  document.getElementById('rp-mn').innerHTML='<option value="0">ทั้งปี</option>'+MONTHS.map(function(m,i){return '<option value="'+(i+1)+'"'+(i===now.getMonth()?' selected':'')+'>'+m+'</option>';}).join('');
+  var cy=now.getFullYear(), ys='';
+  for(var y=cy-2;y<=cy+1;y++) ys+='<option value="'+y+'"'+(y===cy?' selected':'')+'>'+(y+543)+'</option>';
+  document.getElementById('rp-yr').innerHTML=ys;
+}
+function rpSetTheme(n){
+  rpTheme=n;
+  document.querySelectorAll('.rp-th').forEach(function(el){ el.classList.toggle('on', +el.getAttribute('data-th')===n); });
+  renderReport();
+}
+function loadReport(){
+  rpInit();
+  if(allTasks && allTasks.length){ renderReport(); return; }
+  loadTasks();
+  var tries=0;
+  (function wait(){ if(allTasks&&allTasks.length){ renderReport(); } else if(tries++<25){ setTimeout(wait,300); } })();
+}
+function rpCompute(mn,yr){
+  var now=new Date();
+  var f=allTasks.filter(function(t){ if(mn<=0) return true; var d=new Date(t['Action Date']); return !isNaN(d)&&d.getMonth()+1===mn&&d.getFullYear()===yr; });
+  var sc={todo:0,doing:0,done:0,cancel:0,over:0}, catMap={};
+  f.forEach(function(t){
+    var s=t['Task Status']||'To Do';
+    if(s==='To Do')sc.todo++; else if(s==='Doing')sc.doing++; else if(s==='Done')sc.done++; else if(s==='Cancel')sc.cancel++;
+    var d=new Date(t['Action Date']); if(!isNaN(d)&&d<now&&s!=='Done'&&s!=='Cancel')sc.over++;
+    var c=t['Categories']||'ไม่ระบุ'; catMap[c]=(catMap[c]||0)+1;
+  });
+  var cats=Object.keys(catMap).map(function(k){return {name:k,n:catMap[k]};}).sort(function(a,b){return b.n-a.n;}).slice(0,8);
+  var recv=new Array(12).fill(0), send=new Array(12).fill(0);
+  allTasks.forEach(function(t){ var d=new Date(t['Action Date']); if(isNaN(d)||d.getFullYear()!==yr) return; var m=d.getMonth(); if(t['Duration']==='รับ')recv[m]++; else if(t['Duration']==='ส่ง')send[m]++; });
+  var notes=f.filter(function(t){return t['Note']&&String(t['Note']).trim();}).slice(0,6).map(function(t){return {task:t['Task'],note:t['Note']};});
+  var total=f.length;
+  return {total:total,sc:sc,donePct:total>0?Math.round(sc.done/total*100):0,cats:cats,recv:recv,send:send,notes:notes,
+    recvTot:f.filter(function(t){return t['Duration']==='รับ';}).length, sendTot:f.filter(function(t){return t['Duration']==='ส่ง';}).length};
+}
+function rpTile(n,l){ return '<div class="rp-tile"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
+function rpCover(d,monLbl){
+  return '<div class="rp-slide cover"><div class="rp-badge">TMS REPORT</div>'+
+    '<div style="flex:1"></div>'+
+    '<div class="rp-sub">TASK MANAGEMENT SYSTEM</div>'+
+    '<div class="rp-h1">รายงานสรุปผลการดำเนินงาน</div>'+
+    '<div class="rp-sub" style="font-size:18px;margin-top:10px">ประจำ '+monLbl+'</div>'+
+    '<div style="flex:1"></div>'+
+    '<div class="rp-tiles" style="max-width:660px">'+rpTile(d.total,'งานทั้งหมด')+rpTile(d.donePct+'%','งานสำเร็จ')+rpTile(d.sc.over,'งานเลยกำหนด')+'</div></div>';
+}
+function rpKpi(d,monLbl,specs){
+  specs.push({id:'rpc-status',cfg:function(dark){return {type:'doughnut',
+    data:{labels:['To Do','Doing','Done','Cancel'],datasets:[{data:[d.sc.todo,d.sc.doing,d.sc.done,d.sc.cancel],backgroundColor:['#f59e0b','#8b5cf6','#10b981','#6b7280'],borderWidth:0}]},
+    options:{cutout:'68%',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}};}});
+  var leg=[['To Do',d.sc.todo,'#f59e0b'],['Doing',d.sc.doing,'#8b5cf6'],['Done',d.sc.done,'#10b981'],['Cancel',d.sc.cancel,'#6b7280']].map(function(x){
+    return '<div class="rp-legrow"><div style="display:flex;align-items:center;gap:7px"><span class="rp-dot" style="background:'+x[2]+'"></span>'+x[0]+'</div><b>'+x[1]+' ('+(d.total>0?Math.round(x[1]/d.total*100):0)+'%)</b></div>';
+  }).join('');
+  return '<div class="rp-slide"><div class="rp-badge">ภาพรวม</div><div class="rp-h2">ภาพรวมผลการดำเนินงาน · '+monLbl+'</div>'+
+    '<div class="rp-tiles" style="margin-bottom:18px">'+rpTile(d.total,'งานทั้งหมด')+rpTile(d.sc.done,'เสร็จ')+rpTile(d.sc.todo+d.sc.doing,'คงเหลือ')+rpTile(d.sc.over,'เลยกำหนด')+rpTile(d.donePct+'%','อัตราสำเร็จ')+'</div>'+
+    '<div class="rp-row"><div class="rp-canwrap"><canvas id="rpc-status"></canvas></div>'+
+    '<div class="rp-legend"><div style="font-weight:800;margin-bottom:4px">สัดส่วนสถานะงาน</div>'+leg+'</div></div></div>';
+}
+function rpCat(d,monLbl,specs,chartType){
+  var labels=d.cats.map(function(c){return c.name;}), vals=d.cats.map(function(c){return c.n;});
+  var cols=d.cats.map(function(_,i){return RP_CATCOL[i%RP_CATCOL.length];});
+  specs.push({id:'rpc-cat',cfg:function(dark){
+    var isBar=chartType==='bar';
+    return {type:chartType,data:{labels:labels,datasets:[{data:vals,backgroundColor:cols,borderWidth:0,borderRadius:isBar?8:0}]},
+      options:{indexAxis:isBar?'y':'x',responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:!isBar,position:'right',labels:{color:dark?'#cbd5e1':'#334155',font:{size:11}}}},
+        scales:isBar?{x:{ticks:{color:dark?'#94a3b8':'#64748b'},grid:{color:dark?'#1e293b':'#eef2f7'}},y:{ticks:{color:dark?'#cbd5e1':'#334155'},grid:{display:false}}}:{}}};
+  }});
+  var list=d.cats.map(function(c,i){return '<div class="rp-legrow"><div style="display:flex;align-items:center;gap:7px;min-width:0"><span class="rp-dot" style="background:'+cols[i]+'"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(c.name)+'</span></div><b>'+c.n+'</b></div>';}).join('');
+  return '<div class="rp-slide"><div class="rp-badge">หมวดหมู่</div><div class="rp-h2">งานตามหมวดหมู่ · '+monLbl+'</div>'+
+    '<div class="rp-row"><div class="rp-canwrap"><canvas id="rpc-cat"></canvas></div>'+
+    '<div class="rp-legend">'+(list||'<div style="color:#94a3b8">ไม่มีข้อมูล</div>')+'</div></div></div>';
+}
+function rpTrend(d,monLbl,specs,yr){
+  specs.push({id:'rpc-trend',cfg:function(dark){return {type:'line',
+    data:{labels:RP_MN_SHORT,datasets:[
+      {label:'งานรับ',data:d.recv,borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,.12)',fill:true,tension:.4,pointRadius:3},
+      {label:'งานส่ง',data:d.send,borderColor:'#f97316',backgroundColor:'rgba(249,115,22,.12)',fill:true,tension:.4,pointRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:dark?'#cbd5e1':'#334155'}}},
+      scales:{y:{beginAtZero:true,ticks:{color:dark?'#94a3b8':'#64748b'},grid:{color:dark?'#1e293b':'#eef2f7'}},x:{ticks:{color:dark?'#94a3b8':'#64748b'},grid:{display:false}}}}};}});
+  return '<div class="rp-slide"><div class="rp-badge">แนวโน้ม</div><div class="rp-h2">แนวโน้มงานรายเดือน · ปี '+(yr+543)+'</div>'+
+    '<div class="rp-canwrap" style="flex:1"><canvas id="rpc-trend"></canvas></div></div>';
+}
+function rpSummary(d,monLbl){
+  var notes=d.notes.length?d.notes.map(function(x){return '<div class="rp-note" style="background:rgba(239,68,68,.08);border-left:3px solid #ef4444">⚠ <b>'+esc(String(x.task||'').slice(0,55))+'</b> — '+esc(x.note)+'</div>';}).join(''):'<div style="color:#94a3b8">— ไม่มีหมายเหตุ —</div>';
+  return '<div class="rp-slide"><div class="rp-badge">สรุป</div><div class="rp-h2">สรุป & ประเด็นที่พบ · '+monLbl+'</div>'+
+    '<div style="display:flex;gap:24px;flex:1;min-height:0">'+
+    '<div style="flex:1;overflow:auto"><div style="font-weight:800;margin-bottom:8px">ประเด็น / หมายเหตุ</div>'+notes+'</div>'+
+    '<div style="width:270px;flex-shrink:0"><div style="font-weight:800;margin-bottom:8px">สรุปตัวเลข</div>'+
+      '<div class="rp-note" style="background:rgba(16,185,129,.12)">✅ งานสำเร็จ '+d.sc.done+' / '+d.total+' ('+d.donePct+'%)</div>'+
+      '<div class="rp-note" style="background:rgba(245,158,11,.12)">📌 คงเหลือ '+(d.sc.todo+d.sc.doing)+' งาน</div>'+
+      '<div class="rp-note" style="background:rgba(239,68,68,.12)">⚠️ เลยกำหนด '+d.sc.over+' งาน</div>'+
+      '<div class="rp-note" style="background:rgba(59,130,246,.12)">📦 รับ '+d.recvTot+' · 🚚 ส่ง '+d.sendTot+'</div>'+
+    '</div></div></div>';
+}
+function renderReport(){
+  rpInit();
+  var deck=document.getElementById('rp-deck'); if(!deck) return;
+  var mn=+document.getElementById('rp-mn').value, yr=+document.getElementById('rp-yr').value;
+  var chartType=document.getElementById('rp-chart').value;
+  var secs=[].slice.call(document.querySelectorAll('.rp-sec:checked')).map(function(c){return c.value;});
+  var d=rpCompute(mn,yr);
+  var monLbl=mn>0?(MONTHS[mn-1]+' '+(yr+543)):('ปี '+(yr+543));
+  Object.keys(rpCharts).forEach(function(k){ try{rpCharts[k].destroy();}catch(e){} }); rpCharts={};
+  var specs=[], pages=[];
+  if(secs.indexOf('cover')>=0)   pages.push(rpCover(d,monLbl));
+  if(secs.indexOf('kpi')>=0)     pages.push(rpKpi(d,monLbl,specs));
+  if(secs.indexOf('cat')>=0)     pages.push(rpCat(d,monLbl,specs,chartType));
+  if(secs.indexOf('trend')>=0)   pages.push(rpTrend(d,monLbl,specs,yr));
+  if(secs.indexOf('summary')>=0) pages.push(rpSummary(d,monLbl));
+  deck.className='rp-deck rp-t'+rpTheme;
+  deck.innerHTML=pages.length?pages.join(''):'<div style="color:var(--muted);padding:40px">เลือกอย่างน้อย 1 หน้า</div>';
+  var dark=(rpTheme===2);
+  requestAnimationFrame(function(){
+    specs.forEach(function(sp){ var el=document.getElementById(sp.id); if(!el||typeof Chart==='undefined')return; try{ rpCharts[sp.id]=new Chart(el.getContext('2d'),sp.cfg(dark)); }catch(e){} });
+  });
 }
 
 // ══════════════════════════════════════════════
