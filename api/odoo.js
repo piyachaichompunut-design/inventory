@@ -687,6 +687,24 @@ export async function odooUploadAttachment(resModel, resId, buffer, mimetype, na
 
 // ── ค้นหาเอกสารจาก keyword สำหรับ /รายงาน ──────────────────────────────────────
 // คืน { id, name, model } หรือ null ถ้าไม่เจอ
+// เลือกเอกสารที่ "ตรงเลข + ยัง active" เมื่อเลขซ้ำข้ามบริษัท (มี 4 บริษัท)
+//   ⚠️ เดิมหยิบใบแรกที่ Odoo คืนมา → เคยไปหยิบใบที่ "ยกเลิก (cancel)" ของคนละบริษัท (มั่ว)
+//   ตอนนี้: ตัดใบ cancel ทิ้งถ้ามีใบ active, แล้วเรียงตาม exact-name + สถานะที่ยัง active สุด
+function pickActiveDoc(rows, kw, kind) {
+  if (!rows || !rows.length) return null;
+  const bare = String(kw || '').replace(/^(po|so|pr)\s*0*/i, '').replace(/\s+/g, '').toLowerCase();
+  const nm = r => String(r.name || '').replace(/\s+/g, '').toLowerCase();
+  const exactRank = r => { const n = nm(r); return (n === bare || n === 'po' + bare || n === 'so' + bare || n === 'pr' + bare) ? 0 : 1; };
+  const rankMap = kind === 'so'
+    ? { sale: 0, done: 1, sent: 3, draft: 4, cancel: 9 }
+    : { purchase: 0, done: 1, 'to approve': 2, sent: 3, draft: 4, cancel: 9 };
+  const stateRank = r => (rankMap[r.state] !== undefined ? rankMap[r.state] : 5);
+  // ถ้ามีใบที่ไม่ถูกยกเลิก → ใช้เฉพาะใบเหล่านั้น
+  const active = rows.filter(r => r.state !== 'cancel');
+  const pool = active.length ? active : rows;
+  return pool.slice().sort((a, b) => (exactRank(a) - exactRank(b)) || (stateRank(a) - stateRank(b)))[0];
+}
+
 export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const words = smartWords(keyword);
   // ถอด prefix po/so/pr ออก เผื่อ Odoo เก็บชื่อเอกสารเป็นเลขล้วน (เช่น "2606066" ไม่มี "PO" นำหน้า)
@@ -697,10 +715,10 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
     for (const kw of tryKeywords) {
       const rows = await safeSearchRead('purchase.order',
         withCompany(['|', ['name', 'ilike', kw], ['partner_ref', 'ilike', kw]], companyId),
-        ['id', 'name', 'partner_id'], 5);
+        ['id', 'name', 'partner_id', 'state', 'company_id'], 10);
       if (rows.length) {
-        const best = sortExactFirst(rows, kw)[0];
-        return { id: best.id, name: best.name, model: 'purchase.order' };
+        const best = pickActiveDoc(rows, kw, 'po');
+        return { id: best.id, name: best.name, model: 'purchase.order', company: Array.isArray(best.company_id) ? best.company_id[1] : '' };
       }
     }
     return null;
@@ -710,10 +728,10 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
     for (const kw of tryKeywords) {
       const rows = await safeSearchRead('sale.order',
         withCompany(['|', ['name', 'ilike', kw], ['client_order_ref', 'ilike', kw]], companyId),
-        ['id', 'name', 'partner_id'], 5);
+        ['id', 'name', 'partner_id', 'state', 'company_id'], 10);
       if (rows.length) {
-        const best = sortExactFirst(rows, kw)[0];
-        return { id: best.id, name: best.name, model: 'sale.order' };
+        const best = pickActiveDoc(rows, kw, 'so');
+        return { id: best.id, name: best.name, model: 'sale.order', company: Array.isArray(best.company_id) ? best.company_id[1] : '' };
       }
     }
     return null;
@@ -2743,6 +2761,7 @@ export async function odooDocDetail(model, id) {
     const { prName, prBy, prPurpose } = await lookupPrForPO(r.order_line, id, poCoId);
     doc = {
       name: 'PO ' + r.name,
+      company: Array.isArray(r.company_id) ? r.company_id[1] : '',
       partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ผู้ขาย',
       date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0,
       poNote: noteClean, jobName,
@@ -2751,7 +2770,7 @@ export async function odooDocDetail(model, id) {
       lines: linesMapped
     };
   } else if (model === 'sale.order') {
-    const rows = await searchRead('sale.order', [['id','=',id]], ['name','partner_id','date_order','amount_total'], 1);
+    const rows = await searchRead('sale.order', [['id','=',id]], ['name','partner_id','date_order','amount_total','company_id'], 1);
     if (!rows.length) return null;
     const r = rows[0];
     const lines = await searchRead('sale.order.line', [['order_id','=',id]], ['product_id','name','product_uom_qty','product_uom'], 50);
@@ -2765,7 +2784,8 @@ export async function odooDocDetail(model, id) {
       const pk = (picks || []).find(pk => pk.scheduled_date);
       if (pk) deliverDate = String(pk.scheduled_date || '').slice(0,10);
     } catch (e) { /* ไม่มี field sale_id → ข้าม */ }
-    doc = { name: 'SO ' + r.name, partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ลูกค้า',
+    doc = { name: 'SO ' + r.name, company: Array.isArray(r.company_id) ? r.company_id[1] : '',
+      partner: Array.isArray(r.partner_id) ? r.partner_id[1] : '', partnerLabel: 'ลูกค้า',
       date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0, jobName,
       lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_uom_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
   } else if (model === 'purchase.request') {
