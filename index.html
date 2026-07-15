@@ -1710,6 +1710,8 @@ function appLogout(){
     <div class="thdr">
       <div style="font-weight:700;font-size:15px">รายการงาน <span id="tcnt" style="color:var(--muted);font-size:13px"></span></div>
       <div style="display:flex;gap:8px;align-items:center">
+        <span id="sel-count-lbl" style="font-size:12px;font-weight:800;color:#16a34a"></span>
+        <button id="sel-clear-btn" class="btn bx" onclick="clearSel()" style="display:none;font-size:12px">✕ ล้างที่เลือก</button>
         <!-- Print dropdown -->
         <div style="position:relative" id="task-print-wrap">
           <button class="btn bx" onclick="toggleTaskPrintDd()" id="task-print-dd-btn" style="font-size:13px">🖨️ ปริ้นซ์ ▾</button>
@@ -1730,7 +1732,7 @@ function appLogout(){
     </div>
     <div class="tw"><table>
       <thead><tr>
-        <th style="width:44px;text-align:center">#</th>
+        <th style="width:56px;text-align:center"><input type="checkbox" id="selAllChk" onclick="toggleSelAll(this)" title="เลือกทุกงานที่กรองอยู่ (ทุกหน้า)" style="width:16px;height:16px;cursor:pointer;accent-color:#16a34a"><div style="font-size:11px;margin-top:2px">#</div></th>
         <th>หัวข้องาน / รายละเอียด</th>
         <th style="width:120px;text-align:center">วันดำเนินการ</th>
         <th style="width:110px;text-align:center">สถานะ</th>
@@ -4550,7 +4552,8 @@ function renderTable(){
       var bdClr=stClr[s]||'#2563eb';
       var rowOpacity=isCancel?'opacity:.65':'';
       return '<tr style="'+rowOpacity+'">'+
-        '<td>'+
+        '<td style="text-align:center;vertical-align:middle">'+
+          '<input type="checkbox" class="rowChk" data-id="'+tid+'" '+(selTasks[tid]?'checked':'')+' onclick="toggleRowSel(this)" title="เลือกงานนี้เพื่อปริ้นซ์" style="width:17px;height:17px;cursor:pointer;accent-color:#16a34a;margin-bottom:6px">'+
           '<div style="width:28px;height:28px;border-radius:50%;background:'+bdClr+';color:#fff;font-size:12px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto">'+(start+i+1)+'</div>'+
         '</td>'+
         // Main task info
@@ -4587,6 +4590,35 @@ function renderTable(){
     }).join('');
   }
   renderPag();
+  updateSelUI();
+}
+
+// ── เลือกงาน (checkbox) เพื่อปริ้นซ์เฉพาะที่เลือก — จำข้ามหน้าได้ ──
+var selTasks = {};   // { id: true }
+function selCount(){ return Object.keys(selTasks).filter(function(k){return selTasks[k];}).length; }
+function toggleRowSel(cb){
+  var id=cb.getAttribute('data-id');
+  if(cb.checked) selTasks[id]=true; else delete selTasks[id];
+  updateSelUI();
+}
+function toggleSelAll(cb){
+  // เลือก/ยกเลิก "ทุกงานที่กรองอยู่" (ทุกหน้า ไม่ใช่แค่หน้านี้)
+  if(cb.checked) filteredTasks.forEach(function(t){ selTasks[safe(t['ID'])]=true; });
+  else           filteredTasks.forEach(function(t){ delete selTasks[safe(t['ID'])]; });
+  renderTable();   // วาดใหม่ให้ติ๊กตรงกับสถานะ
+}
+function clearSel(){ selTasks={}; renderTable(); }
+function updateSelUI(){
+  var n=selCount();
+  var lbl=document.getElementById('sel-count-lbl'); if(lbl) lbl.textContent = n ? ('✓ เลือก '+n+' งาน') : '';
+  var clr=document.getElementById('sel-clear-btn'); if(clr) clr.style.display = n ? 'inline-flex' : 'none';
+  var all=document.getElementById('selAllChk');
+  if(all){
+    var f=filteredTasks.length;
+    var sc=filteredTasks.filter(function(t){return selTasks[safe(t['ID'])];}).length;
+    all.checked = f>0 && sc===f;
+    all.indeterminate = sc>0 && sc<f;
+  }
 }
 function toggleTaskPrintDd(){
   var dd=document.getElementById('task-print-dd');
@@ -4603,7 +4635,10 @@ document.addEventListener('click',function(e){
 // ── Print Tasks ────────────────────────────────
 function printTasks(docTitle){
   if(!docTitle) docTitle='รายการประจำวัน';
-  if(!filteredTasks.length){ toast('ไม่มีรายการให้ปริ้นซ์','error'); return; }
+  // มีการติ๊กเลือกงาน → ปริ้นซ์เฉพาะที่เลือก | ไม่ได้เลือก → ปริ้นซ์ทั้งหมดที่กรองอยู่
+  var sel = (typeof allTasks!=='undefined'&&allTasks) ? allTasks.filter(function(t){return selTasks[safe(t['ID'])];}) : [];
+  var printList = sel.length ? sel : filteredTasks;
+  if(!printList.length){ toast('ไม่มีรายการให้ปริ้นซ์','error'); return; }
 
   var thM=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   var now=new Date();
@@ -4632,6 +4667,7 @@ function printTasks(docTitle){
     var dpL={today:'วันนี้',tomorrow:'พรุ่งนี้','3days':'3 วันข้างหน้า','7days':'7 วันข้างหน้า',week:'สัปดาห์นี้',month:'เดือนนี้',overdue:'เลยกำหนด'};
     if(dpL[curDP]) fParts.push(dpL[curDP]);
   }
+  if(sel.length) fParts.unshift('เลือกเฉพาะ '+sel.length+' งาน');
   var filterLine = fParts.length ? fParts.join(' · ') : 'ทั้งหมด';
 
   // Color maps
@@ -4642,14 +4678,14 @@ function printTasks(docTitle){
 
   // Summary counts
   var cnts={};
-  filteredTasks.forEach(function(t){var s=t['Task Status']||'To Do';cnts[s]=(cnts[s]||0)+1;});
+  printList.forEach(function(t){var s=t['Task Status']||'To Do';cnts[s]=(cnts[s]||0)+1;});
   var summaryHtml=Object.keys(cnts).map(function(s){
     var c=sColor[s]||'#2563eb';
     return '<span style="background:'+c+';color:#fff;border-radius:6px;padding:3px 10px;font-weight:900;margin-right:6px">'+s+' '+cnts[s]+'</span>';
   }).join('');
 
   // Build rows — compact but readable
-  var rows=filteredTasks.map(function(t,i){
+  var rows=printList.map(function(t,i){
     var st2=t['Task Status']||'To Do';
     var sc =sColor[st2]||'#2563eb';
     var sbg=sBg[st2]||'#fff';
@@ -4709,7 +4745,7 @@ function printTasks(docTitle){
     '</tr>';
   }).join('');
 
-  var n = filteredTasks.length;
+  var n = printList.length;
   // scale: target ~26 rows max on portrait A4; fewer rows = bigger font
   // base font 13px at 26 rows; scale up proportionally, cap at 18px
   var baseFontPx = Math.min(18, Math.max(10, Math.floor(340 / Math.max(n, 5))));
