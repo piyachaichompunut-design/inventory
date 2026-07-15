@@ -1848,17 +1848,11 @@ export default async function handler(req, res) {
         if (repDocType !== 'picking') {
           try {
             const { odooFindDoc } = await import('./odoo.js');
-            const { keyword: repKwClean, company: repCompany, explicit: repCoExplicit } = parseCompany(repKw);
-            // ระบุบริษัท (md/cg/sep/akn) → ใช้บริษัทนั้น
-            // ไม่ระบุ → "ยึดอาคเนย์ (id 1) ก่อนเสมอ" เพราะเลขเอกสารซ้ำข้ามบริษัทได้ (มี 4 บริษัท)
-            //   ไม่เจอในอาคเนย์ค่อย fallback ค้นทุกบริษัท (เผื่อเลขนั้นอยู่บริษัทอื่นล้วน เช่น PR บางใบ)
-            let doc;
-            if (repCoExplicit) {
-              doc = await odooFindDoc(repDocType, repKwClean, null, repCompany.id);
-            } else {
-              doc = await odooFindDoc(repDocType, repKwClean, null, 1)
-                 || await odooFindDoc(repDocType, repKwClean, null, null);
-            }
+            const { keyword: repKwClean, company: repCompany } = parseCompany(repKw);
+            // ยึดตามคำสั่งเป๊ะ: ระบุบริษัท (md/cg/sep/akn) → บริษัทนั้น | ไม่ระบุ → อาคเนย์ (ค่าเริ่มต้น id 1)
+            // ⚠️ ห้ามค้นข้ามบริษัทเด็ดขาด — เลขเอกสารซ้ำข้ามบริษัทได้ (มี 4 บริษัท) เคยหยิบผิดบริษัทมาแล้ว
+            const repCoId = repCompany && repCompany.id ? repCompany.id : 1;
+            const doc = await odooFindDoc(repDocType, repKwClean, null, repCoId);
             if (!doc) {
               await sendTelegramReply(chatId, '🔍 ไม่พบเอกสาร "' + repKwClean + '" ครับ');
               res.status(200).json({ ok: true }); return;
