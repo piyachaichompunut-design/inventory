@@ -742,7 +742,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       date: d.date || '',
       statusText: d.totalRemain > 0 ? '⚠️ ค้างรับ ' + d.totalRemain : (d.totalOrdered !== undefined ? '✅ รับครบ' : ''),
       statusColor: d.totalRemain > 0 ? 'red' : 'green',
-      note: d.poNote || '',
+      note: [d.poNote, d.description, d.prPurpose ? 'วัตถุประสงค์: ' + d.prPurpose : ''].filter(Boolean).join('\n') || '',
       lines: (d.lines || []).map(l => ({
         name: l.name, qty: l.qty, uom: l.uom,
         received: l.received, remain: l.remain
@@ -794,6 +794,8 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
 
     // วัตถุประสงค์ / เลข PR / ผู้ขอ (ต้นทางก่อนเป็น PO) — ตัวหนาให้ชัด
     const purposeLine = d.prPurpose ? '🎯 <b>วัตถุประสงค์: ' + tgEsc(d.prPurpose) + '</b>\n' : '';
+    // รายละเอียด PR (ช่อง Description = "ใช้ในงาน : ...")
+    const descLine = d.description ? '📝 <b>' + tgEsc(d.description.slice(0, 350)) + (d.description.length > 350 ? '…' : '') + '</b>\n' : '';
     const prInfoLine = (d.prName || d.prBy)
       ? '📄 <b>PR: ' + tgEsc(d.prName || '-') +
         (d.prBy ? '  •  👤 ผู้ขอ: ' + tgEsc(d.prBy) : '') + '</b>\n'
@@ -803,6 +805,7 @@ async function sendReportDoc(fromChatId, doc, target, lineGroups) {
       (d.jobName ? '🏷️ <b>ชื่องาน: ' + tgEsc(d.jobName) + '</b>\n' : '') +
       (d.partner ? (d.partnerLabel || 'คู่ค้า') + ': ' + d.partner + '\n' : '') +
       (d.origin ? '📄 Source: ' + d.origin + '\n' : '') +
+      descLine +
       purposeLine +
       prInfoLine +
       '📅 วันที่: ' + (d.date || '-') + '\n' +
