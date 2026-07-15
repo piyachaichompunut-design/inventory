@@ -2769,12 +2769,30 @@ export async function odooDocDetail(model, id) {
       date: deliverDate || String(r.date_order || '').slice(0,10), total: r.amount_total || 0, jobName,
       lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_uom_qty || 0, uom: Array.isArray(l.product_uom) ? l.product_uom[1] : '' })) };
   } else if (model === 'purchase.request') {
-    const rows = await searchRead('purchase.request', [['id','=',id]], ['name','requested_by','date_start'], 1);
+    const clean0 = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').trim();
+    // auto-detect custom field "วัตถุประสงค์ในการซื้อ" (ชื่อ technical ไม่แน่นอน → หาเจอจาก label)
+    let purposeField = null;
+    try {
+      const fg = await odooFieldsGet('purchase.request');
+      for (const tech of Object.keys(fg)) {
+        const meta = fg[tech] || {};
+        if (!['char', 'text', 'selection', 'many2one'].includes(meta.type)) continue;
+        if (tech === 'description') continue;
+        if (/วัตถุประสงค์/.test(String(meta.string || ''))) { purposeField = tech; break; }
+      }
+    } catch (e) {}
+    const hdr = ['name', 'requested_by', 'date_start', 'description'];
+    if (purposeField && !hdr.includes(purposeField)) hdr.push(purposeField);
+    const rows = await searchRead('purchase.request', [['id','=',id]], hdr, 1);
     if (!rows.length) return null;
     const r = rows[0];
+    let purposeVal = '';
+    if (purposeField) { const pv = r[purposeField]; purposeVal = Array.isArray(pv) ? pv[1] : (typeof pv === 'string' ? pv : ''); }
     const lines = await searchRead('purchase.request.line', [['request_id','=',id]], ['product_id','name','product_qty','product_uom_id'], 50);
     doc = { name: 'PR ' + r.name, partner: Array.isArray(r.requested_by) ? r.requested_by[1] : '', partnerLabel: 'ผู้ขอ',
       date: String(r.date_start || '').slice(0,10), total: 0,
+      description: clean0(r.description),   // "ใช้ในงาน : ..." (ช่อง Description)
+      prPurpose: clean0(purposeVal),        // "เพื่อส่งชุบกัลวาไนซ์" (วัตถุประสงค์ในการซื้อ)
       lines: lines.map(l => ({ name: Array.isArray(l.product_id) ? l.product_id[1] : (l.name || ''), qty: l.product_qty || 0, uom: Array.isArray(l.product_uom_id) ? l.product_uom_id[1] : '' })) };
   } else if (model === 'mrp.production') {
     const rows = await searchRead('mrp.production', [['id','=',id]], ['name','product_id','product_qty','product_uom_id','date_start','origin','state'], 1);
