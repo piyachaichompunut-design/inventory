@@ -107,6 +107,17 @@ body{font-family:'Segoe UI',-apple-system,'Noto Sans Thai',Arial,sans-serif;back
 .fg label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
 .fg select,.fg input{padding:8px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;transition:.2s;font-family:inherit;cursor:pointer;color:var(--txt)}
 .fg select:focus,.fg input:focus{border-color:var(--pri);box-shadow:0 0 0 3px rgba(249,115,22,.1)}
+/* multi-select (ตัวกรองหมวดหมู่ เลือกได้หลายหมวด) */
+.msel{padding:8px 11px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;cursor:pointer;color:var(--txt);display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:37px}
+.msel:focus{border-color:var(--pri);box-shadow:0 0 0 3px rgba(249,115,22,.1)}
+.msel-caret{font-size:10px;color:var(--muted)}
+.msel-menu{position:absolute;z-index:70;top:100%;left:0;right:0;margin-top:4px;background:#fff;border:1.5px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);max-height:300px;overflow-y:auto;padding:6px}
+.msel-menu label{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px;font-weight:500;color:var(--txt);cursor:pointer;text-transform:none;letter-spacing:0}
+.msel-menu label:hover{background:rgba(249,115,22,.08)}
+.msel-menu input{width:16px;height:16px;cursor:pointer;accent-color:var(--pri);margin:0}
+.msel-menu .msel-hd{border-bottom:1px solid var(--border);margin-bottom:4px;font-weight:700}
+body.dark-mode .msel,body.dark-mode .msel-menu{background:#1e293b;color:#e2e8f0}
+body.dark-mode .msel-menu label{color:#e2e8f0}
 .fg.fs{flex:1;min-width:200px}
 
 /* ── BUTTONS ── */
@@ -1623,8 +1634,10 @@ function appLogout(){
     <div class="fg"><label>สถานะ</label>
       <select id="f-st" onchange="applyF()"><option value="All">ทั้งหมด</option><option value="To Do" selected>To Do</option><option value="Doing">Doing</option><option value="Done">Done</option><option value="Cancel">Cancel</option></select>
     </div>
-    <div class="fg"><label>หมวดหมู่</label>
-      <select id="f-cat" onchange="applyF()"><option value="All">ทั้งหมด</option></select>
+    <div class="fg" style="position:relative"><label>หมวดหมู่</label>
+      <div class="msel" id="f-cat-btn" tabindex="0" onclick="toggleCatMenu(event)"><span id="f-cat-lbl">ทั้งหมด</span><span class="msel-caret">▾</span></div>
+      <div class="msel-menu" id="f-cat-menu" style="display:none"></div>
+      <select id="f-cat" style="display:none"><option value="All">ทั้งหมด</option></select>
     </div>
     <div class="fg"><label>แจ้งเตือน</label>
       <select id="f-nf" onchange="applyF()"><option value="All">ทั้งหมด</option><option>แจ้งล่วงหน้า</option><option>ไม่แจ้งล่วงหน้า</option><option>งานด่วน</option></select>
@@ -4190,6 +4203,50 @@ function fillCatSels(cats) {
     el.innerHTML = '<option value="'+fv+'">'+first+'</option>';
     cats.forEach(function(c){ el.insertAdjacentHTML('beforeend','<option value="'+esc(c.name)+'">'+esc(c.name)+'</option>'); });
   });
+  buildCatMenu(cats);   // สร้างเมนู checkbox หมวดหมู่ (เลือกได้หลายหมวด)
+}
+
+// ── ตัวกรองหมวดหมู่แบบเลือกหลายหมวด (checkbox) ──
+var selCats = [];   // ว่าง = ทุกหมวด
+function buildCatMenu(cats){
+  var menu = document.getElementById('f-cat-menu');
+  if (!menu) return;
+  var html = '<label class="msel-hd"><input type="checkbox" id="f-cat-all" onchange="onCatAll(this)"><span>ทั้งหมด</span></label>';
+  cats.forEach(function(c){
+    html += '<label><input type="checkbox" class="f-cat-cb" value="'+esc(c.name)+'" onchange="onCatChange()"><span>'+esc(c.name)+'</span></label>';
+  });
+  menu.innerHTML = html;
+  syncCatChecks();
+}
+function toggleCatMenu(e){
+  e.stopPropagation();
+  var m = document.getElementById('f-cat-menu');
+  if (m) m.style.display = (m.style.display==='none') ? 'block' : 'none';
+}
+document.addEventListener('click', function(e){
+  var m = document.getElementById('f-cat-menu');
+  if (m && m.style.display!=='none' && !e.target.closest('#f-cat-menu') && !e.target.closest('#f-cat-btn')) m.style.display='none';
+});
+function onCatAll(cb){
+  selCats = [];
+  document.querySelectorAll('.f-cat-cb').forEach(function(x){ x.checked=false; });
+  if (cb) cb.checked = true;
+  updateCatBtn(); applyF();
+}
+function onCatChange(){
+  selCats = [];
+  document.querySelectorAll('.f-cat-cb').forEach(function(x){ if(x.checked) selCats.push(x.value); });
+  var all = document.getElementById('f-cat-all'); if (all) all.checked = selCats.length===0;
+  updateCatBtn(); applyF();
+}
+function syncCatChecks(){
+  document.querySelectorAll('.f-cat-cb').forEach(function(x){ x.checked = selCats.indexOf(x.value)>=0; });
+  var all = document.getElementById('f-cat-all'); if (all) all.checked = selCats.length===0;
+  updateCatBtn();
+}
+function updateCatBtn(){
+  var l = document.getElementById('f-cat-lbl'); if (!l) return;
+  l.textContent = selCats.length===0 ? 'ทั้งหมด' : (selCats.length===1 ? selCats[0] : selCats.length+' หมวด');
 }
 function fillSaleSel(tasks) {
   var names = [];
@@ -4391,7 +4448,6 @@ function updateDFInfo(preset, range, count) {
 function applyF() {
   var q  = document.getElementById('f-q').value.toLowerCase();
   var st = document.getElementById('f-st').value;
-  var ca = document.getElementById('f-cat').value;
   var nf = document.getElementById('f-nf').value;
   var dr = document.getElementById('f-dr').value;
   var mn = document.getElementById('f-mn').value;
@@ -4400,7 +4456,7 @@ function applyF() {
 
   filteredTasks = allTasks.filter(function(t){
     if (st!=='All' && t['Task Status']!==st)   return false;
-    if (ca!=='All' && t['Categories']!==ca)    return false;
+    if (selCats.length && selCats.indexOf(t['Categories'])<0) return false;
     if (nf!=='All' && t['Notification']!==nf)  return false;
     if (dr!=='All' && t['Duration']!==dr)      return false;
     if (sl!=='All' && t['Sales Name']!==sl)    return false;
@@ -4433,7 +4489,8 @@ function resetF(){
   var setV = function(id, v){ var e=document.getElementById(id); if(e) e.value=v; };
   setV('f-q','');
   setV('f-st','To Do');   // reset สถานะกลับเป็น To Do
-  ['f-cat','f-nf','f-dr','f-sl'].forEach(function(id){ setV(id,'All'); });
+  ['f-nf','f-dr','f-sl'].forEach(function(id){ setV(id,'All'); });
+  selCats = []; syncCatChecks();   // ล้างตัวกรองหมวดหมู่ (หลายหมวด)
   setV('f-mn','');
   setV('f-df','');
   setV('f-dt2','');
@@ -4557,7 +4614,6 @@ function printTasks(docTitle){
   var fParts=[];
   var q  =document.getElementById('f-q').value.trim();
   var fst=document.getElementById('f-st').value;
-  var cat=document.getElementById('f-cat').value;
   var nf =document.getElementById('f-nf').value;
   var dr =document.getElementById('f-dr').value;
   var mn =document.getElementById('f-mn').value;
@@ -4566,7 +4622,7 @@ function printTasks(docTitle){
   var dt2=document.getElementById('f-dt2').value;
   if(q)               fParts.push('"'+esc(q)+'"');
   if(fst&&fst!=='All') fParts.push('สถานะ: '+esc(fst));
-  if(cat&&cat!=='All') fParts.push('หมวดหมู่: '+esc(cat));
+  if(selCats.length)   fParts.push('หมวดหมู่: '+(selCats.length===1?esc(selCats[0]):selCats.length+' หมวด'));
   if(nf &&nf!=='All')  fParts.push('แจ้งเตือน: '+esc(nf));
   if(dr &&dr!=='All')  fParts.push('ประเภท: '+esc(dr));
   if(mn &&mn!=='All')  fParts.push('เดือน: '+esc(mn));
