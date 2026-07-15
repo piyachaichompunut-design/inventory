@@ -1447,6 +1447,7 @@ function appLogout(){
   <div class="ntab" data-ico="📝" onclick="switchTab('wire')">📝 Note สายไฟ</div>
   <div class="ntab" data-ico="🏭" onclick="switchTab('wkpi')">🏭 KPI ฝ่ายคลังสินค้า</div>
   <div class="ntab" data-ico="📑" onclick="switchTab('docrs')">📑 เอกสาร รับ-ส่ง</div>
+  <div class="ntab" data-ico="⛽" onclick="switchTab('fuel')">⛽ น้ำมันดีเซล</div>
   <div class="ntab" data-ico="📥" onclick="location.href='/import-odoo.html'" style="background:linear-gradient(135deg,#e8590c,#ff922b);color:#fff">📥 นำเข้า Odoo</div>
 </div>
 
@@ -1743,6 +1744,102 @@ function appLogout(){
       <tbody id="tasks-tb"><tr><td colspan="14"><div class="ldr"><div class="sp"></div> กำลังโหลด...</div></td></tr></tbody>
     </table></div>
     <div class="pag" id="pag"></div>
+  </div>
+</div>
+
+<!-- ═══ TAB: FUEL (รายงานน้ำมันดีเซล) ═══ -->
+<div class="pane" id="tab-fuel">
+  <style>
+    .fu-wrap{display:flex;flex-direction:column;gap:16px}
+    .fu-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;
+      background:linear-gradient(135deg,#0f172a,#1e3a8a);border-radius:16px;padding:20px 24px;color:#fff;box-shadow:0 8px 24px rgba(30,58,138,.28)}
+    .fu-title{font-size:22px;font-weight:900;letter-spacing:.3px}
+    .fu-sub{font-size:12.5px;opacity:.85;margin-top:2px}
+    .fu-head-ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .fu-head-ctrl select{padding:8px 12px;border-radius:9px;border:none;font-size:13px;font-weight:700;background:rgba(255,255,255,.15);color:#fff;cursor:pointer}
+    .fu-head-ctrl select option{color:#111}
+    .fu-btn{padding:9px 16px;border:none;border-radius:9px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;transition:.15s}
+    .fu-btn-print{background:#fbbf24;color:#3b2606;box-shadow:0 3px 10px rgba(251,191,36,.4)}
+    .fu-btn-print:hover{transform:translateY(-1px)}
+    .fu-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+    .fu-kpi{border-radius:15px;padding:16px 18px;color:#fff;position:relative;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.14)}
+    .fu-kpi .fu-kpi-ic{position:absolute;right:12px;top:10px;font-size:34px;opacity:.28}
+    .fu-kpi .fu-kpi-l{font-size:12px;font-weight:700;opacity:.92}
+    .fu-kpi .fu-kpi-v{font-size:25px;font-weight:900;margin-top:5px;line-height:1.1}
+    .fu-kpi .fu-kpi-s{font-size:11.5px;opacity:.9;margin-top:3px}
+    .fu-grid{display:grid;grid-template-columns:360px 1fr;gap:16px}
+    @media(max-width:920px){.fu-grid{grid-template-columns:1fr}}
+    .fu-card{background:var(--card);border:1px solid var(--border);border-radius:15px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+    .fu-card-t{font-size:14.5px;font-weight:800;color:var(--txt);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+    .fu-fg{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
+    .fu-fg label{font-size:11.5px;font-weight:700;color:var(--muted)}
+    .fu-fg input,.fu-fg select{padding:9px 11px;border:1.5px solid var(--border);border-radius:9px;font-size:13.5px;background:var(--card);color:var(--txt);outline:none;font-family:inherit}
+    .fu-fg input:focus,.fu-fg select:focus{border-color:var(--pri)}
+    .fu-seg{display:flex;gap:8px}
+    .fu-seg button{flex:1;padding:10px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--muted);font-weight:800;font-size:13px;cursor:pointer;font-family:inherit}
+    .fu-seg button.on-in{border-color:#10b981;background:#10b98118;color:#059669}
+    .fu-seg button.on-out{border-color:#ef4444;background:#ef444418;color:#dc2626}
+    .fu-save{width:100%;padding:12px;border:none;border-radius:11px;background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:#fff;font-weight:900;font-size:14px;cursor:pointer;font-family:inherit;margin-top:4px}
+    .fu-save:hover{filter:brightness(1.06)}
+    .fu-clr{width:100%;padding:9px;border:1.5px solid var(--border);border-radius:10px;background:transparent;color:var(--muted);font-weight:700;font-size:12.5px;cursor:pointer;font-family:inherit;margin-top:7px}
+    .fu-tbl{width:100%;border-collapse:collapse;font-size:13px}
+    .fu-tbl th{background:linear-gradient(135deg,#1e293b,#334155);color:#fff;padding:10px 12px;text-align:left;font-size:11.5px;font-weight:700;white-space:nowrap}
+    .fu-tbl td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--txt);white-space:nowrap}
+    .fu-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:800}
+    .fu-del{background:#fff5f5;border:1.5px solid #fecaca;color:#ef4444;padding:4px 9px;border-radius:7px;font-size:12px;cursor:pointer}
+    body.dark-mode .fu-tbl th{background:linear-gradient(135deg,#0f172a,#1e293b)}
+    body.dark-mode .fu-seg button{background:#0f172a}
+  </style>
+  <div class="fu-wrap">
+    <div class="fu-head">
+      <div><div class="fu-title">⛽ รายงานน้ำมันดีเซล</div><div class="fu-sub">สรุปการรับเข้า–เบิกจ่ายน้ำมัน · รถโฟล์คลิฟท์ 5 คัน</div></div>
+      <div class="fu-head-ctrl">
+        <select id="fu-mn" onchange="renderFuel()"></select>
+        <select id="fu-yr" onchange="renderFuel()"></select>
+        <button class="fu-btn fu-btn-print" onclick="printFuel()">🖨️ ปริ้นซ์รายงานเดือนนี้</button>
+      </div>
+    </div>
+    <div class="fu-kpis" id="fu-kpis"></div>
+    <div class="fu-grid">
+      <div class="fu-card">
+        <div class="fu-card-t">➕ บันทึกน้ำมันประจำวัน</div>
+        <input type="hidden" id="fu-f-id">
+        <div class="fu-fg"><label>ประเภท</label>
+          <div class="fu-seg">
+            <button type="button" id="fu-seg-in"  onclick="fuSetKind('รับเข้า')">📥 รับเข้า (ซื้อ)</button>
+            <button type="button" id="fu-seg-out" onclick="fuSetKind('จ่าย')">⛽ เบิกจ่าย</button>
+          </div>
+        </div>
+        <div class="fu-fg"><label>วันที่</label><input type="date" id="fu-f-date"></div>
+        <div class="fu-fg" id="fu-fg-veh"><label>รถ / แผนก</label>
+          <select id="fu-f-veh"></select>
+        </div>
+        <div class="fu-fg"><label>จำนวน (ลิตร)</label><input type="number" id="fu-f-liters" min="0" step="0.01" placeholder="0" oninput="fuCalc()"></div>
+        <div class="fu-fg"><label>ยอดเงินรวม (บาท)</label><input type="number" id="fu-f-baht" min="0" step="0.01" placeholder="0" oninput="fuCalc()"></div>
+        <div class="fu-fg"><label>ราคา/ลิตร (บาท) — คิดให้อัตโนมัติ</label><input type="number" id="fu-f-ppl" min="0" step="0.01" placeholder="0"></div>
+        <div class="fu-fg"><label id="fu-lbl-person">คนขับ</label><input type="text" id="fu-f-person" placeholder="ชื่อ..."></div>
+        <div class="fu-fg"><label>หมายเหตุ</label><input type="text" id="fu-f-note" placeholder="(ถ้ามี)"></div>
+        <button class="fu-save" onclick="saveFuelEntry()">💾 บันทึก</button>
+        <button class="fu-clr" onclick="fuResetForm()">✕ ล้างฟอร์ม</button>
+      </div>
+      <div class="fu-card">
+        <div class="fu-card-t">📊 เปรียบเทียบการใช้น้ำมันแต่ละคัน (ลิตร)</div>
+        <canvas id="fu-chart-veh" height="160"></canvas>
+      </div>
+    </div>
+    <div class="fu-card">
+      <div class="fu-card-t">📈 การใช้น้ำมันรายวัน (ลิตร)</div>
+      <canvas id="fu-chart-day" height="80"></canvas>
+    </div>
+    <div class="fu-card">
+      <div class="fu-card-t">📋 รายการบันทึกเดือนนี้ (<span id="fu-cnt">0</span>)</div>
+      <div style="overflow-x:auto">
+        <table class="fu-tbl">
+          <thead><tr><th>วันที่</th><th>ประเภท</th><th>รถ/แผนก</th><th style="text-align:right">ลิตร</th><th style="text-align:right">บาท</th><th style="text-align:right">บาท/ล.</th><th>คนขับ/ผู้ขาย</th><th>หมายเหตุ</th><th></th></tr></thead>
+          <tbody id="fu-tb"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -4172,7 +4269,7 @@ function switchTab(t) {
   document.querySelectorAll('.pane').forEach(function(p){ p.classList.remove('active'); });
   document.querySelectorAll('.ntab').forEach(function(x){ x.classList.remove('active'); });
   document.getElementById('tab-'+t).classList.add('active');
-  var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi','docrs'].indexOf(t);
+  var idx=['dashboard','tasks','calendar','categories','weight','loedaroon','ot','emp','kpi','wire','wkpi','docrs','fuel'].indexOf(t);
   document.querySelectorAll('.ntab')[idx].classList.add('active');
   // โหลดข้อมูลใหม่ทุกครั้งที่เปลี่ยนแท็บ
   if(t==='dashboard')  { loadTasks(); loadDash(); }
@@ -4191,6 +4288,181 @@ function switchTab(t) {
   if(t==='wire')       loadWireNotes();
   if(t==='wkpi')       initWKPI();
   if(t==='docrs')      initDocRS();
+  if(t==='fuel')       loadFuel();
+}
+
+// ══════════════════════════════════════════════
+//  FUEL — รายงานน้ำมันดีเซล (รถโฟล์คลิฟท์ 5 คัน)
+// ══════════════════════════════════════════════
+var FU_VEH = ['คลังสินค้า','โรงเสาไฟ','โรงเหล็ก','โรงป้าย','โรงการ์ดเรล'];
+var FU_COL = {'คลังสินค้า':'#3b82f6','โรงเสาไฟ':'#f59e0b','โรงเหล็ก':'#8b5cf6','โรงป้าย':'#ec4899','โรงการ์ดเรล':'#10b981'};
+var fuelLogs=[], fuCharts={}, fuInited=false, fuKind='จ่าย';
+function fuN(x,d){ d=d||0; return (Number(x)||0).toLocaleString('th-TH',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+function fuDate(s){ var d=new Date(s); if(isNaN(d))return esc(String(s)); return d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543); }
+function fuInitControls(){
+  if(fuInited) return; fuInited=true;
+  var now=new Date();
+  var thM=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  document.getElementById('fu-mn').innerHTML = thM.map(function(m,i){return '<option value="'+(i+1)+'"'+(i===now.getMonth()?' selected':'')+'>'+m+'</option>';}).join('');
+  var cy=now.getFullYear(), ys='';
+  for(var y=cy-2;y<=cy+1;y++) ys+='<option value="'+y+'"'+(y===cy?' selected':'')+'>'+(y+543)+'</option>';
+  document.getElementById('fu-yr').innerHTML=ys;
+  document.getElementById('fu-f-veh').innerHTML = FU_VEH.map(function(v){return '<option>'+v+'</option>';}).join('');
+  document.getElementById('fu-f-date').value = new Date(Date.now()+7*3600*1000).toISOString().slice(0,10);
+  fuSetKind('จ่าย');
+}
+function fuSetKind(k){
+  fuKind=k;
+  document.getElementById('fu-seg-in').className  = k==='รับเข้า'?'on-in':'';
+  document.getElementById('fu-seg-out').className = k==='จ่าย'?'on-out':'';
+  document.getElementById('fu-fg-veh').style.display = k==='จ่าย'?'flex':'none';
+  document.getElementById('fu-lbl-person').textContent = k==='รับเข้า'?'ผู้ขาย / ปั๊ม':'คนขับ';
+}
+function fuCalc(){
+  var l=parseFloat(document.getElementById('fu-f-liters').value)||0;
+  var b=parseFloat(document.getElementById('fu-f-baht').value)||0;
+  if(l>0&&b>0) document.getElementById('fu-f-ppl').value=(b/l).toFixed(2);
+}
+function loadFuel(){
+  fuInitControls();
+  google.script.run.withSuccessHandler(function(rows){ fuelLogs=rows||[]; renderFuel(); })
+    .withFailureHandler(function(e){ toast('โหลดข้อมูลน้ำมันไม่สำเร็จ: '+(e&&e.message||e),'error'); })
+    .getFuelLogs();
+}
+function fuMonthLogs(){
+  var m=+document.getElementById('fu-mn').value, y=+document.getElementById('fu-yr').value;
+  return fuelLogs.filter(function(r){ var d=new Date(r.date); return !isNaN(d)&&(d.getMonth()+1)===m&&d.getFullYear()===y; });
+}
+function renderFuel(){
+  var logs=fuMonthLogs();
+  var inL=0,inB=0,outL=0,outCnt=0;
+  logs.forEach(function(r){ if(r.kind==='รับเข้า'){inL+=r.liters;inB+=r.baht;} else {outL+=r.liters;outCnt++;} });
+  var m=+document.getElementById('fu-mn').value, y=+document.getElementById('fu-yr').value;
+  var endT=new Date(y,m,0,23,59,59).getTime();
+  var stock=0; fuelLogs.forEach(function(r){ var d=new Date(r.date); if(isNaN(d)||d.getTime()>endT) return; stock+=(r.kind==='รับเข้า'?r.liters:-r.liters); });
+  var avg=inL>0?inB/inL:0;
+  var kpis=[
+    {l:'รับเข้า (เดือนนี้)',v:fuN(inL,1)+' ล.',s:'฿ '+fuN(inB,0),ic:'📥',g:'linear-gradient(135deg,#059669,#10b981)'},
+    {l:'เบิกจ่าย (เดือนนี้)',v:fuN(outL,1)+' ล.',s:outCnt+' ครั้ง',ic:'⛽',g:'linear-gradient(135deg,#dc2626,#f87171)'},
+    {l:'คงเหลือสต๊อก',v:fuN(stock,1)+' ล.',s:'ณ สิ้นเดือน',ic:'🛢️',g:'linear-gradient(135deg,#1d4ed8,#3b82f6)'},
+    {l:'ราคาเฉลี่ย',v:fuN(avg,2),s:'บาท / ลิตร',ic:'🏷️',g:'linear-gradient(135deg,#7c3aed,#a78bfa)'},
+    {l:'ค่าน้ำมันที่ซื้อ',v:'฿ '+fuN(inB,0),s:'เดือนนี้',ic:'💰',g:'linear-gradient(135deg,#b45309,#f59e0b)'}
+  ];
+  document.getElementById('fu-kpis').innerHTML=kpis.map(function(k){
+    return '<div class="fu-kpi" style="background:'+k.g+'"><div class="fu-kpi-ic">'+k.ic+'</div>'+
+      '<div class="fu-kpi-l">'+k.l+'</div><div class="fu-kpi-v">'+k.v+'</div><div class="fu-kpi-s">'+k.s+'</div></div>';
+  }).join('');
+  var perV=FU_VEH.map(function(v){ return logs.filter(function(r){return r.kind==='จ่าย'&&r.vehicle===v;}).reduce(function(s,r){return s+r.liters;},0); });
+  fuBar('fu-chart-veh','veh',FU_VEH,perV,FU_VEH.map(function(v){return FU_COL[v];}));
+  var days={}; logs.forEach(function(r){ if(r.kind!=='จ่าย')return; var d=String(r.date).slice(0,10); days[d]=(days[d]||0)+r.liters; });
+  var dk=Object.keys(days).sort();
+  fuBar('fu-chart-day','day',dk.map(function(d){return +d.slice(8)+'/'+ +d.slice(5,7);}),dk.map(function(d){return days[d];}),dk.map(function(){return '#3b82f6';}));
+  var tb=document.getElementById('fu-tb');
+  document.getElementById('fu-cnt').textContent=logs.length;
+  if(!logs.length){ tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px">— ยังไม่มีบันทึกในเดือนนี้ —</td></tr>'; return; }
+  tb.innerHTML=logs.map(function(r){
+    var isIn=r.kind==='รับเข้า';
+    var pill=isIn?'<span class="fu-pill" style="background:#a7f3c4;color:#065f46">รับเข้า</span>':'<span class="fu-pill" style="background:#fecaca;color:#991b1b">เบิกจ่าย</span>';
+    var vcol=FU_COL[r.vehicle]||'#94a3b8';
+    return '<tr>'+
+      '<td>'+fuDate(r.date)+'</td>'+'<td>'+pill+'</td>'+
+      '<td>'+(r.vehicle?'<span style="font-weight:700;color:'+vcol+'">'+esc(r.vehicle)+'</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td style="text-align:right;font-weight:700">'+fuN(r.liters,1)+'</td>'+
+      '<td style="text-align:right">'+fuN(r.baht,0)+'</td>'+
+      '<td style="text-align:right;color:var(--muted)">'+fuN(r.pricePerLiter,2)+'</td>'+
+      '<td>'+esc(r.person||'')+'</td>'+'<td style="color:var(--muted)">'+esc(r.note||'')+'</td>'+
+      '<td><button class="fu-del" onclick="delFuel(\''+r.id+'\')">🗑️</button></td></tr>';
+  }).join('');
+}
+function fuBar(canvasId,key,labels,data,colors){
+  var el=document.getElementById(canvasId); if(!el||typeof Chart==='undefined') return;
+  if(fuCharts[key]) fuCharts[key].destroy();
+  var dark=document.body.classList.contains('dark-mode');
+  fuCharts[key]=new Chart(el.getContext('2d'),{
+    type:'bar',
+    data:{labels:labels,datasets:[{data:data,backgroundColor:colors,borderRadius:8,maxBarThickness:64}]},
+    options:{responsive:true,maintainAspectRatio:true,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return c.parsed.y.toLocaleString('th-TH')+' ลิตร';}}}},
+      scales:{y:{beginAtZero:true,ticks:{color:dark?'#94a3b8':'#64748b'},grid:{color:dark?'#1e293b':'#eef2f7'}},
+        x:{ticks:{color:dark?'#94a3b8':'#64748b'},grid:{display:false}}}}
+  });
+}
+function fuResetForm(){
+  ['fu-f-id','fu-f-liters','fu-f-baht','fu-f-ppl','fu-f-person','fu-f-note'].forEach(function(id){document.getElementById(id).value='';});
+}
+function saveFuelEntry(){
+  var rec={
+    id:document.getElementById('fu-f-id').value||'',
+    date:document.getElementById('fu-f-date').value,
+    kind:fuKind,
+    vehicle:fuKind==='จ่าย'?document.getElementById('fu-f-veh').value:'',
+    liters:parseFloat(document.getElementById('fu-f-liters').value)||0,
+    baht:parseFloat(document.getElementById('fu-f-baht').value)||0,
+    pricePerLiter:parseFloat(document.getElementById('fu-f-ppl').value)||0,
+    person:document.getElementById('fu-f-person').value.trim(),
+    note:document.getElementById('fu-f-note').value.trim()
+  };
+  if(!rec.date){ toast('กรุณาเลือกวันที่','error'); return; }
+  if(rec.liters<=0){ toast('กรุณากรอกจำนวนลิตร','error'); return; }
+  google.script.run.withSuccessHandler(function(res){
+    if(res&&res.success){ toast('บันทึกน้ำมันแล้ว ✅','success'); fuResetForm(); loadFuel(); }
+    else toast('บันทึกไม่สำเร็จ: '+((res&&res.error)||''),'error');
+  }).withFailureHandler(function(e){ toast('ผิดพลาด: '+(e&&e.message||e),'error'); }).saveFuelLog(rec);
+}
+function delFuel(id){
+  if(!confirm('ลบรายการนี้?')) return;
+  google.script.run.withSuccessHandler(function(res){
+    if(res&&res.success){ toast('ลบแล้ว','success'); loadFuel(); } else toast('ลบไม่สำเร็จ','error');
+  }).withFailureHandler(function(e){ toast('ผิดพลาด: '+(e&&e.message||e),'error'); }).deleteFuelLog(id);
+}
+function printFuel(){
+  var logs=fuMonthLogs();
+  var mnSel=document.getElementById('fu-mn'), yrSel=document.getElementById('fu-yr');
+  var monthName=mnSel.options[mnSel.selectedIndex].text, yearBE=yrSel.options[yrSel.selectedIndex].text;
+  if(!logs.length){ toast('เดือนนี้ยังไม่มีข้อมูลให้ปริ้นซ์','error'); return; }
+  var inL=0,inB=0,outL=0,outB=0;
+  logs.forEach(function(r){ if(r.kind==='รับเข้า'){inL+=r.liters;inB+=r.baht;}else{outL+=r.liters;outB+=r.baht;} });
+  var perV=FU_VEH.map(function(v){
+    var vl=logs.filter(function(r){return r.kind==='จ่าย'&&r.vehicle===v;});
+    return {v:v,L:vl.reduce(function(s,r){return s+r.liters;},0),B:vl.reduce(function(s,r){return s+r.baht;},0),c:vl.length};
+  });
+  var maxL=Math.max.apply(null,perV.map(function(x){return x.L;}).concat([1]));
+  var vehRows=perV.map(function(x){
+    var pct=Math.round(x.L/maxL*100);
+    return '<tr><td><b>'+x.v+'</b></td><td style="text-align:right">'+x.L.toLocaleString('th-TH')+' ล.</td>'+
+      '<td style="text-align:right">'+x.B.toLocaleString('th-TH')+' ฿</td><td style="text-align:right">'+x.c+'</td>'+
+      '<td style="width:220px"><div style="background:#eef2f7;border-radius:6px;height:14px"><div style="width:'+pct+'%;height:14px;border-radius:6px;background:'+FU_COL[x.v]+'"></div></div></td></tr>';
+  }).join('');
+  var entRows=logs.map(function(r,i){
+    return '<tr><td>'+(i+1)+'</td><td>'+fuDate(r.date)+'</td><td>'+(r.kind==='รับเข้า'?'📥 รับเข้า':'⛽ เบิกจ่าย')+'</td>'+
+      '<td>'+(r.vehicle||'-')+'</td><td style="text-align:right">'+r.liters.toLocaleString('th-TH')+'</td>'+
+      '<td style="text-align:right">'+r.baht.toLocaleString('th-TH')+'</td><td>'+(r.person||'')+'</td><td>'+(r.note||'')+'</td></tr>';
+  }).join('');
+  var w=window.open('','_blank','width=980,height=800');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>รายงานน้ำมันดีเซล '+monthName+' '+yearBE+'</title>'+
+    '<style>*{font-family:"Segoe UI",Tahoma,sans-serif;box-sizing:border-box}body{margin:0;padding:26px;color:#0f172a}'+
+    '.hd{background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff;border-radius:14px;padding:20px 26px;display:flex;justify-content:space-between;align-items:center}'+
+    '.hd h1{margin:0;font-size:22px}.hd .d{opacity:.85;font-size:13px;margin-top:3px}'+
+    '.k{display:flex;gap:12px;margin:18px 0}.kc{flex:1;border-radius:12px;padding:14px 16px;color:#fff}'+
+    '.kc .l{font-size:12px;opacity:.9}.kc .v{font-size:22px;font-weight:800;margin-top:4px}'+
+    'h3{margin:20px 0 8px;font-size:15px;color:#1e3a8a}table{width:100%;border-collapse:collapse;font-size:12.5px}'+
+    'th{background:#1e293b;color:#fff;padding:8px 10px;text-align:left}td{padding:7px 10px;border-bottom:1px solid #e5e9f0}'+
+    '@media print{@page{size:A4;margin:12mm}}</style></head><body>'+
+    '<div class="hd"><div><h1>⛽ รายงานน้ำมันดีเซล</h1><div class="d">ประจำเดือน '+monthName+' '+yearBE+' · รถโฟล์คลิฟท์ 5 คัน</div></div>'+
+    '<div style="text-align:right"><div style="font-size:12px;opacity:.85">Task Management System</div></div></div>'+
+    '<div class="k">'+
+      '<div class="kc" style="background:linear-gradient(135deg,#059669,#10b981)"><div class="l">รับเข้า</div><div class="v">'+inL.toLocaleString('th-TH')+' ล.</div><div class="l">฿ '+inB.toLocaleString('th-TH')+'</div></div>'+
+      '<div class="kc" style="background:linear-gradient(135deg,#dc2626,#f87171)"><div class="l">เบิกจ่าย</div><div class="v">'+outL.toLocaleString('th-TH')+' ล.</div><div class="l">฿ '+outB.toLocaleString('th-TH')+'</div></div>'+
+      '<div class="kc" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)"><div class="l">ราคาเฉลี่ย</div><div class="v">'+(inL>0?(inB/inL).toFixed(2):'0')+'</div><div class="l">บาท/ลิตร</div></div>'+
+    '</div>'+
+    '<h3>📊 การใช้น้ำมันแยกตามคัน</h3>'+
+    '<table><thead><tr><th>รถ/แผนก</th><th style="text-align:right">ลิตร</th><th style="text-align:right">บาท</th><th style="text-align:right">ครั้ง</th><th>สัดส่วน</th></tr></thead><tbody>'+vehRows+'</tbody></table>'+
+    '<h3>📋 รายการทั้งหมด ('+logs.length+' รายการ)</h3>'+
+    '<table><thead><tr><th>#</th><th>วันที่</th><th>ประเภท</th><th>รถ/แผนก</th><th style="text-align:right">ลิตร</th><th style="text-align:right">บาท</th><th>คนขับ/ผู้ขาย</th><th>หมายเหตุ</th></tr></thead><tbody>'+entRows+'</tbody></table>'+
+    '<div style="margin-top:18px;text-align:right;color:#64748b;font-size:11px">พิมพ์เมื่อ '+new Date().toLocaleString('th-TH')+'</div>'+
+    '<script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script>'+
+    '</body></html>');
+  w.document.close();
 }
 
 // ══════════════════════════════════════════════
