@@ -754,13 +754,15 @@ export async function odooFindDoc(docType, keyword, dateFilter, companyId) {
   const buildDomain = (level) => {
     const oneWord = (w) => {
       if (level === 'full') {
-        return ['|', '|', '|',
+        // + picking_type_id.name (Operation Type) — ชื่องาน/โครงการมักอยู่ที่นี่
+        return ['|', '|', '|', '|',
           ['name', 'ilike', w], ['origin', 'ilike', w],
           ['partner_id.name', 'ilike', w],
-          ['group_id.name', 'ilike', w]
+          ['group_id.name', 'ilike', w],
+          ['picking_type_id.name', 'ilike', w]
         ];
       }
-      return ['|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w]];
+      return ['|', '|', '|', ['name', 'ilike', w], ['origin', 'ilike', w], ['group_id.name', 'ilike', w], ['picking_type_id.name', 'ilike', w]];
     };
     let domain = words.length <= 1 ? oneWord(words[0] || '') : [];
     if (words.length > 1) {
@@ -826,17 +828,27 @@ export async function odooDelivery(keyword, companyId) {
     const oneWord = (w) => {
       let conds = [];
       if (level === 'full') {
-        // ค้น 4 field × ทุก variant — เชื่อมทั้งหมดด้วย OR
+        // ค้น 5 field × ทุก variant — เชื่อมทั้งหมดด้วย OR
+        //   picking_type_id.name = Operation Type (ชื่องาน/โครงการมักอยู่ที่นี่ เช่น "...งบบำรุงปกติ...")
         conds = [
           ...fieldVariants('name', w),
           ...fieldVariants('origin', w),
           ...fieldVariants('partner_id.name', w),
-          ...fieldVariants('group_id.name', w)
+          ...fieldVariants('group_id.name', w),
+          ...fieldVariants('picking_type_id.name', w)
+        ];
+      } else if (level === 'optype') {
+        // ชื่องาน/โครงการอยู่ที่ Operation Type — relational เบา (name/origin/picking_type)
+        conds = [
+          ...fieldVariants('name', w),
+          ...fieldVariants('origin', w),
+          ...fieldVariants('picking_type_id.name', w)
         ];
       } else if (level === 'dest') {
         conds = [
           ...fieldVariants('origin', w),
-          ...fieldVariants('group_id.name', w)
+          ...fieldVariants('group_id.name', w),
+          ...fieldVariants('picking_type_id.name', w)
         ];
       } else {
         // simple — ปลอดภัยสุด
@@ -872,6 +884,10 @@ export async function odooDelivery(keyword, companyId) {
   // 2) ถ้าพัง/ไม่เจอ → dest/group
   if (!pickings.length) {
     try { pickings = await searchRead('stock.picking', buildDomain('dest'), fields, 40); } catch (e) { lastErr = e; }
+  }
+  // 2.5) ยังไม่เจอ → ค้นตาม Operation Type (ชื่องาน/โครงการ) + name/origin
+  if (!pickings.length) {
+    try { pickings = await searchRead('stock.picking', buildDomain('optype'), fields, 40); } catch (e) { lastErr = e; }
   }
   // 3) ยังไม่เจอ → simple (name/origin)
   if (!pickings.length) {
