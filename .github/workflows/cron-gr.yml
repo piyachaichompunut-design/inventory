@@ -10,4 +10,4 @@ jobs:
     steps:
       - name: Call /api/cron-gr
         run: |
-          curl -s "https://inventory-rho-hazel.vercel.app/api/cron-gr"
+          curl -s "https://inventory-rho-hazel.vercel.app/api/cron-gr?key=tms-leave-2569"
