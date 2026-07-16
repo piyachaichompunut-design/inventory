@@ -1862,6 +1862,7 @@ function appLogout(){
         <option value="exec">🎯 ผู้บริหาร (1 หน้า)</option>
         <option value="table">🗂️ ตารางข้อมูล</option>
         <option value="highlight">✨ ไฮไลต์ตัวเลข</option>
+        <option value="analysis">📈 วิเคราะห์เชิงลึก</option>
       </select>
     </div>
     <div class="rp-cg"><label>จำนวนหน้า</label>
@@ -4487,7 +4488,62 @@ function rpCompute(mn,yr){
   var label = mn>0 ? (MONTHS[mn-1]+' '+(yr+543)) : ('ปี '+(yr+543));
   return {total:total,sc:sc,donePct:total>0?Math.round(sc.done/total*100):0,cats:cats,recv:recv,send:send,notes:notes,
     recvTot:f.filter(function(t){return t['Duration']==='รับ';}).length, sendTot:f.filter(function(t){return t['Duration']==='ส่ง';}).length,
-    year:yr, periodLabel:label};
+    year:yr, periodLabel:label, tasks:f};
+}
+// ── วิเคราะห์อัตโนมัติ: ประเด็น/คอขวด/ประสิทธิภาพ จากข้อมูลเดือนที่เลือก ──
+function rpAnalyze(d){
+  var f=d.tasks||[];
+  var tx=function(t){ return ((t['Task']||'')+' '+(t['Note']||'')).toLowerCase(); };
+  var findings=[], recos=[];
+  var transport=f.filter(function(t){return /รถ|ล้อ|กระบะ|คอก|เที่ยว|ขนส่ง|บรรทุก|โฟล/.test(tx(t));});
+  var galv=f.filter(function(t){return t['Categories']==='บริการชุบกัลวาไนซ์'||/ชุบ|กัลวาไน|ไบโอ|galvani/.test(tx(t));});
+  var urgent=f.filter(function(t){return t['Notification']==='งานด่วน'||/ด่วน|เร่ง|กะทันหัน/.test(tx(t));});
+  var dests={}; f.forEach(function(t){ var m=(t['Task']||'').match(/แขวง[ก-๙A-Za-z .]{2,18}|จ\.[ก-๙]{2,14}|กล\.[ก-๙]{2,14}|สป\.\s?\d+|ทล\.[ก-๙0-9]{2,}/); if(m) dests[m[0].trim()]=1; });
+  var nDest=Object.keys(dests).length;
+  // สัปดาห์ที่งานหนักสุด
+  var weeks=[0,0,0,0,0,0]; f.forEach(function(t){var dd=new Date(t['Action Date']); if(!isNaN(dd)) weeks[Math.floor((dd.getDate()-1)/7)]++;});
+  var peakW=0; weeks.forEach(function(n,i){if(n>weeks[peakW])peakW=i;});
+  var peakTxt = f.length ? ('ช่วงงานหนักสุด: สัปดาห์ที่ '+(peakW+1)+' ของเดือน ('+weeks[peakW]+' งาน)') : '';
+  if(transport.length) { findings.push({ic:'🚚',title:'การจัดรถขนส่ง',text:'พบ '+transport.length+' รายการที่เกี่ยวกับการจัดรถ (6 ล้อ/กระบะคอก ฯลฯ) — ควรวางแผนจองรถล่วงหน้าเพื่อลดปัญหารถไม่พอในวันที่งานหนาแน่น'}); recos.push({t:'วางแผนรถขนส่งล่วงหน้า',x:'จัดทำตารางจองรถ 6 ล้อ/กระบะ ล่วงหน้ารายสัปดาห์ ตามคิวงานที่คาดการณ์'}); }
+  if(galv.length) { findings.push({ic:'🏭',title:'พึ่งพาโรงชุบภายนอก',text:'งานชุบกัลวาไนซ์ '+galv.length+' รายการ ส่วนใหญ่พึ่งพาโรงชุบภายนอก — เป็นจุดเสี่ยงด้านความต่อเนื่องของซัพพลายเชน ควรมีผู้ให้บริการสำรอง'}); recos.push({t:'กระจายความเสี่ยงซัพพลายเออร์',x:'เพิ่มผู้ให้บริการชุบกัลวาไนซ์สำรอง ลดการพึ่งพารายเดียว'}); }
+  if(nDest>=3) findings.push({ic:'🗓️',title:'นัดหมายรับ-ส่งหลายจุด',text:'ประสานนัดหมายส่งของกับหน่วยงาน/พื้นที่อย่างน้อย '+nDest+' แห่งในเดือนนี้ ต้องอาศัยการสื่อสารทีมขายและคลังอย่างใกล้ชิด'});
+  if(urgent.length) { findings.push({ic:'⏰',title:'งานเร่งด่วนแทรก',text:'มีงานด่วน '+urgent.length+' รายการแทรกระหว่างเดือน ต้องจัดลำดับความสำคัญใหม่กะทันหัน กระทบแผนงานหลัก'}); }
+  if(d.sc.over>0) findings.push({ic:'⚠️',title:'งานเลยกำหนด',text:'พบงานเลยกำหนด '+d.sc.over+' รายการ ควรเร่งติดตามและทบทวนการตั้งวันกำหนดส่ง'});
+  if(urgent.length||nDest>=3) recos.push({t:'มาตรฐานการแจ้งนัดหมาย',x:'กำหนดให้แจ้งนัดรับ-ส่งล่วงหน้าอย่างน้อย 1 วันทำการ เพื่อลดงานด่วนแทรก'});
+  findings=findings.slice(0,4);
+  if(!findings.length) findings.push({ic:'✅',title:'ไม่พบประเด็นเด่น',text:'เดือนนี้ไม่พบปัญหาคอขวดชัดเจนจากข้อมูลงาน'});
+  recos.push({t: d.donePct>=95?'รักษามาตรฐานความสำเร็จ':'ยกระดับอัตราความสำเร็จ', x: d.donePct>=95?('คงกระบวนการติดตามผ่าน TMS ต่อเนื่อง เพื่อรักษาอัตรา '+d.donePct+'%'):('ทบทวนงานคงค้าง '+(d.sc.todo+d.sc.doing)+' รายการ เพื่อดันอัตราความสำเร็จให้สูงขึ้น')});
+  recos=recos.slice(0,4);
+  var topCats=d.cats.slice(0,2);
+  var top2pct=d.total?Math.round(topCats.reduce(function(s,c){return s+c.n;},0)/d.total*100):0;
+  var results=[
+    'ดำเนินงานรวม '+d.total+' รายการ อัตราสำเร็จ '+d.donePct+'%'+(d.sc.over>0?(' — มีงานเลยกำหนด '+d.sc.over+' รายการ'):' — ไม่มีงานเลยกำหนด'),
+    topCats.length?('หมวดหมู่ปริมาณสูงสุด: '+topCats.map(function(c){return c.name;}).join(' และ ')+' รวมกัน '+top2pct+'% ของงานทั้งหมด'):'',
+    'สัดส่วนงานรับ '+d.recvTot+' · งานส่ง '+d.sendTot+' รายการ',
+    peakTxt
+  ].filter(Boolean);
+  return {findings:findings, recos:recos, results:results};
+}
+function rpFindings(an,monLbl){
+  var cards=an.findings.map(function(x){
+    return '<div style="display:flex;gap:16px;align-items:flex-start;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:15px 18px;margin-bottom:11px">'+
+      '<div style="width:46px;height:46px;border-radius:12px;background:rgba(129,140,248,.28);display:flex;align-items:center;justify-content:center;font-size:23px;flex-shrink:0">'+x.ic+'</div>'+
+      '<div><div style="font-size:16px;font-weight:800;margin-bottom:3px">'+esc(x.title)+'</div><div style="font-size:12.8px;opacity:.85;line-height:1.5">'+esc(x.text)+'</div></div></div>';
+  }).join('');
+  return '<div class="rp-slide" style="background:linear-gradient(160deg,#1e1b4b,#0f172a);color:#e8eaf6"><div class="rp-badge" style="opacity:.5;color:#fff">ANALYSIS</div>'+
+    '<div style="font-size:24px;font-weight:900;margin-bottom:3px">ประเด็นที่พบบ่อยจากการปฏิบัติงาน</div>'+
+    '<div style="font-size:12.5px;opacity:.65;margin-bottom:16px">วิเคราะห์อัตโนมัติจากข้อมูลงาน · '+monLbl+'</div>'+
+    '<div style="flex:1;overflow:auto">'+cards+'</div></div>';
+}
+function rpRecos(an,monLbl){
+  var results=an.results.map(function(t){return '<div style="display:flex;gap:9px;margin-bottom:11px;font-size:13px;line-height:1.5"><span style="color:#fbbf24;flex-shrink:0">●</span><span>'+esc(t)+'</span></div>';}).join('');
+  var recos=an.recos.map(function(r,i){return '<div style="display:flex;gap:14px;margin-bottom:13px"><div style="font-size:22px;font-weight:900;color:#818cf8;min-width:34px">'+('0'+(i+1)).slice(-2)+'</div><div><div style="font-size:14px;font-weight:800;color:#1e1b4b">'+esc(r.t)+'</div><div style="font-size:12px;color:#475569;line-height:1.45">'+esc(r.x)+'</div></div></div>';}).join('');
+  return '<div class="rp-slide" style="background:linear-gradient(160deg,#1e1b4b,#0f172a);color:#e8eaf6"><div class="rp-badge" style="opacity:.5;color:#fff">ANALYSIS</div>'+
+    '<div style="font-size:24px;font-weight:900;margin-bottom:16px">สรุปและข้อเสนอแนะ · '+monLbl+'</div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;flex:1;min-height:0">'+
+      '<div style="background:rgba(255,255,255,.06);border-radius:14px;padding:18px;overflow:auto"><div style="font-weight:800;margin-bottom:12px">📋 ผลการดำเนินงานเดือนนี้</div>'+results+'</div>'+
+      '<div style="background:#fff;border-radius:14px;padding:18px;overflow:auto"><div style="font-weight:800;margin-bottom:12px;color:#1e1b4b">✔️ ข้อเสนอแนะเชิงปฏิบัติการ</div>'+recos+'</div>'+
+    '</div></div>';
 }
 function rpTile(n,l){ return '<div class="rp-tile"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
 function rpCover(d,monLbl){
@@ -4646,6 +4702,9 @@ function renderReport(){
     pages=[rpExec(d,monLbl,specs)];
   } else if(layout==='table'){
     pages=[rpCover(d,monLbl), rpTblCat(d,monLbl), rpTblMonth(d,monLbl,yr), rpTblStatus(d,monLbl)];
+  } else if(layout==='analysis'){
+    var an=rpAnalyze(d);
+    pages=[rpCover(d,monLbl), rpKpi(d,monLbl,specs), rpFindings(an,monLbl), rpRecos(an,monLbl)];
   } else if(layout==='highlight'){
     var topCat=d.cats.length?d.cats[0]:null;
     pages=[rpCover(d,monLbl),
