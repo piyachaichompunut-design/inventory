@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: ed7a1470731f452f9a136f35b873b380a17cd915)[Resource from github at repo://piyachaichompunut-design/inventory/sha/d20879e57ce3b39a018ad6987802ae21ce2b00a5/contents/api/rpc.js] // ============================================================================
+// ============================================================================
 //  /api/rpc.js  —  Vercel Serverless Function
 //  จุดเดียวที่ frontend เรียกผ่าน google.script.run (ดู app-shim.js)
 //  รับ { fn: 'getTasks', args: [...] }  แล้ว dispatch ไปยัง handler ที่ port มาจาก Code.gs
