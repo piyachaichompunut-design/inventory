@@ -726,6 +726,53 @@ async function deleteEMPAttendance(id) {
   return error ? { success: false } : { success: true };
 }
 
+// ── รายงานแจ้งขาด-ลา ประจำวัน (ฝ่ายคลังสินค้า) → ส่งกลุ่ม Telegram หลัก ──
+//   เฉพาะคนที่ "ลา/ขาด" (AL/PL/SL/A) เท่านั้น + ระบุประเภทลา | ไม่รวม "มาสาย" (L)
+const LEAVE_REPORTER = process.env.LEAVE_REPORTER || 'วริยา';
+const LEAVE_LABEL = { AL: 'ลาพักร้อน', PL: 'ลากิจ', SL: 'ลาป่วย', A: 'ขาดงาน' };
+export async function sendAttendanceLeaveReport(dateOverride) {
+  if (!db) return { ok: false, error: 'no db' };
+  // วันที่ตามเวลาไทย
+  const thai = new Date(Date.now() + 7 * 3600 * 1000);
+  const ds = dateOverride || (thai.getUTCFullYear() + '-' + pad(thai.getUTCMonth() + 1, 2) + '-' + pad(thai.getUTCDate(), 2));
+  const [yy, mm, dd] = ds.split('-');
+  const dateLabel = pad(+dd, 2) + '/' + pad(+mm, 2) + '/' + String((+yy) + 543).slice(-2);   // 01/07/69
+
+  const staff = await getEMPStaff();                                  // เฉพาะ active
+  const staffById = {};
+  staff.forEach(s => { staffById[s.id] = s; });
+  const { data: rows } = await db.from('emp_attendance').select('*').eq('date', ds);
+
+  const leaves = [];
+  (rows || []).forEach(r => {
+    const st = String(r.status || '');
+    if (!LEAVE_LABEL[st]) return;                                     // เอาเฉพาะ ลา/ขาด (ไม่รวม P/L/H)
+    const s = staffById[String(r.emp_id)];
+    if (!s) return;                                                   // พนักงานที่ลบ/ปิดใช้งานแล้ว → ข้าม
+    const nm = (s.name + (s.surname ? ' ' + s.surname : '') + (s.nickname ? ' (' + s.nickname + ')' : '')).trim();
+    leaves.push({ name: nm, type: LEAVE_LABEL[st], note: String(r.note || '').trim() });
+  });
+  leaves.sort((a, b) => a.type.localeCompare(b.type, 'th'));
+
+  const line = '────────────────────';
+  const detail = leaves.length
+    ? leaves.map(l => '- ' + l.name + ' : ' + l.type + (l.note ? ' (' + l.note + ')' : '')).join('\n')
+    : '- มาครบ';
+  const text =
+    '╔════════════════════════════╗\n' +
+    '📋 รายงานแจ้งขาด-ลา  📌 ฝ่ายคลังสินค้า\n' +
+    '📅 วันที่ ' + dateLabel + '\n' +
+    '👤 ผู้แจ้ง : ' + LEAVE_REPORTER + '\n' +
+    '╚════════════════════════════╝\n\n' +
+    '📊 สรุป\n' +
+    '• จำนวนผู้ลางาน : ' + leaves.length + ' คน\n\n' +
+    '📄 รายละเอียด\n' + line + '\n' + detail + '\n' + line + '\n\n' +
+    '📝 หมายเหตุ : ไม่รวมรายการมาสาย';
+
+  if (TG_CHAT) await sendTelegramReply(TG_CHAT, text);
+  return { ok: true, date: ds, count: leaves.length, sent: !!TG_CHAT, text };
+}
+
 // ============================================================================
 //  KPI RECORDS (เดิม)
 // ============================================================================
@@ -2478,6 +2525,7 @@ const HANDLERS = {
   getLoedaroonItems, saveLoedaroonItem, addLoedaroonCall, deleteLoedaroonItem, deleteLoedaroonPO,
   getOTEmployees, saveOTEmployee, deleteOTEmployee, getOTData, saveOTRecord, deleteOTRecord,
   getEMPStaff, saveEMPStaff, deleteEMPStaff, getEMPAttendanceData, saveEMPAttendance, deleteEMPAttendance,
+  sendAttendanceLeaveReport,
   getKPIRecords, saveKPIRecord, deleteKPIRecord,
   getWireNotes, saveWireNotesBatch,
   getKPIStaff, saveKPIStaff, deleteKPIStaff, getKPIByEmpMonth, saveKPIByEmpMonth, getKPIMonthHistory,
