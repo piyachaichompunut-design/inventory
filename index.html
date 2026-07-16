@@ -1845,9 +1845,8 @@ function appLogout(){
     }
   </style>
   <div class="rp-ctrl">
-    <div class="rp-cg" style="max-width:240px"><label>แหล่งข้อมูล</label>
-      <div style="font-size:12px;font-weight:700;color:var(--txt);padding:8px 11px;border:1.5px dashed var(--border);border-radius:9px;white-space:nowrap">📋 ตามตัวกรองหน้า “รายการงาน”</div>
-    </div>
+    <div class="rp-cg"><label>เดือน</label><select id="rp-mn" onchange="renderReport()"></select></div>
+    <div class="rp-cg"><label>ปี</label><select id="rp-yr" onchange="renderReport()"></select></div>
     <div class="rp-cg"><label>ธีม / รูปแบบ</label>
       <div class="rp-themes">
         <div class="rp-th rp-th1 on" data-th="1" onclick="rpSetTheme(1)" title="น้ำเงินโมเดิร์น"></div>
@@ -1872,6 +1871,8 @@ function appLogout(){
         <option value="2">2 หน้า</option>
         <option value="3">3 หน้า</option>
         <option value="4">4 หน้า</option>
+        <option value="5">5 หน้า</option>
+        <option value="6">6 หน้า</option>
       </select>
     </div>
     <div class="rp-cg"><label>กราฟหมวดหมู่</label>
@@ -4443,7 +4444,14 @@ function switchTab(t) {
 var rpTheme=1, rpCharts={}, rpInited=false;
 var RP_CATCOL=['#3b82f6','#f59e0b','#10b981','#8b5cf6','#ec4899','#ef4444','#14b8a6','#f97316','#6366f1','#84cc16'];
 var RP_MN_SHORT=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
-function rpInit(){ rpInited=true; }  // ไม่มี month/yr picker แล้ว — ใช้ตัวกรองหน้ารายการงาน
+function rpInit(){
+  if(rpInited) return; rpInited=true;
+  var now=new Date();
+  document.getElementById('rp-mn').innerHTML='<option value="0">ทั้งปี</option>'+MONTHS.map(function(m,i){return '<option value="'+(i+1)+'"'+(i===now.getMonth()?' selected':'')+'>'+m+'</option>';}).join('');
+  var cy=now.getFullYear(), ys='';
+  for(var y=cy-2;y<=cy+1;y++) ys+='<option value="'+y+'"'+(y===cy?' selected':'')+'>'+(y+543)+'</option>';
+  document.getElementById('rp-yr').innerHTML=ys;
+}
 function rpSetTheme(n){
   rpTheme=n;
   document.querySelectorAll('.rp-th').forEach(function(el){ el.classList.toggle('on', +el.getAttribute('data-th')===n); });
@@ -4451,39 +4459,35 @@ function rpSetTheme(n){
 }
 function loadReport(){
   rpInit();
-  function go(){ try{ if(typeof applyF==='function') applyF(); }catch(e){} renderReport(); }  // sync ตัวกรองหน้ารายการงานก่อน
-  if(allTasks && allTasks.length){ go(); return; }
+  if(allTasks && allTasks.length){ renderReport(); return; }
   loadTasks();
   var tries=0;
-  (function wait(){ if(allTasks&&allTasks.length){ go(); } else if(tries++<25){ setTimeout(wait,300); } })();
+  (function wait(){ if(allTasks&&allTasks.length){ renderReport(); } else if(tries++<25){ setTimeout(wait,300); } })();
 }
-function rpCompute(){
-  // ★ ดึงจาก "หน้ารายการงาน" — ใช้ filteredTasks (ผลจากตัวกรอง สถานะ/หมวด/เดือน/ผู้รับผิดชอบ/วันที่/ค้นหา)
-  var src=(typeof filteredTasks!=='undefined' && filteredTasks && filteredTasks.length!==undefined) ? filteredTasks : (allTasks||[]);
-  var f=src.slice();
-  var now=new Date(), sc={todo:0,doing:0,done:0,cancel:0,over:0}, catMap={}, ymSet={}, yearCount={};
+function rpCompute(mn,yr){
+  // ★ ดึงข้อมูลของ "เดือนที่เลือก" (วันที่ 1–วันสุดท้ายของเดือน) จากงานทั้งหมด แล้ววิเคราะห์
+  var now=new Date();
+  var f=allTasks.filter(function(t){
+    if(mn<=0) return true;   // ทั้งปี
+    var d=new Date(t['Action Date']); return !isNaN(d)&&d.getFullYear()===yr&&(d.getMonth()+1)===mn;
+  });
+  var sc={todo:0,doing:0,done:0,cancel:0,over:0}, catMap={};
   f.forEach(function(t){
     var s=t['Task Status']||'To Do';
     if(s==='To Do')sc.todo++; else if(s==='Doing')sc.doing++; else if(s==='Done')sc.done++; else if(s==='Cancel')sc.cancel++;
     var d=new Date(t['Action Date']); if(!isNaN(d)&&d<now&&s!=='Done'&&s!=='Cancel')sc.over++;
     var c=t['Categories']||'ไม่ระบุ'; catMap[c]=(catMap[c]||0)+1;
-    if(!isNaN(d)){ ymSet[d.getFullYear()+'-'+(d.getMonth()+1)]=1; yearCount[d.getFullYear()]=(yearCount[d.getFullYear()]||0)+1; }
   });
   var cats=Object.keys(catMap).map(function(k){return {name:k,n:catMap[k]};}).sort(function(a,b){return b.n-a.n;}).slice(0,8);
-  // ปีที่มีงานมากสุด (ใช้กับกราฟแนวโน้ม/ป้ายกำกับ)
-  var year=new Date().getFullYear(), best=-1;
-  Object.keys(yearCount).forEach(function(y){ if(yearCount[y]>best){best=yearCount[y];year=+y;} });
+  // กราฟแนวโน้ม = ทั้งปีที่เลือก (ให้เห็นภาพรวมปี)
   var recv=new Array(12).fill(0), send=new Array(12).fill(0);
-  f.forEach(function(t){ var d=new Date(t['Action Date']); if(isNaN(d)||d.getFullYear()!==year)return; var m=d.getMonth(); if(t['Duration']==='รับ')recv[m]++; else if(t['Duration']==='ส่ง')send[m]++; });
+  allTasks.forEach(function(t){ var d=new Date(t['Action Date']); if(isNaN(d)||d.getFullYear()!==yr)return; var m=d.getMonth(); if(t['Duration']==='รับ')recv[m]++; else if(t['Duration']==='ส่ง')send[m]++; });
   var notes=f.filter(function(t){return t['Note']&&String(t['Note']).trim();}).slice(0,6).map(function(t){return {task:t['Task'],note:t['Note']};});
   var total=f.length;
-  var yms=Object.keys(ymSet), label;
-  if(yms.length===1){ var pp=yms[0].split('-'); label=MONTHS[(+pp[1])-1]+' '+((+pp[0])+543); }
-  else if(!yms.length){ label='ตามตัวกรอง'; }
-  else label='ตามตัวกรอง ('+total+' งาน)';
+  var label = mn>0 ? (MONTHS[mn-1]+' '+(yr+543)) : ('ปี '+(yr+543));
   return {total:total,sc:sc,donePct:total>0?Math.round(sc.done/total*100):0,cats:cats,recv:recv,send:send,notes:notes,
     recvTot:f.filter(function(t){return t['Duration']==='รับ';}).length, sendTot:f.filter(function(t){return t['Duration']==='ส่ง';}).length,
-    year:year, periodLabel:label};
+    year:yr, periodLabel:label};
 }
 function rpTile(n,l){ return '<div class="rp-tile"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
 function rpCover(d,monLbl){
@@ -4624,8 +4628,9 @@ function renderReport(){
   var layout=document.getElementById('rp-layout').value;
   var pageOpt=document.getElementById('rp-pages').value;
   var secWrap=document.getElementById('rp-secwrap'); if(secWrap) secWrap.style.display=(layout==='classic')?'':'none';
-  var d=rpCompute();
-  var monLbl=d.periodLabel, yr=d.year;
+  var mn=+document.getElementById('rp-mn').value, yr=+document.getElementById('rp-yr').value;
+  var d=rpCompute(mn,yr);
+  var monLbl=d.periodLabel;
   Object.keys(rpCharts).forEach(function(k){ try{rpCharts[k].destroy();}catch(e){} }); rpCharts={};
   var specs=[], pages=[];
   if(layout==='classic'){
