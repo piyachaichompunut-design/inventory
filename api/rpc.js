@@ -728,7 +728,7 @@ async function deleteEMPAttendance(id) {
 
 // ── รายงานแจ้งขาด-ลา ประจำวัน (ฝ่ายคลังสินค้า) → ส่งกลุ่ม Telegram หลัก ──
 //   เฉพาะคนที่ "ลา/ขาด" (AL/PL/SL/A) เท่านั้น + ระบุประเภทลา | ไม่รวม "มาสาย" (L)
-const LEAVE_REPORTER = process.env.LEAVE_REPORTER || 'วริยา';
+const LEAVE_REPORTER = process.env.LEAVE_REPORTER || 'วริยา / อนนทพร';
 const LEAVE_LABEL = { AL: 'ลาพักร้อน', PL: 'ลากิจ', SL: 'ลาป่วย', A: 'ขาดงาน' };
 export async function sendAttendanceLeaveReport(dateOverride, chatOverride) {
   if (!db) return { ok: false, error: 'no db' };
