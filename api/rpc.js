@@ -1,4 +1,4 @@
-// ============================================================================
+successfully downloaded text file (SHA: ed7a1470731f452f9a136f35b873b380a17cd915)[Resource from github at repo://piyachaichompunut-design/inventory/sha/d20879e57ce3b39a018ad6987802ae21ce2b00a5/contents/api/rpc.js] // ============================================================================
 //  /api/rpc.js  —  Vercel Serverless Function
 //  จุดเดียวที่ frontend เรียกผ่าน google.script.run (ดู app-shim.js)
 //  รับ { fn: 'getTasks', args: [...] }  แล้ว dispatch ไปยัง handler ที่ port มาจาก Code.gs
@@ -730,7 +730,7 @@ async function deleteEMPAttendance(id) {
 //   เฉพาะคนที่ "ลา/ขาด" (AL/PL/SL/A) เท่านั้น + ระบุประเภทลา | ไม่รวม "มาสาย" (L)
 const LEAVE_REPORTER = process.env.LEAVE_REPORTER || 'วริยา';
 const LEAVE_LABEL = { AL: 'ลาพักร้อน', PL: 'ลากิจ', SL: 'ลาป่วย', A: 'ขาดงาน' };
-export async function sendAttendanceLeaveReport(dateOverride) {
+export async function sendAttendanceLeaveReport(dateOverride, chatOverride) {
   if (!db) return { ok: false, error: 'no db' };
   // วันที่ตามเวลาไทย
   const thai = new Date(Date.now() + 7 * 3600 * 1000);
@@ -769,8 +769,9 @@ export async function sendAttendanceLeaveReport(dateOverride) {
     '📄 รายละเอียด\n' + line + '\n' + detail + '\n' + line + '\n\n' +
     '📝 หมายเหตุ : ไม่รวมรายการมาสาย';
 
-  if (TG_CHAT) await sendTelegramReply(TG_CHAT, text);
-  return { ok: true, date: ds, count: leaves.length, sent: !!TG_CHAT, text };
+  const _tgt = chatOverride || TG_CHAT;
+  if (_tgt) await sendTelegramReply(_tgt, text);
+  return { ok: true, date: ds, count: leaves.length, sent: !!_tgt, text };
 }
 
 // ============================================================================
