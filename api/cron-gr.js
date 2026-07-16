@@ -31,15 +31,20 @@ function getDb() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+// override ปลายทางตอนทดสอบ: ถ้าตั้งค่าไว้ (จาก ?chat=) จะส่งเข้ากลุ่มนี้กลุ่มเดียว ไม่แตะกลุ่มจริง
+let _CHAT_OVERRIDE = '';
+
 async function notifyTelegram(text, onlyChat1) {
   const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
   // ปกติส่งทั้ง 2 กลุ่ม | onlyChat1=true → ส่งเฉพาะ chat 1 (โหมดทดสอบ)
   // แจ้งสต็อกไป "กลุ่มใหม่" (TELEGRAM_CHAT_ID_3) แทน chat 1 + ยังส่ง chat 2 เหมือนเดิม
   // ถ้ายังไม่ตั้ง TELEGRAM_CHAT_ID_3 จะ fallback ไป chat 1 (พฤติกรรมเดิม)
   const primaryChat = process.env.TELEGRAM_CHAT_ID_3 || process.env.TELEGRAM_CHAT_ID || '';
-  const chatIds = (onlyChat1
-    ? [primaryChat]
-    : [primaryChat, process.env.TELEGRAM_CHAT_ID_2 || '']
+  const chatIds = (_CHAT_OVERRIDE
+    ? [_CHAT_OVERRIDE]                                  // ทดสอบ: บังคับกลุ่มเดียว
+    : onlyChat1
+      ? [primaryChat]
+      : [primaryChat, process.env.TELEGRAM_CHAT_ID_2 || '']
   ).filter(Boolean);
   if (!TG_TOKEN || !chatIds.length) return;
   for (const chatId of chatIds) {
@@ -215,6 +220,15 @@ export default async function handler(req, res) {
         return;
       }
     }
+
+    // ── override ปลายทางตอนทดสอบ: ?chat=-100xxxx → ส่งเข้ากลุ่มนี้กลุ่มเดียว (ไม่แตะกลุ่มจริง) ──
+    _CHAT_OVERRIDE = '';
+    try {
+      let c = '';
+      if (req.query && req.query.chat) c = String(req.query.chat);
+      if (!c && req.url) { const uc = new URL(req.url, 'http://x'); c = uc.searchParams.get('chat') || ''; }
+      _CHAT_OVERRIDE = c;
+    } catch (e) { _CHAT_OVERRIDE = ''; }
 
     if (!odooConfigured()) { res.status(200).json({ ok: false, error: 'Odoo ยังไม่ตั้งค่า' }); return; }
     const db = getDb();
