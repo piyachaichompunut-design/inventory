@@ -23,7 +23,9 @@ export default async function handler(req, res) {
       res.status(200).json({ ok: true, skipped: 'weekend' });
       return;
     }
-    const result = await sendAttendanceLeaveReport();
+    let chat = '';
+    try { const u2 = new URL(req.url, 'http://x'); chat = u2.searchParams.get('chat') || ''; } catch (e) {}
+    const result = await sendAttendanceLeaveReport(null, chat || undefined);
     res.status(200).json({ ok: true, result: { date: result.date, count: result.count, sent: result.sent } });
   } catch (e) {
     console.error('cron-attendance error:', e.message);
