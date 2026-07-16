@@ -3165,9 +3165,11 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
     try {
       const pos = await searchRead('purchase.order',
         withCompany(['|', ['name', '=', tok], ['name', 'ilike', tok]], coId),
-        ['id', 'name', 'order_line', 'notes', 'partner_id'], 3);
+        ['id', 'name', 'order_line', 'notes', 'partner_id'], 5);
       if (pos.length) {
-        const po = pos[0];
+        // ⚠️ ilike จับ substring → "2605018" ไปโดน "S2605018" ด้วย → เลือก "ตรงเป๊ะ" ก่อนเสมอ
+        const _norm = s => String(s || '').replace(/\s+/g, '').toUpperCase();
+        const po = pos.find(p => _norm(p.name) === _norm(tok)) || pos[0];
         const vendor = Array.isArray(po.partner_id) ? po.partner_id[1] : '';
         const poNote = String(po.notes && typeof po.notes === 'string' ? po.notes : '')
           .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
@@ -3211,9 +3213,10 @@ export async function odooReceiveDeliveryStatus(origin, companyId) {
     try {
       const sos = await searchRead('sale.order',
         withCompany(['|', ['name', '=', tok], ['name', 'ilike', tok]], coId),
-        ['id', 'name', 'order_line', 'note', 'partner_id'], 3);
+        ['id', 'name', 'order_line', 'note', 'partner_id'], 5);
       if (sos.length) {
-        const so = sos[0];
+        const _norm = s => String(s || '').replace(/\s+/g, '').toUpperCase();
+        const so = sos.find(p => _norm(p.name) === _norm(tok)) || sos[0];
         const vendor = Array.isArray(so.partner_id) ? so.partner_id[1] : '';  // SO = ลูกค้า
         const soNote = String(so.note && typeof so.note === 'string' ? so.note : '')
           .replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
