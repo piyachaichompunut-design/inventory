@@ -5,7 +5,7 @@
 import { handleTelegramCommand, sendTelegramReply, isAllowedChat, getChatType, notifyMainChat, sendDeliveryPDF } from './rpc.js';
 import { odooFindDoc, odooUploadAttachment, odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById } from './odoo.js';
 import { createClient } from '@supabase/supabase-js';
-import { tableGroupsFromBuffer, beDisplay, guessCategory } from './table.js';
+import { tableGroupsFromBuffer, beDisplay, guessCategory, enrichGroupsWithOdoo } from './table.js';
 
 const GROQ_KEY     = process.env.GROQ_API_KEY || '';
 const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
@@ -123,6 +123,13 @@ async function tgFetchFile(m, token) {
 // สร้างงานใน web จากกลุ่มที่แยกแล้ว (1 กลุ่ม = 1 บรรทัด) แนบไฟล์ต้นฉบับให้ทุกงาน
 async function createPOTableTasks(groups, { responsible = '', attachment = null } = {}) {
   const created = [];
+  // เอาเลข PO ไปค้น Odoo แล้วแทนที่ชื่อ+จำนวนด้วยของจริง (คงการแยกวัน) — ล้มเหลวก็ใช้ข้อความเดิม
+  try {
+    if (odooConfigured()) {
+      const { odooPO } = await import('./odoo.js');
+      await enrichGroupsWithOdoo(groups, odooPO);
+    }
+  } catch (e) { console.error('enrichGroupsWithOdoo (tg):', e.message); }
   for (const g of groups) {
     const dateDisplay = g.dateISO ? beDisplay(g.dateISO) : (g.dateRaw || 'รออัพเดท');
     const itemsStr = g.lines.map((l, i) => (i + 1) + '. ' + l.product + (l.qty ? ' — จำนวน ' + l.qty + (l.unit ? ' ' + l.unit : '') : '')).join('\n');
