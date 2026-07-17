@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { handleTelegramCommand, __setDb, notifyMainChat } from './rpc.js';
 import { odooConfigured, odooDelivery, parseCompany, odooCompare, odooCompareWithDelivery, companyById, odooPurchaseRequestByName, odooDocForFile } from './odoo.js';
-import { tableGroupsFromBuffer, beDisplay, guessCategory } from './table.js';
+import { tableGroupsFromBuffer, beDisplay, guessCategory, enrichGroupsWithOdoo } from './table.js';
 
 const LINE_SECRET = process.env.LINE_CHANNEL_SECRET || '';
 const LINE_TOKEN  = process.env.LINE_CHANNEL_TOKEN  || '';
@@ -684,6 +684,11 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
 async function createLineTableTasks(groups, { duration, responsible, categories, fileAttach, pushTarget, quotedId, actionDate }) {
   const created = []; let lastId = null;
   const verb = duration === 'ส่ง' ? 'ส่ง' : 'รับเข้า';
+  // เอาเลข PO ไปค้น Odoo แล้วแทนที่ชื่อ+จำนวนด้วยของจริง (คงการแยกวัน) — ล้มเหลวก็ใช้ข้อความเดิม
+  try {
+    const { odooPO, odooConfigured } = await import('./odoo.js');
+    if (odooConfigured()) await enrichGroupsWithOdoo(groups, odooPO);
+  } catch (e) { console.error('enrichGroupsWithOdoo (line):', e.message); }
   for (const g of groups) {
     const dateISO = g.dateISO || actionDate || todayStr();
     const dateDisplay = g.dateISO ? beDisplay(g.dateISO) : (g.dateRaw || 'รออัพเดท');
