@@ -158,3 +158,68 @@ export async function tableGroupsFromBuffer(buffer, mime, fileName, opts = {}) {
   }
   return [...groups.values()].filter(g => g.lines.length);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  จับคู่รายการในไฟล์กับรายการจริงใน Odoo (ตามเลข PO) แล้วแทนที่ชื่อ+จำนวน
+//  - คงการแยกวัน: จับคู่ทีละบรรทัด รายการไหนอยู่กลุ่ม(วัน)ไหนก็อยู่ที่เดิม
+//  - PO แยกหลายวัน → คงจำนวนจากไฟล์ (จำนวนต่อรอบส่ง) | PO วันเดียว → ใช้จำนวนจาก Odoo
+//  - จับคู่ไม่ได้ / ไม่เจอ PO ใน Odoo → คงข้อความเดิมจากไฟล์ (ปลอดภัย)
+// ════════════════════════════════════════════════════════════════════════════
+function _norm(s) { return String(s || '').toLowerCase().replace(/[\s\-_.,()/\[\]{}#]+/g, ''); }
+function _bigrams(s) { const b = new Set(); for (let i = 0; i < s.length - 1; i++) b.add(s.slice(i, i + 2)); return b; }
+function _similarity(a, b) {
+  const A = _norm(a), B = _norm(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+  if (A.length >= 4 && (A.includes(B) || B.includes(A))) return 0.9;
+  const ba = _bigrams(A), bb = _bigrams(B);
+  if (!ba.size || !bb.size) return 0;
+  let inter = 0; for (const g of ba) if (bb.has(g)) inter++;
+  return (2 * inter) / (ba.size + bb.size);
+}
+function _qtyNum(s) { const m = String(s == null ? '' : s).replace(/,/g, '').match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null; }
+function _fmtNum(n) { if (n == null || isNaN(n)) return ''; return Number.isInteger(n) ? String(n) : String(+(+n).toFixed(2)); }
+function _cleanName(s) { return String(s || '').replace(/\s+/g, ' ').replace(/-{3,}/g, '--').trim(); }
+
+// odooPO: (poNumber, companyId?) => [{ lines:[{ product_id:[id,name], product_qty }] }]
+export async function enrichGroupsWithOdoo(groups, odooPO, companyId) {
+  if (typeof odooPO !== 'function' || !Array.isArray(groups)) return groups;
+  const cache = new Map();
+  for (const g of groups) {
+    let orders = cache.get(g.po);
+    if (orders === undefined) {
+      try { orders = await odooPO(g.po, companyId); } catch (e) { orders = []; }
+      cache.set(g.po, orders);
+    }
+    const order = (orders && orders[0]) || null;
+    const oLines = ((order && Array.isArray(order.lines)) ? order.lines : []).map(l => ({
+      name: Array.isArray(l.product_id) ? String(l.product_id[1] || '') : String(l.product_id || ''),
+      qty: (l.product_qty != null ? _qtyNum(l.product_qty) : null),
+      used: false
+    })).filter(l => l.name);
+    if (!oLines.length) { g.odooMatched = false; continue; }   // ไม่เจอ PO → คงข้อความเดิม
+
+    // PO นี้ถูกแยกเป็นหลายวันไหม (ถ้าแยก → คงจำนวนจากไฟล์)
+    const splitAcrossDates = groups.filter(x => x.po === g.po).length > 1;
+
+    let any = false;
+    for (const line of g.lines) {
+      const lq = _qtyNum(line.qty);
+      let best = null, bestScore = 0;
+      for (const ol of oLines) {
+        if (ol.used) continue;
+        let sc = _similarity(line.product, ol.name);
+        if (lq != null && ol.qty != null && lq === ol.qty) sc += 0.15;   // จำนวนตรง = โบนัส
+        if (sc > bestScore) { bestScore = sc; best = ol; }
+      }
+      if (best && bestScore >= 0.4) {
+        best.used = true;
+        line.product = _cleanName(best.name);
+        if (!splitAcrossDates && best.qty != null) line.qty = _fmtNum(best.qty);
+        any = true;
+      }
+    }
+    g.odooMatched = any;
+  }
+  return groups;
+}
