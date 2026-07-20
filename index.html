@@ -2489,10 +2489,10 @@ function appLogout(){
             <th class="la" rowspan="2" style="min-width:70px">ชื่อเล่น</th>
             <th class="la" rowspan="2" style="min-width:100px">ตำแหน่ง</th>
             <th colspan="3" style="background:rgba(255,255,255,.18);font-size:12px;font-weight:800;letter-spacing:.3px">📋 การมาทำงาน</th>
-            <th colspan="2" style="background:#155e4c;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">🌴 พักร้อน</th>
-            <th colspan="2" style="background:#3730a3;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">📋 ลากิจ</th>
-            <th colspan="2" style="background:#9a3412;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">🏥 ลาป่วย</th>
-            <th rowspan="2" style="background:#7f1d1d;font-size:12px;font-weight:800">❌ ขาดงาน</th>
+            <th colspan="2" style="background:#155e4c;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">🏖️ พักร้อน</th>
+            <th colspan="2" style="background:#3730a3;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">🧳 ลากิจ</th>
+            <th colspan="2" style="background:#9a3412;font-size:13px;font-weight:800;padding:10px 8px;border-bottom:2px solid rgba(255,255,255,.4)">🤒 ลาป่วย</th>
+            <th rowspan="2" style="background:#7f1d1d;font-size:12px;font-weight:800">🚫 ขาดงาน</th>
           </tr>
           <tr>
             <th style="font-size:11px">✅ เข้างาน</th>
@@ -2556,19 +2556,22 @@ function appLogout(){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
         <button class="ea-sbtn ea-P"  data-s="P"  onclick="setEMPStat('P')">✅<br>เข้างาน</button>
         <button class="ea-sbtn ea-L"  data-s="L"  onclick="setEMPStat('L')">🟡<br>มาสาย</button>
-        <button class="ea-sbtn ea-AL" data-s="AL" onclick="setEMPStat('AL')">🌴<br>พักร้อน</button>
-        <button class="ea-sbtn ea-PL" data-s="PL" onclick="setEMPStat('PL')">📋<br>ลากิจ</button>
-        <button class="ea-sbtn ea-SL" data-s="SL" onclick="setEMPStat('SL')">🏥<br>ลาป่วย</button>
-        <button class="ea-sbtn ea-A"  data-s="A"  onclick="setEMPStat('A')">❌<br>ขาดงาน</button>
+        <button class="ea-sbtn ea-AL" data-s="AL" onclick="setEMPStat('AL')">🏖️<br>พักร้อน</button>
+        <button class="ea-sbtn ea-PL" data-s="PL" onclick="setEMPStat('PL')">🧳<br>ลากิจ</button>
+        <button class="ea-sbtn ea-SL" data-s="SL" onclick="setEMPStat('SL')">🤒<br>ลาป่วย</button>
+        <button class="ea-sbtn ea-A"  data-s="A"  onclick="setEMPStat('A')">🚫<br>ขาดงาน</button>
         <button class="ea-sbtn ea-H"  data-s="H"  onclick="setEMPStat('H')" style="grid-column:1/-1">⬜ วันหยุด</button>
       </div>
 
       <!-- Leave day selector (show only for AL/PL/SL) -->
       <div id="ea-c-hours-row" style="display:none;background:var(--ea5);border-radius:10px;padding:12px;border:1.5px solid var(--ea4);margin-bottom:12px">
-        <div style="font-size:12px;font-weight:700;color:var(--ea2);margin-bottom:8px">📅 จำนวนวันที่ลา</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <button class="ea-hbtn" data-h="4" onclick="setEMPHours(4)">ลาครึ่งวัน<br><span style="font-size:11px;opacity:.7">(4 ชม.)</span></button>
-          <button class="ea-hbtn sel" data-h="8" onclick="setEMPHours(8)">ลา 1 วัน<br><span style="font-size:11px;opacity:.7">(เต็มวัน)</span></button>
+        <div style="font-size:12px;font-weight:700;color:var(--ea2);margin-bottom:8px">⏱️ จำนวนที่ลา</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <button class="ea-hbtn" data-h="1" onclick="setEMPHours(1)">1 ชม.</button>
+          <button class="ea-hbtn" data-h="2" onclick="setEMPHours(2)">2 ชม.</button>
+          <button class="ea-hbtn" data-h="3" onclick="setEMPHours(3)">3 ชม.</button>
+          <button class="ea-hbtn" data-h="4" onclick="setEMPHours(4)">ครึ่งวัน<br><span style="font-size:11px;opacity:.7">(4 ชม.)</span></button>
+          <button class="ea-hbtn sel" data-h="8" onclick="setEMPHours(8)" style="grid-column:2/-1">เต็มวัน<br><span style="font-size:11px;opacity:.7">(1 วัน)</span></button>
         </div>
       </div>
 
@@ -2618,11 +2621,11 @@ function appLogout(){
         <div class="ea-fg2">
           <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">📅 วันเริ่มงาน</div>
             <input type="date" id="ea-e-start" style="width:100%;padding:7px 9px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none"></div>
-          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">🌴 พักร้อน</div>
+          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">🏖️ พักร้อน</div>
             <input type="number" id="ea-e-al" min="0" placeholder="10" style="width:100%;padding:7px 9px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;text-align:center"></div>
-          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">📋 ลากิจ</div>
+          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">🧳 ลากิจ</div>
             <input type="number" id="ea-e-pl" min="0" placeholder="3" style="width:100%;padding:7px 9px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;text-align:center"></div>
-          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">🏥 ลาป่วย</div>
+          <div><div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px">🤒 ลาป่วย</div>
             <input type="number" id="ea-e-sl" min="0" placeholder="30" style="width:100%;padding:7px 9px;border:1.5px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;text-align:center"></div>
           <button class="btn" id="ea-e-save-btn" onclick="saveEMPStaffForm()"
             style="background:linear-gradient(135deg,var(--ea),var(--ea2));color:#fff;height:36px;padding:0 14px;white-space:nowrap">💾</button>
@@ -7104,19 +7107,21 @@ var empCurStat= 'P';
 var empCurHrs = 8;   // selected hours for leave
 
 var EA_LABEL = {P:'เข้างาน',L:'มาสาย',AL:'พักร้อน',PL:'ลากิจ',SL:'ลาป่วย',A:'ขาดงาน',H:'หยุด'};
-var EA_ICON  = {P:'✅',L:'🟡',AL:'🌴',PL:'📋',SL:'🏥',A:'❌',H:'⬜'};
+var EA_ICON  = {P:'✅',L:'🟡',AL:'🏖️',PL:'🧳',SL:'🤒',A:'🚫',H:'⬜'};
 var EA_WDAY  = ['อา','จ','อ','พ','พฤ','ศ','ส'];
 var EA_WFULL = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
 var EA_LEAVE = ['AL','PL','SL']; // leave types that use hours
 
 // Helper: convert hours to "X วัน" or "ครึ่งวัน" (1 วัน = 8 ชม.)
 function _h2txt(h) {
-  var d = ((h||0) / 8);
-  if (d <= 0) return '0 วัน';
-  if (d === 0.5) return 'ครึ่งวัน';
-  if (d % 1 === 0) return d + ' วัน';
-  // e.g. 1.5 วัน
-  return (Math.round(d * 10) / 10) + ' วัน';
+  h = h || 0;
+  if (h <= 0) return '0 วัน';
+  var days = Math.floor(h / 8), rem = h - days * 8;
+  if (days === 0 && rem === 4) return 'ครึ่งวัน';
+  var parts = [];
+  if (days > 0) parts.push(days + ' วัน');
+  if (rem > 0) parts.push((Math.round(rem * 10) / 10) + ' ชม.');
+  return parts.join(' ') || '0 วัน';
 }
 
 // Helper: calculate years of service from startDate
@@ -7192,10 +7197,10 @@ function renderEMPDash(){
     {n:empStaff.length,l:'พนักงานทั้งหมด',c:'#f97316',ico:'👥'},
     {n:totP,l:'เข้างาน (เดือนนี้)',c:'#059669',ico:'✅'},
     {n:totL,l:'มาสาย',c:'#b45309',ico:'🟡'},
-    {n:_h2txt(totALh),l:'🌴 พักร้อน',c:'#ea580c',ico:''},
-    {n:_h2txt(totPLh),l:'📋 ลากิจ',c:'#7c3aed',ico:''},
-    {n:_h2txt(totSLh),l:'🏥 ลาป่วย',c:'#2563eb',ico:''},
-    {n:totA,l:'ขาดงาน',c:'#dc2626',ico:'❌'},
+    {n:_h2txt(totALh),l:'🏖️ พักร้อน',c:'#ea580c',ico:''},
+    {n:_h2txt(totPLh),l:'🧳 ลากิจ',c:'#7c3aed',ico:''},
+    {n:_h2txt(totSLh),l:'🤒 ลาป่วย',c:'#2563eb',ico:''},
+    {n:totA,l:'ขาดงาน',c:'#dc2626',ico:'🚫'},
   ];
   document.getElementById('ea-dash').innerHTML=cards.map(function(c){
     return '<div class="ea-sc" style="border-left-color:'+c.c+'">'+
@@ -7363,15 +7368,15 @@ function _checkLeaveWarn(empId, status){
   if(status==='AL'&&emp){
     var a=emp.annualLeave*8,u=yu.AL,r=Math.max(0,a-u);
     msg=r<=0?'⚠️ พักร้อนหมดแล้ว (ใช้ '+_h2txt(u)+' / '+_h2txt(a)+')'
-      :'🌴 พักร้อนคงเหลือ: '+_h2txt(r)+' (ใช้แล้ว '+_h2txt(u)+')';
+      :'🏖️ พักร้อนคงเหลือ: '+_h2txt(r)+' (ใช้แล้ว '+_h2txt(u)+')';
   } else if(status==='PL'&&emp){
     var a2=emp.personalLeave*8,u2=yu.PL,r2=Math.max(0,a2-u2);
     msg=r2<=0?'⚠️ ลากิจหมดแล้ว (ใช้ '+_h2txt(u2)+' / '+_h2txt(a2)+')'
-      :'📋 ลากิจคงเหลือ: '+_h2txt(r2)+' (ใช้แล้ว '+_h2txt(u2)+')';
+      :'🧳 ลากิจคงเหลือ: '+_h2txt(r2)+' (ใช้แล้ว '+_h2txt(u2)+')';
   } else if(status==='SL'&&emp){
     var a3=emp.sickLeave*8,u3=yu.SL,r3=Math.max(0,a3-u3);
     msg=r3<=0?'⚠️ ลาป่วยหมดแล้ว (ใช้ '+_h2txt(u3)+' / '+_h2txt(a3)+')'
-      :'🏥 ลาป่วยคงเหลือ: '+_h2txt(r3)+' (ใช้แล้ว '+_h2txt(u3)+')';
+      :'🤒 ลาป่วยคงเหลือ: '+_h2txt(r3)+' (ใช้แล้ว '+_h2txt(u3)+')';
   }
   warnEl.style.display=msg?'block':'none'; warnEl.textContent=msg;
 }
@@ -7430,9 +7435,9 @@ function _renderEMPStaffList(){
                 '<div class="er-pos">'+esc(e.nickname)+' · '+esc(e.position)+(e.department?' · '+esc(e.department):'')+'</div>'+
               '</div>'+
               '<div style="display:flex;gap:5px;flex-shrink:0">'+
-                '<span class="ea-chip ea-AL" style="font-size:11px" title="พักร้อน">🌴'+e.annualLeave+'</span>'+
-                '<span class="ea-chip ea-PL" style="font-size:11px" title="ลากิจ">📋'+e.personalLeave+'</span>'+
-                '<span class="ea-chip ea-SL" style="font-size:11px" title="ลาป่วย">🏥'+e.sickLeave+'</span>'+
+                '<span class="ea-chip ea-AL" style="font-size:11px" title="พักร้อน">🏖️'+e.annualLeave+'</span>'+
+                '<span class="ea-chip ea-PL" style="font-size:11px" title="ลากิจ">🧳'+e.personalLeave+'</span>'+
+                '<span class="ea-chip ea-SL" style="font-size:11px" title="ลาป่วย">🤒'+e.sickLeave+'</span>'+
               '</div>'+
               '<button class="btn bx sm" onclick="_editEMPStaff(\''+safe(e.id)+'\',\''+safe(e.name)+'\',\''+safe(e.surname)+'\',\''+safe(e.nickname)+'\',\''+safe(e.position)+'\',\''+safe(e.department)+'\','+e.annualLeave+','+e.personalLeave+','+e.sickLeave+')">✏️</button>'+
               '<button class="btn bd sm" onclick="_delEMPStaff(\''+safe(e.id)+'\',\''+safe(e.name)+'\')">🗑️</button>'+
