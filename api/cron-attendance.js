@@ -17,19 +17,20 @@ export default async function handler(req, res) {
       if (key !== secret) { res.status(401).json({ ok: false, error: 'unauthorized' }); return; }
     }
 
+    let chat = '', mode = '', force = false;
+    try { const u2 = new URL(req.url, 'http://x'); chat = u2.searchParams.get('chat') || ''; mode = u2.searchParams.get('mode') || ''; force = u2.searchParams.get('force') === '1'; } catch (e) {}
+
     const thai = new Date(Date.now() + 7 * 3600 * 1000);
     const dow = thai.getUTCDay();            // 0=อาทิตย์ ... 6=เสาร์ (เวลาไทย)
-    if (dow === 0 || dow === 6) {
+    if ((dow === 0 || dow === 6) && !force) {   // ปุ่มฉุกเฉิน (force=1) ยิงได้ทุกวัน
       res.status(200).json({ ok: true, skipped: 'weekend' });
       return;
     }
-    let chat = '', mode = '';
-    try { const u2 = new URL(req.url, 'http://x'); chat = u2.searchParams.get('chat') || ''; mode = u2.searchParams.get('mode') || ''; } catch (e) {}
 
-    // โหมดแจ้งลาเพิ่มเติมระหว่างวัน (ยิงทุก ~1 นาที) — เริ่มหลังรายงานเช้า 08:45 เท่านั้น
+    // โหมดแจ้งลาเพิ่มเติมระหว่างวัน (ยิงทุก ~1 นาที) — เริ่มหลังรายงานเช้า 08:45 (force=1 ข้ามได้)
     if (mode === 'extra') {
       const mins = thai.getUTCHours() * 60 + thai.getUTCMinutes();
-      if (mins < 8 * 60 + 46) { res.status(200).json({ ok: true, skipped: 'before-morning' }); return; }
+      if (mins < 8 * 60 + 46 && !force) { res.status(200).json({ ok: true, skipped: 'before-morning' }); return; }
       const r = await sendAttendanceExtraLeave(null, chat || undefined);
       res.status(200).json({ ok: true, mode: 'extra', result: { date: r.date, count: r.count, sent: r.sent } });
       return;
