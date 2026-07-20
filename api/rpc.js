@@ -714,11 +714,12 @@ async function saveEMPAttendance(data) {
   const ds = dstr(data.date);
   const { data: ex } = await db.from('emp_attendance').select('id').eq('emp_id', data.empId).eq('date', ds).maybeSingle();
   if (ex) {
-    await db.from('emp_attendance').update({ status: data.status, hours, note: data.note || '' }).eq('id', ex.id);
+    // บันทึกทับ → ถือเป็น "ยังไม่แจ้งลาเพิ่มเติม" (เผื่อแก้เป็นลาระหว่างวัน)
+    await db.from('emp_attendance').update({ status: data.status, hours, note: data.note || '', extra_notified: false }).eq('id', ex.id);
     return { success: true, id: ex.id, updated: true };
   }
   const id = 'ATT' + Date.now().toString(36).toUpperCase();
-  await db.from('emp_attendance').insert({ id, emp_id: data.empId, date: ds, status: data.status, hours, note: data.note || '' });
+  await db.from('emp_attendance').insert({ id, emp_id: data.empId, date: ds, status: data.status, hours, note: data.note || '', extra_notified: false });
   return { success: true, id, updated: false };
 }
 async function deleteEMPAttendance(id) {
@@ -771,7 +772,68 @@ export async function sendAttendanceLeaveReport(dateOverride, chatOverride) {
 
   const _tgt = chatOverride || TG_CHAT;
   if (_tgt) await sendTelegramReply(_tgt, text);
+  // mark baseline: ทุกคนที่ลาวันนี้ ณ ตอนรายงานเช้า = "แจ้งแล้ว" (กันตัวแจ้งลาเพิ่มเติมรายงานซ้ำ)
+  try { await db.from('emp_attendance').update({ extra_notified: true }).eq('date', ds).in('status', ['AL', 'PL', 'SL', 'A']); } catch (e) {}
   return { ok: true, date: ds, count: leaves.length, sent: !!_tgt, text };
+}
+
+// ── แจ้ง "ลาเพิ่มเติม" ระหว่างวัน (หลังรายงานเช้า) → เฉพาะวันนี้ที่กดลาเพิ่มและยังไม่แจ้ง ──
+//   ยิงโดยตัวตั้งเวลาภายนอกทุก ~1 นาที (mode=extra) — รวมหลายคนที่กดในนาทีเดียวกันได้เอง
+function _hrLabel(h) {
+  h = parseFloat(h);
+  if (!h || isNaN(h)) h = 8;
+  if (h >= 8) return 'เต็มวัน';
+  if (h === 4) return 'ครึ่งวัน (4 ชั่วโมง)';
+  return (Math.round(h * 10) / 10) + ' ชั่วโมง';
+}
+export async function sendAttendanceExtraLeave(dateOverride, chatOverride) {
+  if (!db) return { ok: false, error: 'no db' };
+  const thai = new Date(Date.now() + 7 * 3600 * 1000);
+  const ds = dateOverride || (thai.getUTCFullYear() + '-' + pad(thai.getUTCMonth() + 1, 2) + '-' + pad(thai.getUTCDate(), 2));
+  const [yy, mm, dd] = ds.split('-');
+  const dateLabel = pad(+dd, 2) + '/' + pad(+mm, 2) + '/' + String((+yy) + 543).slice(-2);
+  const timeLabel = pad(thai.getUTCHours(), 2) + ':' + pad(thai.getUTCMinutes(), 2);
+
+  const staff = await getEMPStaff();
+  const staffById = {};
+  staff.forEach(s => { staffById[s.id] = s; });
+
+  // เฉพาะ "วันนี้" + เป็นการลา + ยังไม่แจ้ง (extra_notified=false/null)
+  const { data: rows } = await db.from('emp_attendance').select('*')
+    .eq('date', ds).in('status', ['AL', 'PL', 'SL', 'A'])
+    .or('extra_notified.is.null,extra_notified.eq.false');
+
+  const items = [];
+  const ids = [];
+  (rows || []).forEach(r => {
+    const s = staffById[String(r.emp_id)];
+    if (!s) return;                                               // พนักงานถูกลบ/ปิดใช้งาน → ข้าม
+    const nm = (s.name + (s.surname ? ' ' + s.surname : '')).trim();
+    items.push({ name: nm, type: LEAVE_LABEL[String(r.status)], hours: r.hours, note: String(r.note || '').trim() });
+    ids.push(r.id);
+  });
+
+  if (!items.length) return { ok: true, date: ds, count: 0, sent: false };  // ไม่มีลาเพิ่ม → เงียบ
+
+  const bar = '━━━━━━━━━━━━━━━━━━';
+  const head =
+    bar + '\n' +
+    '🆕 แจ้งลาเพิ่มเติม  📌 ฝ่ายคลังสินค้า\n' +
+    '👤 ผู้แจ้ง : ' + LEAVE_REPORTER + '\n' +
+    '📅 วันที่ : ' + dateLabel + '\n' +
+    '⏰ เวลาแจ้ง : ' + timeLabel + '\n' +
+    bar;
+  const blocks = items.map(it =>
+    ' ' + it.name + '\n' +
+    ' ประเภท : ' + it.type + ' (' + _hrLabel(it.hours) + ')' + (it.note ? '\n หมายเหตุ : ' + it.note : '')
+  ).join('\n' + bar + '\n');
+  const text = head + '\n' + blocks + '\n' + bar;
+
+  const _tgt = chatOverride || TG_CHAT;
+  if (_tgt) await sendTelegramReply(_tgt, text);
+  // mark ว่าแจ้งแล้ว (กันรายงานซ้ำในรอบถัดไป)
+  try { if (ids.length) await db.from('emp_attendance').update({ extra_notified: true }).in('id', ids); } catch (e) {}
+  return { ok: true, date: ds, count: items.length, sent: !!_tgt, text };
 }
 
 // ============================================================================
