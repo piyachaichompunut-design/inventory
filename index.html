@@ -1897,49 +1897,53 @@ function appLogout(){
 <!-- ═══ TAB: FUEL (รายงานน้ำมันดีเซล) ═══ -->
 <div class="pane" id="tab-fuel">
   <style>
+    /* ===== ธีมเข้มพรีเมียม (เหมือนหน้าแดชบอร์ด) — คงเลย์เอาต์เดิม ===== */
+    #tab-fuel.pane{background:#0d1117;border-radius:16px;padding:16px}
     .fu-wrap{display:flex;flex-direction:column;gap:16px}
     .fu-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;
-      background:linear-gradient(135deg,#0f172a,#1e3a8a);border-radius:16px;padding:20px 24px;color:#fff;box-shadow:0 8px 24px rgba(30,58,138,.28)}
+      background:linear-gradient(135deg,#111827,#1e3a8a);border-radius:16px;padding:20px 24px;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.45);border:1px solid #30363d}
     .fu-title{font-size:22px;font-weight:900;letter-spacing:.3px}
-    .fu-sub{font-size:12.5px;opacity:.85;margin-top:2px}
+    .fu-sub{font-size:12.5px;opacity:.8;margin-top:2px}
     .fu-head-ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .fu-head-ctrl select{padding:8px 12px;border-radius:9px;border:none;font-size:13px;font-weight:700;background:rgba(255,255,255,.15);color:#fff;cursor:pointer}
+    .fu-head-ctrl select{padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.18);font-size:13px;font-weight:700;background:rgba(255,255,255,.1);color:#fff;cursor:pointer}
     .fu-head-ctrl select option{color:#111}
     .fu-btn{padding:9px 16px;border:none;border-radius:9px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;transition:.15s}
     .fu-btn-print{background:#fbbf24;color:#3b2606;box-shadow:0 3px 10px rgba(251,191,36,.4)}
     .fu-btn-print:hover{transform:translateY(-1px)}
     .fu-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
-    .fu-kpi{border-radius:15px;padding:16px 18px;color:#fff;position:relative;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.14)}
-    .fu-kpi .fu-kpi-ic{position:absolute;right:12px;top:10px;font-size:34px;opacity:.28}
-    .fu-kpi .fu-kpi-l{font-size:12px;font-weight:700;opacity:.92}
+    .fu-kpi{border-radius:15px;padding:16px 18px;color:#fff;position:relative;overflow:hidden;box-shadow:0 8px 22px rgba(0,0,0,.38);border:1px solid rgba(255,255,255,.08)}
+    .fu-kpi .fu-kpi-ic{position:absolute;right:12px;top:10px;font-size:34px;opacity:.32}
+    .fu-kpi .fu-kpi-l{font-size:12px;font-weight:700;opacity:.95}
     .fu-kpi .fu-kpi-v{font-size:25px;font-weight:900;margin-top:5px;line-height:1.1}
     .fu-kpi .fu-kpi-s{font-size:11.5px;opacity:.9;margin-top:3px}
     .fu-grid{display:grid;grid-template-columns:360px 1fr;gap:16px}
     @media(max-width:920px){.fu-grid{grid-template-columns:1fr}}
-    .fu-card{background:var(--card);border:1px solid var(--border);border-radius:15px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
-    .fu-card-t{font-size:14.5px;font-weight:800;color:var(--txt);margin-bottom:14px;display:flex;align-items:center;gap:6px}
+    .fu-card{background:#161b22;border:1px solid #30363d;border-radius:15px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+    .fu-card-t{font-size:14.5px;font-weight:800;color:#f0f6fc;margin-bottom:14px;display:flex;align-items:center;gap:6px}
     .fu-fg{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
-    .fu-fg label{font-size:11.5px;font-weight:700;color:var(--muted)}
-    .fu-fg input,.fu-fg select{padding:9px 11px;border:1.5px solid var(--border);border-radius:9px;font-size:13.5px;background:var(--card);color:var(--txt);outline:none;font-family:inherit}
-    .fu-fg input:focus,.fu-fg select:focus{border-color:var(--pri)}
+    .fu-fg label{font-size:11.5px;font-weight:700;color:#8b949e}
+    .fu-fg input,.fu-fg select{padding:9px 11px;border:1.5px solid #30363d;border-radius:9px;font-size:13.5px;background:#0d1117;color:#e6edf3;outline:none;font-family:inherit}
+    .fu-fg input:focus,.fu-fg select:focus{border-color:#3b82f6}
+    .fu-fg input:read-only{background:#010409;color:#8b949e}
+    .fu-fg select option{background:#161b22;color:#e6edf3}
     .fu-seg{display:flex;gap:8px}
-    .fu-seg button{flex:1;padding:10px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--muted);font-weight:800;font-size:13px;cursor:pointer;font-family:inherit}
-    .fu-seg button.on-in{border-color:#10b981;background:#10b98118;color:#059669}
-    .fu-seg button.on-out{border-color:#ef4444;background:#ef444418;color:#dc2626}
+    .fu-seg button{flex:1;padding:10px;border-radius:10px;border:2px solid #30363d;background:#0d1117;color:#8b949e;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit}
+    .fu-seg button.on-in{border-color:#10b981;background:#10b98122;color:#34d399}
+    .fu-seg button.on-out{border-color:#ef4444;background:#ef444422;color:#f87171}
     .fu-save{width:100%;padding:12px;border:none;border-radius:11px;background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:#fff;font-weight:900;font-size:14px;cursor:pointer;font-family:inherit;margin-top:4px}
-    .fu-save:hover{filter:brightness(1.06)}
-    .fu-clr{width:100%;padding:9px;border:1.5px solid var(--border);border-radius:10px;background:transparent;color:var(--muted);font-weight:700;font-size:12.5px;cursor:pointer;font-family:inherit;margin-top:7px}
+    .fu-save:hover{filter:brightness(1.1)}
+    .fu-clr{width:100%;padding:9px;border:1.5px solid #30363d;border-radius:10px;background:transparent;color:#8b949e;font-weight:700;font-size:12.5px;cursor:pointer;font-family:inherit;margin-top:7px}
     .fu-tbl{width:100%;border-collapse:collapse;font-size:13px}
-    .fu-tbl th{background:linear-gradient(135deg,#1e293b,#334155);color:#fff;padding:10px 12px;text-align:left;font-size:11.5px;font-weight:700;white-space:nowrap}
-    .fu-tbl td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--txt);white-space:nowrap}
+    .fu-tbl th{background:#0d1117;color:#8b949e;padding:10px 12px;text-align:left;font-size:11.5px;font-weight:700;white-space:nowrap;border-bottom:1px solid #30363d}
+    .fu-tbl td{padding:9px 12px;border-bottom:1px solid #21262d;color:#e6edf3;white-space:nowrap}
+    .fu-tbl tr:hover td{background:#1c2128}
     .fu-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:800}
-    .fu-del{background:#fff5f5;border:1.5px solid #fecaca;color:#ef4444;padding:4px 9px;border-radius:7px;font-size:12px;cursor:pointer}
-    body.dark-mode .fu-tbl th{background:linear-gradient(135deg,#0f172a,#1e293b)}
-    body.dark-mode .fu-seg button{background:#0f172a}
+    .fu-del{background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:4px 9px;border-radius:7px;font-size:12px;cursor:pointer}
+    .fu-del:hover{background:#30363d}
   </style>
   <div class="fu-wrap">
     <div class="fu-head">
-      <div><div class="fu-title">⛽ รายงานน้ำมันดีเซล</div><div class="fu-sub">สรุปการรับเข้า–เบิกจ่ายน้ำมัน · รถโฟล์คลิฟท์ 5 คัน</div></div>
+      <div><div class="fu-title">⛽ รายงานน้ำมันดีเซล</div><div class="fu-sub">สรุปการรับเข้า–เบิกจ่ายน้ำมัน · แยกตามแผนก</div></div>
       <div class="fu-head-ctrl">
         <select id="fu-mn" onchange="renderFuel()"></select>
         <select id="fu-yr" onchange="renderFuel()"></select>
@@ -4868,7 +4872,7 @@ function renderFuel(){
 function fuBar(canvasId,key,labels,data,colors){
   var el=document.getElementById(canvasId); if(!el||typeof Chart==='undefined') return;
   if(fuCharts[key]) fuCharts[key].destroy();
-  var dark=document.body.classList.contains('dark-mode');
+  var dark=true;   // หน้าน้ำมันเป็นธีมเข้มเสมอ → กราฟใช้โทนเข้ม
   fuCharts[key]=new Chart(el.getContext('2d'),{
     type:'bar',
     data:{labels:labels,datasets:[{data:data,backgroundColor:colors,borderRadius:8,maxBarThickness:64}]},
