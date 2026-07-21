@@ -1962,8 +1962,8 @@ function appLogout(){
           <select id="fu-f-veh"></select>
         </div>
         <div class="fu-fg"><label>จำนวน (ลิตร)</label><input type="number" id="fu-f-liters" min="0" step="0.01" placeholder="0" oninput="fuCalc()"></div>
-        <div class="fu-fg"><label>ยอดเงินรวม (บาท)</label><input type="number" id="fu-f-baht" min="0" step="0.01" placeholder="0" oninput="fuCalc()"></div>
-        <div class="fu-fg"><label>ราคา/ลิตร (บาท) — คิดให้อัตโนมัติ</label><input type="number" id="fu-f-ppl" min="0" step="0.01" placeholder="0"></div>
+        <div class="fu-fg"><label id="fu-lbl-baht">ยอดเงินรวม (บาท)</label><input type="number" id="fu-f-baht" min="0" step="0.01" placeholder="0" oninput="fuCalc()"></div>
+        <div class="fu-fg"><label id="fu-lbl-ppl">ราคา/ลิตร (บาท) — คิดให้อัตโนมัติ</label><input type="number" id="fu-f-ppl" min="0" step="0.01" placeholder="0"></div>
         <div class="fu-fg"><label id="fu-lbl-person">คนขับ</label><input type="text" id="fu-f-person" placeholder="ชื่อ..."></div>
         <div class="fu-fg"><label>หมายเหตุ</label><input type="text" id="fu-f-note" placeholder="(ถ้ามี)"></div>
         <button class="fu-save" onclick="saveFuelEntry()">💾 บันทึก</button>
@@ -1977,6 +1977,15 @@ function appLogout(){
     <div class="fu-card">
       <div class="fu-card-t">📈 การใช้น้ำมันรายวัน (ลิตร)</div>
       <canvas id="fu-chart-day" height="80"></canvas>
+    </div>
+    <div class="fu-card">
+      <div class="fu-card-t">🏭 สรุปการเบิกจ่ายแยกตามแผนก (เดือนนี้)</div>
+      <div style="overflow-x:auto">
+        <table class="fu-tbl">
+          <thead><tr><th>รถ / แผนก</th><th style="text-align:right">ลิตร</th><th style="text-align:right">เป็นเงิน (บาท)</th><th style="text-align:right">ครั้ง</th></tr></thead>
+          <tbody id="fu-dept-sum"></tbody>
+        </table>
+      </div>
     </div>
     <div class="fu-card">
       <div class="fu-card-t">📋 รายการบันทึกเดือนนี้ (<span id="fu-cnt">0</span>)</div>
@@ -4729,8 +4738,8 @@ function renderReport(){
 // ══════════════════════════════════════════════
 //  FUEL — รายงานน้ำมันดีเซล (รถโฟล์คลิฟท์ 5 คัน)
 // ══════════════════════════════════════════════
-var FU_VEH = ['คลังสินค้า','โรงเสาไฟ','โรงเหล็ก','โรงป้าย','โรงการ์ดเรล'];
-var FU_COL = {'คลังสินค้า':'#3b82f6','โรงเสาไฟ':'#f59e0b','โรงเหล็ก':'#8b5cf6','โรงป้าย':'#ec4899','โรงการ์ดเรล':'#10b981'};
+var FU_VEH = ['คลังสินค้า','โรงเสาไฟ','โรงเหล็ก','โรงป้าย','โรงการ์ดเรล','อื่นๆ'];
+var FU_COL = {'คลังสินค้า':'#3b82f6','โรงเสาไฟ':'#f59e0b','โรงเหล็ก':'#8b5cf6','โรงป้าย':'#ec4899','โรงการ์ดเรล':'#10b981','อื่นๆ':'#64748b'};
 var fuelLogs=[], fuCharts={}, fuInited=false, fuKind='จ่าย';
 function fuN(x,d){ d=d||0; return (Number(x)||0).toLocaleString('th-TH',{minimumFractionDigits:d,maximumFractionDigits:d}); }
 function fuDate(s){ var d=new Date(s); if(isNaN(d))return esc(String(s)); return d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543); }
@@ -4752,11 +4761,32 @@ function fuSetKind(k){
   document.getElementById('fu-seg-out').className = k==='จ่าย'?'on-out':'';
   document.getElementById('fu-fg-veh').style.display = k==='จ่าย'?'flex':'none';
   document.getElementById('fu-lbl-person').textContent = k==='รับเข้า'?'ผู้ขาย / ปั๊ม':'คนขับ';
+  // เบิกจ่าย: ยอดเงิน + ราคา/ลิตร คิดอัตโนมัติจากราคาเฉลี่ยที่ซื้อเข้า → ล็อกช่อง (พิมพ์เองไม่ได้)
+  var isOut=k==='จ่าย';
+  var baht=document.getElementById('fu-f-baht'), ppl=document.getElementById('fu-f-ppl');
+  baht.readOnly=isOut; ppl.readOnly=true;                       // ราคา/ลิตร คิดอัตโนมัติทั้ง 2 โหมดอยู่แล้ว
+  baht.style.background=isOut?'#f1f5f9':''; ppl.style.background='#f1f5f9';
+  document.getElementById('fu-lbl-baht').textContent = isOut?'ยอดเงินรวม (บาท) — คิดอัตโนมัติ':'ยอดเงินรวม (บาท)';
+  fuCalc();
+}
+// ราคาเฉลี่ยต่อลิตรจาก "การซื้อเข้าคลัง" ทั้งหมด (weighted average) — ใช้เป็นต้นทุนตอนเบิกจ่าย
+function fuAvgBuyPrice(){
+  var L=0,B=0;
+  fuelLogs.forEach(function(r){ if(r.kind==='รับเข้า'){ L+=Number(r.liters)||0; B+=Number(r.baht)||0; } });
+  return L>0?B/L:0;
 }
 function fuCalc(){
-  var l=parseFloat(document.getElementById('fu-f-liters').value)||0;
-  var b=parseFloat(document.getElementById('fu-f-baht').value)||0;
-  if(l>0&&b>0) document.getElementById('fu-f-ppl').value=(b/l).toFixed(2);
+  if(fuKind==='จ่าย'){
+    // เบิกจ่าย: ราคา/ลิตร = ค่าเฉลี่ยที่ซื้อเข้า | ยอดเงิน = ลิตร × ค่าเฉลี่ย (อัตโนมัติ)
+    var lo=parseFloat(document.getElementById('fu-f-liters').value)||0;
+    var avg=fuAvgBuyPrice();
+    document.getElementById('fu-f-ppl').value = avg>0?avg.toFixed(2):'';
+    document.getElementById('fu-f-baht').value = (lo>0&&avg>0)?(lo*avg).toFixed(2):'';
+  } else {
+    var l=parseFloat(document.getElementById('fu-f-liters').value)||0;
+    var b=parseFloat(document.getElementById('fu-f-baht').value)||0;
+    if(l>0&&b>0) document.getElementById('fu-f-ppl').value=(b/l).toFixed(2);
+  }
 }
 function loadFuel(){
   fuInitControls();
@@ -4775,7 +4805,7 @@ function renderFuel(){
   var m=+document.getElementById('fu-mn').value, y=+document.getElementById('fu-yr').value;
   var endT=new Date(y,m,0,23,59,59).getTime();
   var stock=0; fuelLogs.forEach(function(r){ var d=new Date(r.date); if(isNaN(d)||d.getTime()>endT) return; stock+=(r.kind==='รับเข้า'?r.liters:-r.liters); });
-  var avg=inL>0?inB/inL:0;
+  var avg=fuAvgBuyPrice();   // ราคาเฉลี่ยต้นทุนจากการซื้อเข้าทั้งหมด (ใช้คิดเบิกจ่าย)
   var kpis=[
     {l:'รับเข้า (เดือนนี้)',v:fuN(inL,1)+' ล.',s:'฿ '+fuN(inB,0),ic:'📥',g:'linear-gradient(135deg,#059669,#10b981)'},
     {l:'เบิกจ่าย (เดือนนี้)',v:fuN(outL,1)+' ล.',s:outCnt+' ครั้ง',ic:'⛽',g:'linear-gradient(135deg,#dc2626,#f87171)'},
@@ -4792,6 +4822,26 @@ function renderFuel(){
   var days={}; logs.forEach(function(r){ if(r.kind!=='จ่าย')return; var d=String(r.date).slice(0,10); days[d]=(days[d]||0)+r.liters; });
   var dk=Object.keys(days).sort();
   fuBar('fu-chart-day','day',dk.map(function(d){return +d.slice(8)+'/'+ +d.slice(5,7);}),dk.map(function(d){return days[d];}),dk.map(function(){return '#3b82f6';}));
+  // สรุปการเบิกจ่ายแยกตามแผนก (ลิตร + เป็นเงิน + จำนวนครั้ง)
+  var deptSum=document.getElementById('fu-dept-sum');
+  if(deptSum){
+    var dRows=FU_VEH.map(function(v){
+      var vl=logs.filter(function(r){return r.kind==='จ่าย'&&r.vehicle===v;});
+      return {v:v,L:vl.reduce(function(s,r){return s+(Number(r.liters)||0);},0),B:vl.reduce(function(s,r){return s+(Number(r.baht)||0);},0),c:vl.length};
+    }).filter(function(x){return x.c>0;});
+    if(!dRows.length){ deptSum.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">— ยังไม่มีการเบิกจ่ายในเดือนนี้ —</td></tr>'; }
+    else{
+      var tL=dRows.reduce(function(s,x){return s+x.L;},0), tB=dRows.reduce(function(s,x){return s+x.B;},0), tc=dRows.reduce(function(s,x){return s+x.c;},0);
+      deptSum.innerHTML=dRows.map(function(x){
+        return '<tr><td><span style="font-weight:700;color:'+(FU_COL[x.v]||'#94a3b8')+'">'+esc(x.v)+'</span></td>'+
+          '<td style="text-align:right;font-weight:700">'+fuN(x.L,1)+'</td>'+
+          '<td style="text-align:right">'+fuN(x.B,0)+'</td>'+
+          '<td style="text-align:right;color:var(--muted)">'+x.c+'</td></tr>';
+      }).join('')+
+      '<tr style="border-top:2px solid var(--border);font-weight:800"><td>รวมทั้งหมด</td>'+
+        '<td style="text-align:right">'+fuN(tL,1)+' ล.</td><td style="text-align:right">'+fuN(tB,0)+' ฿</td><td style="text-align:right">'+tc+'</td></tr>';
+    }
+  }
   var tb=document.getElementById('fu-tb');
   document.getElementById('fu-cnt').textContent=logs.length;
   if(!logs.length){ tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px">— ยังไม่มีบันทึกในเดือนนี้ —</td></tr>'; return; }
@@ -4883,12 +4933,12 @@ function printFuel(){
     'h3{margin:20px 0 8px;font-size:15px;color:#1e3a8a}table{width:100%;border-collapse:collapse;font-size:12.5px}'+
     'th{background:#1e293b;color:#fff;padding:8px 10px;text-align:left}td{padding:7px 10px;border-bottom:1px solid #e5e9f0}'+
     '@media print{@page{size:A4;margin:12mm}}</style></head><body>'+
-    '<div class="hd"><div><h1>⛽ รายงานน้ำมันดีเซล</h1><div class="d">ประจำเดือน '+monthName+' '+yearBE+' · รถโฟล์คลิฟท์ 5 คัน</div></div>'+
+    '<div class="hd"><div><h1>⛽ รายงานน้ำมันดีเซล</h1><div class="d">ประจำเดือน '+monthName+' '+yearBE+' · แยกการใช้ตามแผนก</div></div>'+
     '<div style="text-align:right"><div style="font-size:12px;opacity:.85">Task Management System</div></div></div>'+
     '<div class="k">'+
       '<div class="kc" style="background:linear-gradient(135deg,#059669,#10b981)"><div class="l">รับเข้า</div><div class="v">'+inL.toLocaleString('th-TH')+' ล.</div><div class="l">฿ '+inB.toLocaleString('th-TH')+'</div></div>'+
       '<div class="kc" style="background:linear-gradient(135deg,#dc2626,#f87171)"><div class="l">เบิกจ่าย</div><div class="v">'+outL.toLocaleString('th-TH')+' ล.</div><div class="l">฿ '+outB.toLocaleString('th-TH')+'</div></div>'+
-      '<div class="kc" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)"><div class="l">ราคาเฉลี่ย</div><div class="v">'+(inL>0?(inB/inL).toFixed(2):'0')+'</div><div class="l">บาท/ลิตร</div></div>'+
+      '<div class="kc" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)"><div class="l">ราคาเฉลี่ย (ต้นทุนซื้อเข้า)</div><div class="v">'+fuAvgBuyPrice().toFixed(2)+'</div><div class="l">บาท/ลิตร</div></div>'+
     '</div>'+
     '<h3>📊 การใช้น้ำมันแยกตามคัน</h3>'+
     '<table><thead><tr><th>รถ/แผนก</th><th style="text-align:right">ลิตร</th><th style="text-align:right">บาท</th><th style="text-align:right">ครั้ง</th><th>สัดส่วน</th></tr></thead><tbody>'+vehRows+'</tbody></table>'+
