@@ -613,6 +613,31 @@ const EXTRACT_PROMPT =
   '- หมายเหตุ/ใช้ในงาน/เอกสารอ้างอิง (ถ้ามี)\n' +
   'ตอบเป็นข้อความสั้นๆ ไม่ต้องมีคำอธิบายหรือคำนำอื่น';
 
+// เรียก Groq พร้อม retry (กัน error/rate-limit/timeout ชั่วคราวทำให้อ่านไฟล์ไม่ได้)
+async function groqComplete(body, tries) {
+  tries = tries || 3;
+  let lastErr = '';
+  for (let a = 0; a < tries; a++) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify(body)
+      });
+      if (res.status === 429 || res.status >= 500) { lastErr = 'http ' + res.status; await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }
+      const j = await res.json();
+      if (j.error) {
+        lastErr = j.error.message || 'groq error';
+        if (/rate|overload|capacit|timeout|try again|temporar/i.test(lastErr) && a < tries - 1) { await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }
+        return { error: lastErr };
+      }
+      const content = String(j.choices?.[0]?.message?.content || '').trim();
+      if (!content && a < tries - 1) { lastErr = 'empty'; await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }  // ว่าง → ลองใหม่
+      return { content };
+    } catch (e) { lastErr = e.message; await new Promise(r => setTimeout(r, 700 * (a + 1))); }
+  }
+  return { error: lastErr || 'failed' };
+}
 async function readItemsFromFileAI(buffer, contentType, fileName) {
   if (!GROQ_KEY) return '';
   const isImage = /^image\//i.test(contentType || '') || /\.(jpe?g|png|webp|gif)$/i.test(fileName || '');
@@ -622,20 +647,15 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
       // ย่อรูปให้เล็กพอส่ง base64 (Groq จำกัดขนาด)
       const { buffer: small } = await compressIfImage(buffer, /^image\//.test(contentType || '') ? contentType : 'image/jpeg');
       const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
-        body: JSON.stringify({
-          model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 1200,
-          messages: [{ role: 'user', content: [
-            { type: 'text', text: EXTRACT_PROMPT },
-            { type: 'image_url', image_url: { url: dataUrl } }
-          ]}]
-        })
+      const r = await groqComplete({
+        model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 1200,
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: EXTRACT_PROMPT },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]}]
       });
-      const j = await res.json();
-      if (j.error) { console.error('groq vision:', j.error.message); return ''; }
-      return String(j.choices?.[0]?.message?.content || '').trim();
+      if (r.error) { console.error('groq vision (' + (fileName || 'image') + '):', r.error); return ''; }
+      return String(r.content || '').trim();
     }
     if (isPdf) {
       // ดึงข้อความจาก PDF (ใบงานจาก Odoo มี text layer) แล้วให้ Groq จัดเป็นรายการ
@@ -655,20 +675,15 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
       const soPoPr = text.match(/\b((?:SO|PO|PR)\s*\d{3,})\b/i);
       if (soPoPr && (!docref || !/(?:SO|PO|PR)\s*\d/i.test(docref))) docref = soPoPr[1].replace(/\s+/g, '');
       const docPrefix = docref ? ('DOCREF: ' + docref.slice(0, 80) + '\n') : '';
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
-        body: JSON.stringify({
-          model: GROQ_TEXT_MODEL, temperature: 0, max_tokens: 1200,
-          messages: [
-            { role: 'system', content: EXTRACT_PROMPT },
-            { role: 'user', content: 'ข้อความที่ดึงจากไฟล์:\n' + text.slice(0, 6000) }
-          ]
-        })
+      const r = await groqComplete({
+        model: GROQ_TEXT_MODEL, temperature: 0, max_tokens: 1200,
+        messages: [
+          { role: 'system', content: EXTRACT_PROMPT },
+          { role: 'user', content: 'ข้อความที่ดึงจากไฟล์:\n' + text.slice(0, 6000) }
+        ]
       });
-      const j = await res.json();
-      if (j.error) { console.error('groq text:', j.error.message); return (docPrefix + text.slice(0, 1200)).trim(); }
-      let out = String(j.choices?.[0]?.message?.content || text.slice(0, 1200)).trim();
+      if (r.error) { console.error('groq text:', r.error); return (docPrefix + text.slice(0, 1200)).trim(); }
+      let out = String(r.content || text.slice(0, 1200)).trim();
       // deterministic DOCREF ต้องชนะเสมอ → วางไว้บรรทัดแรก (odooDocForFile ใช้ DOCREF ตัวแรก)
       //   ป้องกัน AI เดาเลขงานผิด (เคยไปจับเลข PO ที่ไม่เกี่ยวมาลงผิดงาน)
       if (docPrefix) out = docPrefix + out.replace(/^DOCREF\s*[:：].*$/im, '').trim();
