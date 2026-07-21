@@ -4775,6 +4775,11 @@ function fuAvgBuyPrice(){
   fuelLogs.forEach(function(r){ if(r.kind==='รับเข้า'){ L+=Number(r.liters)||0; B+=Number(r.baht)||0; } });
   return L>0?B/L:0;
 }
+// ยอดเงินของแต่ละรายการ: เบิกจ่าย = ลิตร × ราคาเฉลี่ยปัจจุบัน (คิดสดทุกครั้ง) | รับเข้า = ยอดที่บันทึกไว้
+function fuRowBaht(r,avg){
+  if(avg===undefined) avg=fuAvgBuyPrice();
+  return r.kind==='จ่าย' ? (Number(r.liters)||0)*avg : (Number(r.baht)||0);
+}
 function fuCalc(){
   if(fuKind==='จ่าย'){
     // เบิกจ่าย: ราคา/ลิตร = ค่าเฉลี่ยที่ซื้อเข้า | ยอดเงิน = ลิตร × ค่าเฉลี่ย (อัตโนมัติ)
@@ -4827,7 +4832,7 @@ function renderFuel(){
   if(deptSum){
     var dRows=FU_VEH.map(function(v){
       var vl=logs.filter(function(r){return r.kind==='จ่าย'&&r.vehicle===v;});
-      return {v:v,L:vl.reduce(function(s,r){return s+(Number(r.liters)||0);},0),B:vl.reduce(function(s,r){return s+(Number(r.baht)||0);},0),c:vl.length};
+      return {v:v,L:vl.reduce(function(s,r){return s+(Number(r.liters)||0);},0),B:vl.reduce(function(s,r){return s+fuRowBaht(r,avg);},0),c:vl.length};
     }).filter(function(x){return x.c>0;});
     if(!dRows.length){ deptSum.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">— ยังไม่มีการเบิกจ่ายในเดือนนี้ —</td></tr>'; }
     else{
@@ -4853,10 +4858,11 @@ function renderFuel(){
       '<td>'+fuDate(r.date)+'</td>'+'<td>'+pill+'</td>'+
       '<td>'+(r.vehicle?'<span style="font-weight:700;color:'+vcol+'">'+esc(r.vehicle)+'</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
       '<td style="text-align:right;font-weight:700">'+fuN(r.liters,1)+'</td>'+
-      '<td style="text-align:right">'+fuN(r.baht,0)+'</td>'+
-      '<td style="text-align:right;color:var(--muted)">'+fuN(r.pricePerLiter,2)+'</td>'+
+      '<td style="text-align:right">'+fuN(fuRowBaht(r,avg),0)+'</td>'+
+      '<td style="text-align:right;color:var(--muted)">'+fuN(isIn?r.pricePerLiter:avg,2)+'</td>'+
       '<td>'+esc(r.person||'')+'</td>'+'<td style="color:var(--muted)">'+esc(r.note||'')+'</td>'+
-      '<td><button class="fu-del" onclick="delFuel(\''+r.id+'\')">🗑️</button></td></tr>';
+      '<td style="white-space:nowrap"><button class="fu-del" onclick="editFuel(\''+r.id+'\')" title="แก้ไข">✏️</button> '+
+      '<button class="fu-del" onclick="delFuel(\''+r.id+'\')" title="ลบ">🗑️</button></td></tr>';
   }).join('');
 }
 function fuBar(canvasId,key,labels,data,colors){
@@ -4894,6 +4900,23 @@ function saveFuelEntry(){
     else toast('บันทึกไม่สำเร็จ: '+((res&&res.error)||''),'error');
   }).withFailureHandler(function(e){ toast('ผิดพลาด: '+(e&&e.message||e),'error'); }).saveFuelLog(rec);
 }
+function editFuel(id){
+  var r=fuelLogs.find(function(x){return x.id===id;});
+  if(!r){ toast('ไม่พบรายการ','error'); return; }
+  document.getElementById('fu-f-id').value=r.id;
+  fuSetKind(r.kind==='รับเข้า'?'รับเข้า':'จ่าย');            // ตั้งโหมด (ล็อก/ปลดล็อกช่องเงินให้ถูก)
+  document.getElementById('fu-f-date').value=String(r.date).slice(0,10);
+  if(r.kind==='จ่าย') document.getElementById('fu-f-veh').value=r.vehicle||FU_VEH[0];
+  document.getElementById('fu-f-liters').value=r.liters||'';
+  document.getElementById('fu-f-person').value=r.person||'';
+  document.getElementById('fu-f-note').value=r.note||'';
+  if(r.kind==='รับเข้า'){                                     // รับเข้า: กรอกเงิน/ราคาเองได้
+    document.getElementById('fu-f-baht').value=r.baht||'';
+    document.getElementById('fu-f-ppl').value=r.pricePerLiter||'';
+  } else { fuCalc(); }                                        // เบิกจ่าย: คิดเงินใหม่จากราคาเฉลี่ย
+  try{ document.getElementById('fu-f-liters').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+  toast('โหลดรายการมาแก้ไขแล้ว — แก้เสร็จกด 💾 บันทึก','success');
+}
 function delFuel(id){
   if(!confirm('ลบรายการนี้?')) return;
   google.script.run.withSuccessHandler(function(res){
@@ -4905,11 +4928,12 @@ function printFuel(){
   var mnSel=document.getElementById('fu-mn'), yrSel=document.getElementById('fu-yr');
   var monthName=mnSel.options[mnSel.selectedIndex].text, yearBE=yrSel.options[yrSel.selectedIndex].text;
   if(!logs.length){ toast('เดือนนี้ยังไม่มีข้อมูลให้ปริ้นซ์','error'); return; }
+  var avg=fuAvgBuyPrice();
   var inL=0,inB=0,outL=0,outB=0;
-  logs.forEach(function(r){ if(r.kind==='รับเข้า'){inL+=r.liters;inB+=r.baht;}else{outL+=r.liters;outB+=r.baht;} });
+  logs.forEach(function(r){ if(r.kind==='รับเข้า'){inL+=r.liters;inB+=r.baht;}else{outL+=r.liters;outB+=fuRowBaht(r,avg);} });
   var perV=FU_VEH.map(function(v){
     var vl=logs.filter(function(r){return r.kind==='จ่าย'&&r.vehicle===v;});
-    return {v:v,L:vl.reduce(function(s,r){return s+r.liters;},0),B:vl.reduce(function(s,r){return s+r.baht;},0),c:vl.length};
+    return {v:v,L:vl.reduce(function(s,r){return s+r.liters;},0),B:vl.reduce(function(s,r){return s+fuRowBaht(r,avg);},0),c:vl.length};
   });
   var maxL=Math.max.apply(null,perV.map(function(x){return x.L;}).concat([1]));
   var vehRows=perV.map(function(x){
@@ -4921,7 +4945,7 @@ function printFuel(){
   var entRows=logs.map(function(r,i){
     return '<tr><td>'+(i+1)+'</td><td>'+fuDate(r.date)+'</td><td>'+(r.kind==='รับเข้า'?'📥 รับเข้า':'⛽ เบิกจ่าย')+'</td>'+
       '<td>'+(r.vehicle||'-')+'</td><td style="text-align:right">'+r.liters.toLocaleString('th-TH')+'</td>'+
-      '<td style="text-align:right">'+r.baht.toLocaleString('th-TH')+'</td><td>'+(r.person||'')+'</td><td>'+(r.note||'')+'</td></tr>';
+      '<td style="text-align:right">'+Math.round(fuRowBaht(r,avg)).toLocaleString('th-TH')+'</td><td>'+(r.person||'')+'</td><td>'+(r.note||'')+'</td></tr>';
   }).join('');
   var w=window.open('','_blank','width=980,height=800');
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>รายงานน้ำมันดีเซล '+monthName+' '+yearBE+'</title>'+
