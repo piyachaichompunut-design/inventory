@@ -110,7 +110,7 @@ async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
           messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'ข้อความจากไฟล์:\n' + text.slice(0, 8000) }] })
       });
       const j = await res.json(); if (j.error) return [];
-      content = j.choices?.[0]?.message?.content || '';
+      content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '');  // ตัด reasoning ของ qwen
     } else {
       // ตารางแน่นๆ ต้องการความละเอียดสูง → ย่อที่ 2200px ให้ตัวหนังสือคมพออ่าน
       let imgBuf = buffer;
@@ -121,11 +121,11 @@ async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
       const dataUrl = 'data:image/jpeg;base64,' + imgBuf.toString('base64');
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + groqKey },
-        body: JSON.stringify({ model: visionModel, temperature: 0, max_tokens: 2500,
+        body: JSON.stringify({ model: visionModel, temperature: 0, max_tokens: 4000,
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl } }] }] })
       });
       const j = await res.json(); if (j.error) { console.error('vision table:', j.error.message); return []; }
-      content = j.choices?.[0]?.message?.content || '';
+      content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '');  // ตัด reasoning ของ qwen
     }
   } catch (e) { console.error('tableRowsFromAI:', e.message); return []; }
   const out = [];
