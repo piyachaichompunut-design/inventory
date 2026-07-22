@@ -631,7 +631,7 @@ async function groqComplete(body, tries) {
         if (/rate|overload|capacit|timeout|try again|temporar/i.test(lastErr) && a < tries - 1) { await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }
         return { error: lastErr };
       }
-      const content = String(j.choices?.[0]?.message?.content || '').trim();
+      const content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();  // ตัดส่วน reasoning ของ qwen ทิ้ง
       if (!content && a < tries - 1) { lastErr = 'empty'; await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }  // ว่าง → ลองใหม่
       return { content };
     } catch (e) { lastErr = e.message; await new Promise(r => setTimeout(r, 700 * (a + 1))); }
@@ -652,7 +652,8 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
         .filter((m, i, a) => a.indexOf(m) === i);
       for (const model of visionModels) {
         const r = await groqComplete({
-          model, temperature: 0, max_tokens: 1200,
+          // qwen3.6 เป็นโมเดล reasoning (คิดก่อนตอบ) → ต้องให้ max_tokens เยอะพอ ไม่งั้นคิดหมด token แล้ว content ว่าง
+          model, temperature: 0, max_tokens: 4000,
           messages: [{ role: 'user', content: [
             { type: 'text', text: EXTRACT_PROMPT },
             { type: 'image_url', image_url: { url: dataUrl } }
