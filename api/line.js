@@ -12,7 +12,7 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // ── Groq AI (อ่านรายการในไฟล์ใบงานชุบ) ───────────────────────────────────────
 const GROQ_KEY          = process.env.GROQ_API_KEY || '';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'; // อ่านรูปได้
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b'; // อ่านรูปได้ (Groq vision ปัจจุบัน — เปลี่ยนได้ผ่าน env)
 const GROQ_TEXT_MODEL   = 'llama-3.3-70b-versatile';                   // จัดข้อความ (จาก PDF)
 // กลุ่มไลน์ "แจ้งชุบกัลวาไนซ์" — flow พิเศษ: reply ไฟล์ + @บอท ส่ง/รับ ผู้รับผิดชอบ วันที่
 const GALVANIZE_LINE_GROUP = 'C0479aa47a7c02d6c7c0dd6346142391b';
@@ -648,7 +648,7 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
       const { buffer: small } = await compressIfImage(buffer, /^image\//.test(contentType || '') ? contentType : 'image/jpeg');
       const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
       // ลองหลายโมเดล vision — ถ้าตัวแรกอ่านไม่ได้/ว่าง สลับไปตัวสำรอง (กันโมเดลใดตัวหนึ่งล่ม/อ่านรูปนั้นไม่ออก)
-      const visionModels = [GROQ_VISION_MODEL, 'meta-llama/llama-4-maverick-17b-128e-instruct']
+      const visionModels = [GROQ_VISION_MODEL, 'qwen/qwen3.6-27b']
         .filter((m, i, a) => a.indexOf(m) === i);
       for (const model of visionModels) {
         const r = await groqComplete({
