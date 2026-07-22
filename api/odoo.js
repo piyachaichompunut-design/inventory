@@ -326,15 +326,19 @@ export async function odooDocForFile(fullText, companyHint = '', prefer = 'SO') 
           purpose: pr.purpose, note: pr.note, lines: pr.lines };
       }
     }
-    // ── งานตั้งชื่อ (stock.picking) — จาก "DOCREF:" หรือ "ชื่องาน/เลขที่" ที่ AI อ่านได้ ──
+    // ── stock.picking (งานตั้งชื่อ): match เฉพาะเมื่อ ref เป็น "เลขที่ใบส่ง/picking จริง" เท่านั้น ──
+    //   ⚠️ ไม่ match จากเลขสัญญา/ชื่อโครงการกว้างๆ อีกต่อไป — เพราะใบส่งของบางส่วน (มี 1 รายการ)
+    //      เคยไปเดาเจอ order/picking เต็มใบที่มีหลายรายการ แล้วดึงมาเกิน (ผิด)
+    //   ถ้าไม่เจอ SO/PO/PR ชัดๆ → คืน null → ผู้เรียกใช้ "รายการที่ AI อ่านจากไฟล์" แทน (ตรงกับใบส่งจริง)
     let ref = '';
     const dr = txt.match(/DOCREF\s*[:：]\s*(.+)/i);
     if (dr) ref = dr[1];
-    if (!ref) { const jn = txt.match(/(?:ชื่องาน|โครงการ|เลขที่(?:เอกสาร)?)\s*[:：]\s*(.+)/); if (jn) ref = jn[1]; }
     ref = String(ref).replace(/\s{2,}.*$/, '').trim().slice(0, 60);
-    if (ref && ref.length >= 4 && !/^(SO|PO|PR)\s*\d/i.test(ref)) {
+    // ยอมรับเฉพาะ ref ที่ "หน้าตาเหมือนเลขที่ picking/ใบส่ง" เช่น WH/OUT/00012, DO2607001, MO..., /OUT/
+    const looksLikePicking = ref && (/\b(?:WH|DO|MO|IN|OUT|INT|POS)\b/i.test(ref) || /\/(?:OUT|IN|INT)\//i.test(ref) || /^[A-Z]{2,4}\d{4,}$/i.test(ref));
+    if (looksLikePicking) {
       const rows = await searchRead('stock.picking',
-        ['|', '|', ['name', 'ilike', ref], ['origin', 'ilike', ref], ['group_id', 'ilike', ref]],
+        ['|', ['name', 'ilike', ref], ['origin', '=', ref]],
         ['name', 'company_id', 'partner_id', 'scheduled_date', 'origin', 'group_id'], 10);
       if (rows.length) {
         const { row: r, ambiguous } = pick(rows);
