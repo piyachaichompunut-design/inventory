@@ -89,7 +89,7 @@ async function tableRowsFromExcel(buffer) {
 
 // ── อ่านแถวจากรูป/PDF ด้วย AI — คืน JSON ทีละรายการ ──
 async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
-  const { groqKey = '', visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct', textModel = 'llama-3.3-70b-versatile' } = opts;
+  const { groqKey = '', visionModel = 'qwen/qwen3.6-27b', textModel = 'llama-3.3-70b-versatile' } = opts;
   if (!groqKey) return [];
   const isPdf = /pdf/i.test(mime || '') || /\.pdf$/i.test(fileName || '');
   const prompt =
