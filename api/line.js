@@ -647,15 +647,21 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
       // ย่อรูปให้เล็กพอส่ง base64 (Groq จำกัดขนาด)
       const { buffer: small } = await compressIfImage(buffer, /^image\//.test(contentType || '') ? contentType : 'image/jpeg');
       const dataUrl = 'data:image/jpeg;base64,' + small.toString('base64');
-      const r = await groqComplete({
-        model: GROQ_VISION_MODEL, temperature: 0, max_tokens: 1200,
-        messages: [{ role: 'user', content: [
-          { type: 'text', text: EXTRACT_PROMPT },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]}]
-      });
-      if (r.error) { console.error('groq vision (' + (fileName || 'image') + '):', r.error); return ''; }
-      return String(r.content || '').trim();
+      // ลองหลายโมเดล vision — ถ้าตัวแรกอ่านไม่ได้/ว่าง สลับไปตัวสำรอง (กันโมเดลใดตัวหนึ่งล่ม/อ่านรูปนั้นไม่ออก)
+      const visionModels = [GROQ_VISION_MODEL, 'meta-llama/llama-4-maverick-17b-128e-instruct']
+        .filter((m, i, a) => a.indexOf(m) === i);
+      for (const model of visionModels) {
+        const r = await groqComplete({
+          model, temperature: 0, max_tokens: 1200,
+          messages: [{ role: 'user', content: [
+            { type: 'text', text: EXTRACT_PROMPT },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]}]
+        });
+        if (r.content) return String(r.content).trim();
+        console.error('groq vision [' + model + '] (' + (fileName || 'image') + '):', r.error || 'empty');
+      }
+      return '';
     }
     if (isPdf) {
       // ดึงข้อความจาก PDF (ใบงานจาก Odoo มี text layer) แล้วให้ Groq จัดเป็นรายการ
