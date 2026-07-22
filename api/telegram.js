@@ -11,7 +11,7 @@ const GROQ_KEY     = process.env.GROQ_API_KEY || '';
 const TAVILY_KEY   = process.env.TAVILY_API_KEY || '';
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '').toLowerCase();
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b';
 
 // ป้ายบริษัทสั้นๆ (มี 4 บริษัท — ชื่องาน/เลขซ้ำข้ามบริษัทได้ ต้องโชว์ให้เลือกถูกใบ)
 const CO_SHORT = { 1: 'อาคเนย์', 2: 'เมิร์ค', 4: 'ซิลิกัล', 5: 'ศรีอาคเนย์' };
