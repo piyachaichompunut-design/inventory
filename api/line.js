@@ -624,11 +624,18 @@ async function groqComplete(body, tries) {
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
         body: JSON.stringify(body)
       });
-      if (res.status === 429 || res.status >= 500) { lastErr = 'http ' + res.status; await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }
+      if (res.status === 429 || res.status >= 500) {
+        lastErr = 'http ' + res.status;
+        let wait = 900 * (a + 1);
+        const ra = parseFloat(res.headers.get('retry-after') || '');   // เคารพ Retry-After ถ้ามี (สูงสุด 20 วิ กัน timeout)
+        if (!isNaN(ra) && ra > 0) wait = Math.min(ra * 1000 + 300, 20000);
+        await new Promise(r => setTimeout(r, wait)); continue;
+      }
       const j = await res.json();
       if (j.error) {
         lastErr = j.error.message || 'groq error';
-        if (/rate|overload|capacit|timeout|try again|temporar/i.test(lastErr) && a < tries - 1) { await new Promise(r => setTimeout(r, 700 * (a + 1))); continue; }
+        if (/reasoning/i.test(lastErr) && body.reasoning_effort) { delete body.reasoning_effort; continue; }  // โมเดลไม่รองรับ reasoning_effort → ถอดออกแล้วลองใหม่
+        if (/rate|overload|capacit|timeout|try again|temporar/i.test(lastErr) && a < tries - 1) { await new Promise(r => setTimeout(r, 900 * (a + 1))); continue; }
         return { error: lastErr };
       }
       const content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();  // ตัดส่วน reasoning ของ qwen ทิ้ง
@@ -652,8 +659,8 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
         .filter((m, i, a) => a.indexOf(m) === i);
       for (const model of visionModels) {
         const r = await groqComplete({
-          // qwen3.6 เป็นโมเดล reasoning (คิดก่อนตอบ) → ต้องให้ max_tokens เยอะพอ ไม่งั้นคิดหมด token แล้ว content ว่าง
-          model, temperature: 0, max_tokens: 4000,
+          // qwen3.6 เป็นโมเดล reasoning → ปิดการคิด (reasoning_effort:none) ให้ตอบตรงๆ ประหยัดโทเคน + เลี่ยง rate-limit
+          model, temperature: 0, max_tokens: 4000, reasoning_effort: 'none',
           messages: [{ role: 'user', content: [
             { type: 'text', text: EXTRACT_PROMPT },
             { type: 'image_url', image_url: { url: dataUrl } }
