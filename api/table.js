@@ -121,7 +121,7 @@ async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
       const dataUrl = 'data:image/jpeg;base64,' + imgBuf.toString('base64');
       const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + groqKey },
-        body: JSON.stringify({ model: visionModel, temperature: 0, max_tokens: 4000,
+        body: JSON.stringify({ model: visionModel, temperature: 0, max_tokens: 4000, reasoning_effort: 'none',
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl } }] }] })
       });
       const j = await res.json(); if (j.error) { console.error('vision table:', j.error.message); return []; }
