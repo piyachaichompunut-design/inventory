@@ -745,6 +745,18 @@ async function createLineTableTasks(groups, { duration, responsible, categories,
   return created;
 }
 
+// ── สรุปรายการยาวๆ เหลือ N บรรทัดแรก + "…และอีก X รายการ" (ใช้กับงาน "ส่ง" ที่รายการเยอะ) ──
+function trimSendItems(text, keep) {
+  keep = keep || 3;
+  const lines = String(text || '').split('\n');
+  const idx = [];
+  lines.forEach((l, i) => { if (/^\s*\d+\.\s/.test(l)) idx.push(i); });   // บรรทัดรายการ "1. ..."
+  if (idx.length <= keep) return text;
+  const cut = idx[keep];                                                   // ตำแหน่งของรายการที่ (keep+1)
+  const remain = idx.length - keep;
+  return lines.slice(0, cut).join('\n').replace(/\s+$/, '') + '\n…และอีก ' + remain + ' รายการ';
+}
+
 async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, contextText, duration, actionDate, categories, responsible, pushTarget, headVerb, notifyTitle }) {
   console.log('[SET-DEBUG] recordTaskFromReplyFile START qType=' + qType + ' dur=' + duration + ' cat=' + categories);
   const isFile = (qType === 'image' || qType === 'file');
@@ -814,6 +826,9 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
     bodyText = bodyText.replace(/DOCREF\s*[:：]\s*/i, '📄 เลขที่/งาน: ');
   }
 
+  // เฉพาะงาน "ส่ง": รายการเยอะ → ย่อเหลือ 3 รายการแรก + "…และอีก X รายการ" (กันข้อความยาวเกินในเว็บ)
+  if (duration === 'ส่ง' && bodyText) bodyText = trimSendItems(bodyText, 3);
+
   const head = headVerb + (responsible ? ' — ' + responsible : '');
   const taskName = (bodyText ? (head + '\n' + bodyText) : head).slice(0, 2000);
   const id = rid();
@@ -832,6 +847,34 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
     await db.from('line_last_task').upsert({ group_id: pushTarget, task_id: id, task_name: taskName.slice(0, 100), created_at: new Date().toISOString() }, { onConflict: 'group_id' });
     await db.from('line_messages').update({ task_id: id }).eq('message_id', quotedId);
   } catch (e) {}
+  // เฉพาะงาน "ส่ง": แนบไฟล์อื่นที่ส่งมาช่วงเดียวกัน (20 นาที) แต่ยังไม่ผูกงาน → เข้างานนี้ด้วย
+  let extraAtt = 0;
+  if (duration === 'ส่ง' && !error) {
+    try {
+      const since = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      const { data: moreFiles } = await db.from('line_messages')
+        .select('message_id, msg_type, file_name')
+        .eq('group_id', pushTarget).in('msg_type', ['image', 'file'])
+        .is('task_id', null).gte('created_at', since)
+        .neq('message_id', quotedId).limit(8);
+      if (moreFiles && moreFiles.length) {
+        const atts = fileAttach ? [fileAttach] : [];
+        for (const mf of moreFiles) {
+          try {
+            const r2 = await getLineContent(mf.message_id);
+            const { buffer: b2, contentType: c2 } = await compressIfImage(r2.buffer, r2.contentType);
+            const nm = mf.file_name || (mf.msg_type === 'image' ? 'image.jpg' : 'file.bin');
+            const ex = nm.includes('.') ? nm.slice(nm.lastIndexOf('.')) : (/pdf/i.test(c2) ? '.pdf' : '.jpg');
+            const sp = 'linefile_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6) + ex;
+            const { error: ue } = await db.storage.from('attachments').upload(sp, b2, { contentType: c2, upsert: true });
+            if (!ue) { const { data: pub } = db.storage.from('attachments').getPublicUrl(sp); atts.push({ name: nm, size: b2.length, fileId: sp, mimeType: c2, webViewLink: pub.publicUrl }); extraAtt++; }
+            await db.from('line_messages').update({ task_id: id }).eq('message_id', mf.message_id);
+          } catch (e) { console.error('extra attach:', e.message); }
+        }
+        if (extraAtt > 0) await db.from('tasks').update({ attachments: atts }).eq('id', id);
+      }
+    } catch (e) { console.error('multi-attach:', e.message); }
+  }
   try {
     await notifyMainChat(
       '🆕 <b>' + notifyTitle + '</b>\n' +
@@ -841,7 +884,7 @@ async function recordTaskFromReplyFile({ quotedId, qType, fileName, quotedText, 
       '📅 วันที่: ' + actionDate + '\n' +
       (bodyText ? bodyText.slice(0, 1200) + '\n' : '📦 (อ่านข้อมูลจากไฟล์ไม่ได้ — โปรดตรวจสอบ)\n') +
       (srcFrom ? '🔎 ที่มา: ' + (srcFrom.startsWith('Odoo') ? 'Odoo (' + srcRef + ')' + (srcFrom === 'Odoo?' ? ' ⚠️ต้องยืนยันบริษัท' : '') : 'อ่านจากไฟล์') + '\n' : '') +
-      (fileAttach ? '📎 แนบไฟล์แล้ว' : '')
+      (fileAttach ? '📎 แนบไฟล์แล้ว' + (extraAtt ? ' (' + (1 + extraAtt) + ' ไฟล์)' : '') : '')
     );
   } catch (e) {}
   return { ok: true, taskId: id };
