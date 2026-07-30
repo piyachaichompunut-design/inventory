@@ -88,6 +88,31 @@ async function tableRowsFromExcel(buffer) {
 }
 
 // ── อ่านแถวจากรูป/PDF ด้วย AI — คืน JSON ทีละรายการ ──
+// ตัวสำรองฟรี — อ่านรูปตารางด้วย OpenRouter เมื่อ Groq โดน 429 (ใส่ env OPENROUTER_API_KEY)
+const OR_KEY = process.env.OPENROUTER_API_KEY || '';
+const OR_MODELS = (process.env.OPENROUTER_VISION_MODELS ||
+  'meta-llama/llama-3.2-11b-vision-instruct:free,qwen/qwen2.5-vl-72b-instruct:free,google/gemini-2.0-flash-exp:free')
+  .split(',').map(s => s.trim()).filter(Boolean);
+async function openrouterVisionTable(dataUrl, prompt) {
+  if (!OR_KEY) return '';
+  for (const model of OR_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + OR_KEY,
+          'HTTP-Referer': 'https://inventory-rho-hazel.vercel.app', 'X-Title': 'TMS Inventory Bot' },
+        body: JSON.stringify({ model, temperature: 0, max_tokens: 4000,
+          messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl } }] }] })
+      });
+      if (!res.ok) { console.error('openrouter table [' + model + ']: http ' + res.status); continue; }
+      const j = await res.json();
+      if (j.error) { console.error('openrouter table [' + model + ']:', j.error.message || 'error'); continue; }
+      const content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '');
+      if (content.trim()) { console.log('openrouter table OK [' + model + ']'); return content; }
+    } catch (e) { console.error('openrouter table [' + model + ']:', e.message); }
+  }
+  return '';
+}
 async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
   const { groqKey = '', visionModel = 'qwen/qwen3.6-27b', textModel = 'llama-3.3-70b-versatile' } = opts;
   if (!groqKey) return [];
@@ -124,8 +149,14 @@ async function tableRowsFromAI(buffer, mime, fileName, opts = {}) {
         body: JSON.stringify({ model: visionModel, temperature: 0, max_tokens: 4000, reasoning_effort: 'none',
           messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl } }] }] })
       });
-      const j = await res.json(); if (j.error) { console.error('vision table:', j.error.message); return []; }
-      content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '');  // ตัด reasoning ของ qwen
+      const j = await res.json();
+      content = j.error ? '' : String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '');  // ตัด reasoning ของ qwen
+      if (j.error) console.error('vision table:', j.error.message);
+      // Groq อ่านไม่ได้ (มัก 429) → สลับไป OpenRouter ฟรี
+      if (!content.trim()) {
+        const alt = await openrouterVisionTable(dataUrl, prompt);
+        if (alt) content = alt;
+      }
     }
   } catch (e) { console.error('tableRowsFromAI:', e.message); return []; }
   const out = [];
