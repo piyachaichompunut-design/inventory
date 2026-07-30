@@ -14,6 +14,12 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROQ_KEY          = process.env.GROQ_API_KEY || '';
 const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.6-27b'; // อ่านรูปได้ (Groq vision ปัจจุบัน — เปลี่ยนได้ผ่าน env)
 const GROQ_TEXT_MODEL   = 'llama-3.3-70b-versatile';                   // จัดข้อความ (จาก PDF)
+// สำรอง (ฟรี) — ถ้า Groq โดน rate-limit (429) จะสลับมาอ่านรูปด้วย OpenRouter อัตโนมัติ
+//   ขอคีย์ฟรีที่ openrouter.ai/keys แล้วใส่ env OPENROUTER_API_KEY (ไม่ใส่ก็ไม่พัง ใช้ Groq เหมือนเดิม)
+const OPENROUTER_KEY          = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_VISION_MODELS = (process.env.OPENROUTER_VISION_MODELS ||
+  'meta-llama/llama-3.2-11b-vision-instruct:free,qwen/qwen2.5-vl-72b-instruct:free,google/gemini-2.0-flash-exp:free')
+  .split(',').map(s => s.trim()).filter(Boolean);
 // กลุ่มไลน์ "แจ้งชุบกัลวาไนซ์" — flow พิเศษ: reply ไฟล์ + @บอท ส่ง/รับ ผู้รับผิดชอบ วันที่
 const GALVANIZE_LINE_GROUP = 'C0479aa47a7c02d6c7c0dd6346142391b';
 // กลุ่มไลน์ "SET สั่งของ/ส่งของ" — flow: reply ไฟล์ + @บอท ส่ง/รับ วันที่ หมวดหมู่ ผู้รับผิดชอบ
@@ -645,6 +651,37 @@ async function groqComplete(body, tries) {
   }
   return { error: lastErr || 'failed' };
 }
+// อ่านรูปด้วย OpenRouter (ฟรี) — ใช้เป็นตัวสำรองเมื่อ Groq โดน 429 หรืออ่านไม่ได้
+//   OpenAI-compatible → รูปแบบข้อความเหมือน Groq ทุกอย่าง ลองหลายโมเดลฟรีจนกว่าจะได้
+async function openrouterVision(dataUrl, prompt) {
+  if (!OPENROUTER_KEY) return '';
+  for (const model of OPENROUTER_VISION_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + OPENROUTER_KEY,
+          'HTTP-Referer': 'https://inventory-rho-hazel.vercel.app',
+          'X-Title': 'TMS Inventory Bot'
+        },
+        body: JSON.stringify({
+          model, temperature: 0, max_tokens: 4000,
+          messages: [{ role: 'user', content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]}]
+        })
+      });
+      if (!res.ok) { console.error('openrouter vision [' + model + ']: http ' + res.status); continue; }
+      const j = await res.json();
+      if (j.error) { console.error('openrouter vision [' + model + ']:', j.error.message || 'error'); continue; }
+      const content = String(j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+      if (content) { console.log('openrouter vision OK [' + model + ']'); return content; }
+    } catch (e) { console.error('openrouter vision [' + model + ']:', e.message); }
+  }
+  return '';
+}
 async function readItemsFromFileAI(buffer, contentType, fileName) {
   if (!GROQ_KEY) return '';
   const isImage = /^image\//i.test(contentType || '') || /\.(jpe?g|png|webp|gif)$/i.test(fileName || '');
@@ -669,6 +706,9 @@ async function readItemsFromFileAI(buffer, contentType, fileName) {
         if (r.content) return String(r.content).trim();
         console.error('groq vision [' + model + '] (' + (fileName || 'image') + '):', r.error || 'empty');
       }
+      // Groq อ่านไม่ได้ (มัก 429 rate-limit ฟรีทีเออร์) → สลับไป OpenRouter ฟรีอัตโนมัติ
+      const alt = await openrouterVision(dataUrl, EXTRACT_PROMPT);
+      if (alt) return alt.trim();
       return '';
     }
     if (isPdf) {
