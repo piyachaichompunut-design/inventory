@@ -878,7 +878,7 @@ export async function odooDelivery(keyword, companyId) {
     return withCompany(domain, companyId);
   };
 
-  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id', 'company_id'];
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'picking_type_code', 'group_id', 'company_id'];
   let pickings = [];
   let lastErr = null;
   // 1) ค้นแบบเต็ม (มี relational partner_id.name + group_id.name)
@@ -1039,7 +1039,7 @@ export async function odooDeliveryMulti(keyword, numbers, companyId) {
   domain.push(...endsDomain, ...kwDomain);
   domain = withCompany(domain, companyId);
 
-  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'group_id', 'company_id'];
+  const fields = ['name', 'origin', 'partner_id', 'state', 'scheduled_date', 'date_done', 'picking_type_id', 'picking_type_code', 'group_id', 'company_id'];
   let pickings = [];
   try {
     pickings = await searchRead('stock.picking', domain, fields, nums.length + 10);
