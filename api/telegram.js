@@ -629,19 +629,26 @@ async function sendReportMulti(fromChatId, picks, target, lineGroups, db) {
       const p = allPicks.find(x => x.id === picking.id) || picking;
       const images = p.images || [];
       totalImages += images.length;
-      // เช็คสถานะรับ/ส่ง จาก origin (กันคีย์จำนวนผิด)
+      // ทิศทาง picking: outgoing = ส่งออก, incoming = รับเข้า
+      //   งานส่ง (outgoing) ไม่ต้องดึงสถานะ "รับเข้า" (ผู้ขาย/ค้างรับ PO) มาแปะ — คนละเรื่องกัน
+      //   ให้รายงานแสดงแค่รายการที่ส่ง + "ส่งครบ" เท่านั้น
+      const isIncoming = p.picking_type_code === 'incoming';
+      // เช็คสถานะรับ (กันคีย์จำนวนผิด) — เฉพาะงานรับเข้าเท่านั้น
       let recvStatus = null;
-      try {
-        const { odooReceiveDeliveryStatus } = await import('./odoo.js');
-        recvStatus = await odooReceiveDeliveryStatus(p.origin || '', p.company_id);
-      } catch (e) { /* ข้าม */ }
+      if (isIncoming) {
+        try {
+          const { odooReceiveDeliveryStatus } = await import('./odoo.js');
+          recvStatus = await odooReceiveDeliveryStatus(p.origin || '', p.company_id);
+        } catch (e) { /* ข้าม */ }
+      }
+      const doneText = isIncoming ? 'รับครบ' : 'ส่งครบ';
       picksData.push({
         name: p.name,
         origin: p.origin || '',
         jobName: Array.isArray(p.group_id) ? p.group_id[1] : '',  // ชื่องาน (Reference/โครงการ)
         partner: Array.isArray(p.partner_id) ? p.partner_id[1] : '',
         date: String(p.scheduled_date || '').slice(0, 10),
-        statusText: stMap[p.state] || 'รอส่ง',
+        statusText: p.state === 'done' ? doneText : (stMap[p.state] || 'รอส่ง'),
         statusColor: p.state === 'done' ? 'red' : (p.state === 'cancel' ? 'gray' : 'green'),
         recvStatus,
         lines: (p.lines || []).map(l => ({
