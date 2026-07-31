@@ -931,7 +931,7 @@ export async function odooDelivery(keyword, companyId) {
         'ir.attachment',
         ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
         ['id', 'name', 'mimetype'],
-        50
+        300
       );
       p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
     } catch (e) { p.images = []; }
@@ -1068,7 +1068,7 @@ export async function odooDeliveryMulti(keyword, numbers, companyId) {
     try {
       const atts = await searchRead('ir.attachment',
         ['&', '&', ['res_model', '=', 'stock.picking'], ['res_id', '=', p.id], ['mimetype', 'ilike', 'image']],
-        ['id', 'name', 'mimetype'], 50);
+        ['id', 'name', 'mimetype'], 300);
       p.images = (atts || []).map(a => ({ id: a.id, name: a.name || 'image' }));
     } catch (e) { p.images = []; }
   }
