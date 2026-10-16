@@ -45,7 +45,7 @@ const WITHDRAW_GREETING_ONLY = /^(รับทราบ|ขอบคุณ|ข�
 //   (เป็นทางเลือกที่ 2 — reply @บอท แบบเดิมยังใช้ได้ปกติ)
 const PURCHASE_GROUP_ID = process.env.PURCHASE_GROUP_ID || '-1001954468509'; // กลุ่มฝ่ายจัดซื้อ
 // เฉพาะ 2 คนนี้เท่านั้นที่บอทจับข้อความแจ้งส่ง (ฝ้าย + เมย์)
-const PURCHASE_SENDER_IDS = (process.env.PURCHASE_SENDER_IDS || '6165102439,7233671051')
+const PURCHASE_SENDER_IDS = (process.env.PURCHASE_SENDER_IDS || '6165102439,8921478993')
   .split(',').map(s => s.trim()).filter(Boolean);
 // ต้องเป็น "ประโยคแจ้งส่ง" จริงๆ (ไม่ใช่แค่มีเลข PO/PR — กันข้อความแก้ไข/คุยเล่น เช่น "PO xxx ไม่ได้สั่ง")
 //   รองรับสำนวนจริงของ ฝ้าย/เมย์: "ขอเรียกเข้า PO...", "ซัพเข้าส่งพรุ่งนี้", "นำส่ง", "ฝากส่ง"
